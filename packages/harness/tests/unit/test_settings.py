@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from research_agent.settings import KubernetesSettings, SettingsError, load_settings
+from ops_agent.settings import KubernetesSettings, SettingsError, load_settings
 
 
 def test_load_settings_from_toml(tmp_path: Path):
@@ -13,7 +13,7 @@ def test_load_settings_from_toml(tmp_path: Path):
         [kubernetes]
         environment = "local-test"
         namespace = "operations"
-        kubeconfig_path = "/tmp/research-agent-kubeconfig"
+        kubeconfig_path = "/tmp/ops_agent-kubeconfig"
         request_timeout_seconds = 17
         """,
         encoding="utf-8",
@@ -23,7 +23,7 @@ def test_load_settings_from_toml(tmp_path: Path):
 
     assert settings.environment == "local-test"
     assert settings.namespace == "operations"
-    assert settings.kubeconfig_path == Path("/tmp/research-agent-kubeconfig")
+    assert settings.kubeconfig_path == Path("/tmp/ops_agent-kubeconfig")
     assert settings.request_timeout_seconds == 17
 
 
@@ -73,7 +73,7 @@ def test_kubernetes_settings_immutable():
     settings = KubernetesSettings(
         environment="test",
         namespace="sample",
-        kubeconfig_path=Path("/tmp/research-agent-kubeconfig"),
+        kubeconfig_path=Path("/tmp/ops_agent-kubeconfig"),
         request_timeout_seconds=10,
     )
 

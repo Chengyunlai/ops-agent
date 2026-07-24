@@ -1,18 +1,31 @@
 [project]
-name = "research-agent"
+name = "ops_agent"
 version = "0.1.0"
 readme = "README.md"
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "ops_agent_cli",
+]
 
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
 ]
 
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+ops_agent_cli = { workspace = true }
+
+[tool.uv.workspace]
+members = [
+    "apps/cli",
+    "packages/harness",
+]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = [
+    "apps",
+    "packages",
+]

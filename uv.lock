@@ -2,6 +2,13 @@ version = 1
 revision = 2
 requires-python = ">=3.14"
 
+[manifest]
+members = [
+    "ops-agent",
+    "ops-agent-cli",
+    "ops-agent-harness",
+]
+
 [[package]]
 name = "colorama"
 version = "0.4.6"
@@ -19,6 +26,41 @@ sdist = { url = "https://files.pythonhosted.org/packages/72/34/14ca021ce8e5dfedc
 wheels = [
     { url = "https://files.pythonhosted.org/packages/cb/b1/3846dd7f199d53cb17f49cba7e651e9ce294d8497c8c150530ed11865bb8/iniconfig-2.3.0-py3-none-any.whl", hash = "sha256:f631c04d2c48c52b84d0d0549c99ff3859c98df65b3101406327ecc7d53fbf12", size = 7484, upload-time = "2025-10-18T21:55:41.639Z" },
 ]
+
+[[package]]
+name = "ops-agent"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "ops-agent-cli" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "ops-agent-cli", editable = "apps/cli" }]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=9.1.1" }]
+
+[[package]]
+name = "ops-agent-cli"
+version = "0.1.0"
+source = { editable = "apps/cli" }
+dependencies = [
+    { name = "ops-agent-harness" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "ops-agent-harness", editable = "packages/harness" }]
+
+[[package]]
+name = "ops-agent-harness"
+version = "0.1.0"
+source = { editable = "packages/harness" }
 
 [[package]]
 name = "packaging"
@@ -62,18 +104,3 @@ sdist = { url = "https://files.pythonhosted.org/packages/e4/47/b9efed96c114afcfa
 wheels = [
     { url = "https://files.pythonhosted.org/packages/24/25/1de2678b631f5a49215c6c96fff41ba892b0a34df68d6d80292b1b48aa7f/pytest-9.1.1-py3-none-any.whl", hash = "sha256:37a86b45efb9a47a61a36449063e8e18d0cab3161329fc099eb21783169c4f0c", size = 386536, upload-time = "2026-06-19T10:58:31.347Z" },
 ]
-
-[[package]]
-name = "research-agent"
-version = "0.1.0"
-source = { editable = "." }
-
-[package.dev-dependencies]
-dev = [
-    { name = "pytest" },
-]
-
-[package.metadata]
-
-[package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=9.1.1" }]

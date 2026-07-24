@@ -1,4 +1,4 @@
-# Ops Agent
+# ops_agent
 
 面向 Kubernetes 场景的智能运维 Agent。项目目标是把告警、集群状态和运维知识转化为可解释、可审计、可审批的诊断与处置流程，帮助运维人员缩短故障定位和恢复时间。
 
@@ -39,7 +39,7 @@
 
 ```bash
 git clone <repository-url>
-cd research-agent
+cd ops_agent
 ```
 
 ### 2. 安装依赖
@@ -50,12 +50,8 @@ cd research-agent
 uv sync
 ```
 
-如果不使用 uv，也可以在 Python 3.14+ 虚拟环境中安装项目：
-
-```bash
-python -m pip install -e .
-python -m pip install pytest
-```
+项目使用 uv workspace 管理本地成员及其依赖，请在仓库根目录通过 uv
+安装和运行。
 
 ### 3. 创建本地配置
 
@@ -85,7 +81,7 @@ request_timeout_seconds = 10
 ```python
 from pathlib import Path
 
-from research_agent.settings import load_settings
+from ops_agent.settings import load_settings
 
 settings = load_settings(Path("config/local.toml"))
 print(settings.environment, settings.namespace)
@@ -100,21 +96,39 @@ uv run pytest
 ## 项目结构
 
 ```text
-research-agent/
+ops_agent/
 ├── config/
 │   ├── dev.toml
 │   ├── prod.toml
 │   └── test.toml
-├── src/
-│   └── research_agent/
-│       ├── __init__.py
-│       └── settings.py
-├── tests/
-│   └── unit/
-│       └── test_settings.py
+├── apps/
+│   └── cli/
+│       ├── src/
+│       │   └── ops_agent_cli/
+│       │       ├── __init__.py
+│       │       ├── __main__.py
+│       │       └── main.py
+│       ├── tests/
+│       │   └── unit/
+│       │       └── test_main.py
+│       └── pyproject.toml
+├── packages/
+│   └── harness/
+│       ├── src/
+│       │   └── ops_agent/
+│       │       ├── __init__.py
+│       │       └── settings.py
+│       ├── tests/
+│       │   └── unit/
+│       │       └── test_settings.py
+│       └── pyproject.toml
 ├── pyproject.toml
 └── README.md
 ```
+
+根项目使用 uv workspace 管理两个成员：`ops_agent_cli` 是命令行应用，
+`ops_agent_harness` 是可复用的 Agent 核心包。依赖方向固定为 CLI 指向
+harness，harness 不依赖任何具体入口。
 
 ## 建议架构
 
