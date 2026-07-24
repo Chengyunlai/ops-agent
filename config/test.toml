@@ -1,0 +1,5 @@
+[kubernetes]
+environment = "test"
+namespace = "sample"
+kubeconfig_path = "/tmp/research-agent-kubeconfig"
+request_timeout_seconds = 10
