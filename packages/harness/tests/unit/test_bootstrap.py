@@ -1,8 +1,14 @@
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from ops_agent import bootstrap as bootstrap_module
-from ops_agent.bootstrap import OpsApplication, create_application
+from ops_agent.bootstrap import (
+    BootstrapError,
+    OpsApplication,
+    create_application,
+)
 
 
 class FakeAgent:
@@ -57,6 +63,8 @@ def test_create_application_wires_configured_namespace(
         [model]
         provider = "openai"
         model = "test-model"
+        base_url = "https://api.deepseek.com"
+        api_key_env = "DEEPSEEK_API_KEY"
         """,
         encoding="utf-8",
     )
@@ -104,6 +112,7 @@ def test_create_application_wires_configured_namespace(
         "create_ops_agent",
         fake_create_agent,
     )
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-api-key")
 
     application = create_application(config_path)
 
@@ -114,6 +123,38 @@ def test_create_application_wires_configured_namespace(
         "model": "test-model",
         "model_provider": "openai",
         "temperature": 0,
+        "base_url": "https://api.deepseek.com",
+        "api_key": "test-api-key",
     }
     assert calls["model"] is model
     assert calls["tools"] == tools
+
+
+def test_create_application_requires_configured_api_key(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config_path = tmp_path / "test.toml"
+    config_path.write_text(
+        """
+        [kubernetes]
+        environment = "test"
+        namespace = "sample"
+        kubeconfig_path = "/tmp/ops-agent-kubeconfig"
+        request_timeout_seconds = 10
+
+        [model]
+        provider = "openai"
+        model = "deepseek-v4-pro"
+        base_url = "https://api.deepseek.com"
+        api_key_env = "DEEPSEEK_API_KEY"
+        """,
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+
+    with pytest.raises(
+        BootstrapError,
+        match="DEEPSEEK_API_KEY",
+    ):
+        create_application(config_path)

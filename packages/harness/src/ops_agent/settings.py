@@ -15,6 +15,8 @@ class KubernetesSettings:
 class ModelSettings:
     provider: str
     name: str
+    base_url: str | None
+    api_key_env: str | None
 
 
 @dataclass(frozen=True)
@@ -59,6 +61,8 @@ def load_settings(config_path: Path) -> Settings:
         model=ModelSettings(
             provider=model["provider"],
             name=model["model"],
+            base_url=_optional_string(model, "base_url"),
+            api_key_env=_optional_string(model, "api_key_env"),
         ),
     )
 
@@ -94,3 +98,17 @@ def _require_values(
             f"[{section}] 缺少必填配置项或值为空: "
             f"{', '.join(missing_fields)}"
         )
+
+
+def _optional_string(
+    section_data: dict[str, object],
+    field_name: str,
+) -> str | None:
+    value = section_data.get(field_name)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise SettingsError(
+            f"[model] 配置项必须是非空字符串: {field_name}"
+        )
+    return value

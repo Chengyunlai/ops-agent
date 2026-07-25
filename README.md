@@ -72,13 +72,16 @@ request_timeout_seconds = 10
 
 [model]
 provider = "openai"
-model = "YOUR_TOOL_CALLING_MODEL"
+model = "deepseek-v4-pro"
+base_url = "https://api.deepseek.com"
+api_key_env = "DEEPSEEK_API_KEY"
 ```
 
-模型密钥通过模型供应商约定的环境变量提供，例如 OpenAI：
+这里使用 DeepSeek 官方提供的 OpenAI-compatible 接口，所以
+`provider` 填写 LangChain 适配器名称 `openai`。模型密钥只通过环境变量提供：
 
 ```bash
-export OPENAI_API_KEY="..."
+export DEEPSEEK_API_KEY="..."
 ```
 
 `model` 必须支持工具调用。配置文件中不要保存 API Key。
@@ -91,10 +94,14 @@ export OPENAI_API_KEY="..."
 | `namespace` | string | Agent 默认访问的 Kubernetes 命名空间 |
 | `kubeconfig_path` | string | kubeconfig 路径，推荐使用绝对路径 |
 | `request_timeout_seconds` | integer | Kubernetes API 请求超时时间（秒） |
-| `model.provider` | string | LangChain 模型供应商，例如 `openai` |
+| `model.provider` | string | LangChain 模型适配器；DeepSeek 兼容接口使用 `openai` |
 | `model.model` | string | 供应商提供的、支持工具调用的模型名称 |
+| `model.base_url` | string | 可选的模型接口地址 |
+| `model.api_key_env` | string | 保存 API Key 的环境变量名称 |
 
-当前加载器只校验配置文件是否存在、TOML 格式、`[kubernetes]` 区块及必填字段；尚未校验字段类型、路径有效性或超时取值范围。
+当前加载器校验配置文件、TOML 格式、`[kubernetes]` / `[model]`
+区块及模型可选字符串；尚未完整校验 Kubernetes 字段类型、路径有效性或
+超时取值范围。
 
 当前可通过 Python API 加载配置：
 

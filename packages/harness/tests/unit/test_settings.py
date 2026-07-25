@@ -19,6 +19,8 @@ def test_load_settings_from_toml(tmp_path: Path):
         [model]
         provider = "openai"
         model = "test-model"
+        base_url = "https://api.deepseek.com"
+        api_key_env = "DEEPSEEK_API_KEY"
         """,
         encoding="utf-8",
     )
@@ -33,6 +35,8 @@ def test_load_settings_from_toml(tmp_path: Path):
     assert settings.kubernetes.request_timeout_seconds == 17
     assert settings.model.provider == "openai"
     assert settings.model.name == "test-model"
+    assert settings.model.base_url == "https://api.deepseek.com"
+    assert settings.model.api_key_env == "DEEPSEEK_API_KEY"
 
 
 def test_load_settings_rejects_missing_file(tmp_path: Path):
@@ -117,6 +121,40 @@ def test_load_settings_rejects_empty_model_values(tmp_path: Path):
     message = str(error.value)
     assert "provider" in message
     assert "model" in message
+
+
+@pytest.mark.parametrize(
+    ("field_name", "field_value"),
+    [
+        ("base_url", '""'),
+        ("api_key_env", '"   "'),
+        ("base_url", "123"),
+    ],
+)
+def test_load_settings_rejects_invalid_optional_model_strings(
+    tmp_path: Path,
+    field_name: str,
+    field_value: str,
+) -> None:
+    config_path = tmp_path / "invalid-model-option.toml"
+    config_path.write_text(
+        f"""
+        [kubernetes]
+        environment = "test"
+        namespace = "sample"
+        kubeconfig_path = "/tmp/ops_agent-kubeconfig"
+        request_timeout_seconds = 10
+
+        [model]
+        provider = "openai"
+        model = "deepseek-v4-pro"
+        {field_name} = {field_value}
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SettingsError, match=field_name):
+        load_settings(config_path)
 
 
 def test_kubernetes_settings_immutable():
