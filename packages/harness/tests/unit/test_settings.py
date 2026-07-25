@@ -137,6 +137,83 @@ def test_load_settings_rejects_empty_model_values(tmp_path: Path):
 @pytest.mark.parametrize(
     ("field_name", "field_value"),
     [
+        ("environment", "123"),
+        ("namespace", "123"),
+        ("kubeconfig_path", "123"),
+        ("provider", "123"),
+        ("model", "123"),
+    ],
+)
+def test_load_settings_rejects_non_string_required_fields(
+    tmp_path: Path,
+    field_name: str,
+    field_value: str,
+) -> None:
+    kubernetes_fields = {
+        "environment": '"test"',
+        "namespace": '"sample"',
+        "kubeconfig_path": '"/tmp/ops_agent-kubeconfig"',
+    }
+    model_fields = {
+        "provider": '"openai"',
+        "model": '"deepseek-v4-pro"',
+    }
+    if field_name in kubernetes_fields:
+        kubernetes_fields[field_name] = field_value
+    else:
+        model_fields[field_name] = field_value
+
+    config_path = tmp_path / "invalid-required-string.toml"
+    config_path.write_text(
+        f"""
+        [kubernetes]
+        environment = {kubernetes_fields["environment"]}
+        namespace = {kubernetes_fields["namespace"]}
+        kubeconfig_path = {kubernetes_fields["kubeconfig_path"]}
+        request_timeout_seconds = 10
+
+        [model]
+        provider = {model_fields["provider"]}
+        model = {model_fields["model"]}
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SettingsError, match=field_name):
+        load_settings(config_path)
+
+
+@pytest.mark.parametrize("timeout_value", ["0", "-1", '"10"', "true"])
+def test_load_settings_rejects_invalid_request_timeout(
+    tmp_path: Path,
+    timeout_value: str,
+) -> None:
+    config_path = tmp_path / "invalid-timeout.toml"
+    config_path.write_text(
+        f"""
+        [kubernetes]
+        environment = "test"
+        namespace = "sample"
+        kubeconfig_path = "/tmp/ops_agent-kubeconfig"
+        request_timeout_seconds = {timeout_value}
+
+        [model]
+        provider = "openai"
+        model = "deepseek-v4-pro"
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        SettingsError,
+        match="request_timeout_seconds",
+    ):
+        load_settings(config_path)
+
+
+@pytest.mark.parametrize(
+    ("field_name", "field_value"),
+    [
         ("base_url", '""'),
         ("api_key_env", '"   "'),
         ("base_url", "123"),

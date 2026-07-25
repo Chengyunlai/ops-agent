@@ -108,8 +108,8 @@ export DEEPSEEK_API_KEY="..."
 | `model.api_key_env` | string | 保存 API Key 的环境变量名称 |
 
 当前加载器校验配置文件、TOML 格式、`[kubernetes]` / `[model]`
-区块及模型可选字符串；尚未完整校验 Kubernetes 字段类型、路径有效性或
-超时取值范围。
+区块、字段类型和正整数超时；kubeconfig 是否存在由创建 Kubernetes
+Client 时检查。
 
 当前可通过 Python API 加载配置：
 

@@ -1,6 +1,7 @@
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Self
 
 
 @dataclass(frozen=True)
@@ -30,85 +31,121 @@ class SettingsError(Exception):
 
 
 def load_settings(config_path: Path) -> Settings:
+    data = _read_toml(config_path)
+
+    return Settings(
+        kubernetes=_parse_kubernetes_settings(data),
+        model=_parse_model_settings(data),
+    )
+
+
+def _read_toml(config_path: Path) -> dict[str, object]:
     try:
         with config_path.open("rb") as config_file:
-            data = tomllib.load(config_file)
+            return tomllib.load(config_file)
     except FileNotFoundError as error:
         raise SettingsError(f"配置文件不存在: {config_path}") from error
     except tomllib.TOMLDecodeError as error:
         raise SettingsError(f"配置文件格式错误: {config_path}") from error
 
-    kubernetes = _require_section(data, "kubernetes")
-    kubernetes_fields = (
+
+def _parse_kubernetes_settings(
+    data: dict[str, object],
+) -> KubernetesSettings:
+    section = _SettingsSection.from_data(data, "kubernetes")
+    section.require_fields(
         "environment",
         "namespace",
         "kubeconfig_path",
         "request_timeout_seconds",
     )
-    _require_values(kubernetes, kubernetes_fields, section="kubernetes")
 
-    model = _require_section(data, "model")
-    model_fields = ("provider", "model")
-    _require_values(model, model_fields, section="model")
-
-    return Settings(
-        kubernetes=KubernetesSettings(
-            environment=kubernetes["environment"],
-            namespace=kubernetes["namespace"],
-            kubeconfig_path=Path(kubernetes["kubeconfig_path"]),
-            request_timeout_seconds=kubernetes["request_timeout_seconds"],
-        ),
-        model=ModelSettings(
-            provider=model["provider"],
-            name=model["model"],
-            base_url=_optional_string(model, "base_url"),
-            api_key_env=_optional_string(model, "api_key_env"),
+    return KubernetesSettings(
+        environment=section.string("environment"),
+        namespace=section.string("namespace"),
+        kubeconfig_path=Path(section.string("kubeconfig_path")),
+        request_timeout_seconds=section.positive_integer(
+            "request_timeout_seconds"
         ),
     )
 
 
-def _require_section(
+def _parse_model_settings(
     data: dict[str, object],
-    section: str,
-) -> dict[str, object]:
-    value = data.get(section)
-    if not isinstance(value, dict):
-        raise SettingsError(f"缺少 [{section}] 配置区块")
-    return value
+) -> ModelSettings:
+    section = _SettingsSection.from_data(data, "model")
+    section.require_fields(
+        "provider",
+        "model",
+    )
+
+    return ModelSettings(
+        provider=section.string("provider"),
+        name=section.string("model"),
+        base_url=section.optional_string("base_url"),
+        api_key_env=section.optional_string("api_key_env"),
+    )
 
 
-def _require_values(
-    section_data: dict[str, object],
-    field_names: tuple[str, ...],
-    *,
-    section: str,
-) -> None:
-    missing_fields = [
-        field_name
-        for field_name in field_names
-        if field_name not in section_data
-        or section_data[field_name] is None
-        or (
-            isinstance(section_data[field_name], str)
-            and not section_data[field_name].strip()
-        )
-    ]
-    if missing_fields:
-        raise SettingsError(
-            f"[{section}] 缺少必填配置项或值为空: "
-            f"{', '.join(missing_fields)}"
-        )
+@dataclass(frozen=True)
+class _SettingsSection:
+    name: str
+    values: dict[str, object]
 
+    @classmethod
+    def from_data(
+        cls,
+        data: dict[str, object],
+        name: str,
+    ) -> Self:
+        values = data.get(name)
+        if not isinstance(values, dict):
+            raise SettingsError(f"缺少 [{name}] 配置区块")
+        return cls(name=name, values=values)
 
-def _optional_string(
-    section_data: dict[str, object],
-    field_name: str,
-) -> str | None:
-    value = section_data.get(field_name)
-    if value is None:
-        return None
-    if not isinstance(value, str) or not value.strip():
-        raise SettingsError(
-            f"[model] 配置项必须是非空字符串: {field_name}"
-        )
-    return value
+    def require_fields(self, *field_names: str) -> None:
+        missing_fields = [
+            field_name
+            for field_name in field_names
+            if field_name not in self.values
+            or self.values[field_name] is None
+            or (
+                isinstance(self.values[field_name], str)
+                and not self.values[field_name].strip()
+            )
+        ]
+        if missing_fields:
+            raise SettingsError(
+                f"[{self.name}] 缺少必填配置项或值为空: "
+                f"{', '.join(missing_fields)}"
+            )
+
+    def string(self, field_name: str) -> str:
+        value = self.values[field_name]
+        if not isinstance(value, str):
+            raise SettingsError(
+                f"[{self.name}] 配置项必须是字符串: {field_name}"
+            )
+        return value
+
+    def optional_string(self, field_name: str) -> str | None:
+        value = self.values.get(field_name)
+        if value is None:
+            return None
+        if not isinstance(value, str) or not value.strip():
+            raise SettingsError(
+                f"[{self.name}] 配置项必须是非空字符串: {field_name}"
+            )
+        return value
+
+    def positive_integer(self, field_name: str) -> int:
+        value = self.values[field_name]
+        if (
+            not isinstance(value, int)
+            or isinstance(value, bool)
+            or value <= 0
+        ):
+            raise SettingsError(
+                f"[{self.name}] 配置项必须是正整数: {field_name}"
+            )
+        return value
