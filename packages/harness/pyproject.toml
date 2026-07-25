@@ -2,7 +2,10 @@
 name = "ops_agent_harness"
 version = "0.1.0"
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "kubernetes>=36.0.3",
+    "urllib3",
+]
 
 [build-system]
 requires = ["hatchling"]

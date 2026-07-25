@@ -3,7 +3,9 @@
 面向 Kubernetes 场景的智能运维 Agent。项目目标是把告警、集群状态和运维知识转化为可解释、可审计、可审批的诊断与处置流程，帮助运维人员缩短故障定位和恢复时间。
 
 > [!IMPORTANT]
-> 项目目前处于早期开发阶段。当前已实现 Kubernetes TOML 配置的加载与基础校验；集群连接、告警接入、Agent 编排和自动处置等能力仍在规划中。
+> 项目目前处于早期开发阶段。当前已实现 Kubernetes TOML 配置加载、
+> Pod 只读查询核心和基础校验；CLI 查询入口、告警接入、Agent 编排和
+> 自动处置等能力仍在规划中。
 
 ## 项目目标
 
@@ -20,7 +22,8 @@
 | TOML 配置加载 | 已完成 | 从指定文件加载 Kubernetes 配置 |
 | 配置错误处理 | 已完成 | 识别文件缺失、TOML 格式错误、区块或字段缺失 |
 | 不可变配置模型 | 已完成 | 使用冻结的 `KubernetesSettings` 数据类 |
-| Kubernetes 只读查询 | 规划中 | 查询 Pod、Deployment、Event、日志和资源指标 |
+| Kubernetes Pod 只读查询 | 核心已完成 | 隔离加载 kubeconfig，按 namespace 查询并转换 Pod 摘要；CLI 尚未接入 |
+| Kubernetes 其他只读查询 | 规划中 | 查询 Deployment、Event、日志和资源指标 |
 | 告警接入与诊断 | 规划中 | 接入告警并生成带证据的诊断报告 |
 | 审批与处置执行 | 规划中 | 执行扩缩容、重启、回滚等受控动作 |
 | LLM / Agent 编排 | 规划中 | 工具选择、上下文管理和多步任务执行 |
@@ -117,9 +120,11 @@ ops_agent/
 │       ├── src/
 │       │   └── ops_agent/
 │       │       ├── __init__.py
+│       │       ├── kubernetes.py
 │       │       └── settings.py
 │       ├── tests/
 │       │   └── unit/
+│       │       ├── test_kubernetes.py
 │       │       └── test_settings.py
 │       └── pyproject.toml
 ├── pyproject.toml
@@ -185,7 +190,8 @@ uv run pytest
 
 - [x] Kubernetes 配置模型
 - [x] 配置加载与基础校验
-- [ ] Kubernetes 客户端与只读工具集
+- [x] Kubernetes 客户端与 Pod 只读查询
+- [ ] Pod 日志、Event 与其他只读工具
 - [ ] Pod 异常、发布失败和资源压力诊断
 - [ ] Prometheus、日志与告警平台接入
 - [ ] LLM 工具调用与 Agent 状态管理
