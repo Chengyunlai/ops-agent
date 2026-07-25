@@ -1,7 +1,38 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 from ops_agent_cli import main as main_module
 from ops_agent_cli.main import main
+
+
+def test_main_uses_local_test_config_by_default(
+    monkeypatch,
+    capsys,
+) -> None:
+    settings = SimpleNamespace(
+        kubernetes=SimpleNamespace(
+            environment="test",
+            namespace="sample",
+        )
+    )
+
+    def fake_load_settings(config_path: Path):
+        assert config_path == Path("config/local/test.toml")
+        return settings
+
+    monkeypatch.setattr(
+        main_module,
+        "load_settings",
+        fake_load_settings,
+    )
+
+    exit_code = main([])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Kubernetes 环境: test" in captured.out
+    assert "命名空间: sample" in captured.out
+    assert captured.err == ""
 
 
 def test_main_starts_with_valid_config(tmp_path: Path, capsys) -> None:

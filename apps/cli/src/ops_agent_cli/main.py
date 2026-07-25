@@ -19,7 +19,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--config",
         type=Path,
-        default=Path("config/test.toml"),
+        default=Path("config/local/test.toml"),
         help="TOML 配置文件路径",
         )
     subparsers = parser.add_subparsers(dest="command")

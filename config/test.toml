@@ -1,5 +1,0 @@
-[kubernetes]
-environment = "test"
-namespace = "sample"
-kubeconfig_path = "/tmp/ops_agent-kubeconfig"
-request_timeout_seconds = 10

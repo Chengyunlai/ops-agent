@@ -61,7 +61,15 @@ uv sync
 
 ### 3. 创建本地配置
 
-在 `config/` 下创建本地环境配置，例如 `config/local.toml`。当前仓库不会自动忽略该文件，请将它加入本地 `.gitignore`，并确保其中不包含访问令牌、证书等敏感信息：
+仓库在 `config/examples/` 提供可提交的环境模板。复制需要的模板到
+已被 Git 忽略的 `config/local/`，再填写本机 kubeconfig：
+
+```bash
+mkdir -p config/local
+cp config/examples/test.toml config/local/test.toml
+```
+
+本地配置内容如下；不要在其中保存访问令牌、证书等敏感信息：
 
 ```toml
 [kubernetes]
@@ -110,7 +118,7 @@ from pathlib import Path
 
 from ops_agent.settings import load_settings
 
-settings = load_settings(Path("config/local.toml"))
+settings = load_settings(Path("config/local/test.toml"))
 print(
     settings.kubernetes.environment,
     settings.kubernetes.namespace,
@@ -121,7 +129,7 @@ print(
 
 ```bash
 uv run ops_agent \
-  --config config/local.toml \
+  --config config/local/test.toml \
   ask "检查所有 Pod，指出非 Running 或发生过重启的 Pod"
 ```
 
@@ -139,9 +147,12 @@ uv run pytest
 ```text
 ops_agent/
 ├── config/
-│   ├── dev.toml
-│   ├── prod.toml
-│   └── test.toml
+│   ├── examples/                  # 可提交的配置模板
+│   │   ├── dev.toml
+│   │   ├── prod.toml
+│   │   └── test.toml
+│   └── local/                     # 本机配置，Git 忽略
+│       └── test.toml
 ├── apps/
 │   └── cli/
 │       ├── src/

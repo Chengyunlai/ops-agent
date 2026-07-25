@@ -8,4 +8,4 @@ __pycache__/
 venv/
 
 # Local-only configuration
-config/local.toml
+config/local/

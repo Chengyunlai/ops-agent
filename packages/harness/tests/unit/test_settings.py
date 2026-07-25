@@ -6,6 +6,17 @@ import pytest
 from ops_agent.settings import KubernetesSettings, SettingsError, load_settings
 
 
+@pytest.mark.parametrize("environment", ["dev", "test", "prod"])
+def test_example_configs_are_valid(environment: str) -> None:
+    project_root = Path(__file__).resolve().parents[4]
+
+    settings = load_settings(
+        project_root / "config" / "examples" / f"{environment}.toml"
+    )
+
+    assert settings.kubernetes.environment == environment
+
+
 def test_load_settings_from_toml(tmp_path: Path):
     config_path = tmp_path / "test.toml"
     config_path.write_text(

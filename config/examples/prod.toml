@@ -1,0 +1,11 @@
+[kubernetes]
+environment = "prod"
+namespace = "YOUR_NAMESPACE"
+kubeconfig_path = "/absolute/path/to/prod-kubeconfig"
+request_timeout_seconds = 10
+
+[model]
+provider = "openai"
+model = "deepseek-v4-pro"
+base_url = "https://api.deepseek.com"
+api_key_env = "DEEPSEEK_API_KEY"
