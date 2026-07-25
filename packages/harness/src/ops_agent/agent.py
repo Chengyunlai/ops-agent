@@ -1,0 +1,35 @@
+from collections.abc import Sequence
+from typing import Protocol
+
+from langchain.agents import create_agent
+from langchain_core.language_models import BaseChatModel
+from langchain_core.tools import BaseTool
+
+
+SYSTEM_PROMPT = """\
+你是一个本地 Kubernetes 只读运维助手。
+
+规则：
+- 涉及集群当前状态的问题，必须先调用工具获取真实数据，不能凭空猜测。
+- Kubernetes 环境和 namespace 已由应用配置固定，不要要求用户重复提供。
+- 清楚区分工具返回的事实和你的推断。
+- 优先指出非 Running Pod 和发生过重启的 Pod，但不要把所有重启都直接判定为故障。
+- 当前只能查询，不能声称已经执行重启、删除、扩缩容或其他修改操作。
+- 使用简洁中文回答。
+"""
+
+
+class AgentRunner(Protocol):
+    def invoke(self, input: dict[str, object]) -> dict[str, object]: ...
+
+
+def create_ops_agent(
+    model: BaseChatModel,
+    tools: Sequence[BaseTool],
+) -> AgentRunner:
+    return create_agent(
+        model=model,
+        tools=list(tools),
+        system_prompt=SYSTEM_PROMPT,
+        name="ops_agent",
+    )

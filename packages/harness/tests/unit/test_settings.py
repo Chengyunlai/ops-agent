@@ -15,16 +15,24 @@ def test_load_settings_from_toml(tmp_path: Path):
         namespace = "operations"
         kubeconfig_path = "/tmp/ops_agent-kubeconfig"
         request_timeout_seconds = 17
+
+        [model]
+        provider = "openai"
+        model = "test-model"
         """,
         encoding="utf-8",
     )
 
     settings = load_settings(config_path)
 
-    assert settings.environment == "local-test"
-    assert settings.namespace == "operations"
-    assert settings.kubeconfig_path == Path("/tmp/ops_agent-kubeconfig")
-    assert settings.request_timeout_seconds == 17
+    assert settings.kubernetes.environment == "local-test"
+    assert settings.kubernetes.namespace == "operations"
+    assert settings.kubernetes.kubeconfig_path == Path(
+        "/tmp/ops_agent-kubeconfig"
+    )
+    assert settings.kubernetes.request_timeout_seconds == 17
+    assert settings.model.provider == "openai"
+    assert settings.model.name == "test-model"
 
 
 def test_load_settings_rejects_missing_file(tmp_path: Path):
@@ -67,6 +75,48 @@ def test_load_settings_reports_all_missing_fields(tmp_path: Path):
     message = str(error.value)
     assert "namespace" in message
     assert "kubeconfig_path" in message
+
+
+def test_load_settings_rejects_missing_model_section(tmp_path: Path):
+    config_path = tmp_path / "missing-model.toml"
+    config_path.write_text(
+        """
+        [kubernetes]
+        environment = "test"
+        namespace = "sample"
+        kubeconfig_path = "/tmp/ops_agent-kubeconfig"
+        request_timeout_seconds = 10
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SettingsError, match=r"\[model\]"):
+        load_settings(config_path)
+
+
+def test_load_settings_rejects_empty_model_values(tmp_path: Path):
+    config_path = tmp_path / "empty-model.toml"
+    config_path.write_text(
+        """
+        [kubernetes]
+        environment = "test"
+        namespace = "sample"
+        kubeconfig_path = "/tmp/ops_agent-kubeconfig"
+        request_timeout_seconds = 10
+
+        [model]
+        provider = ""
+        model = ""
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SettingsError) as error:
+        load_settings(config_path)
+
+    message = str(error.value)
+    assert "provider" in message
+    assert "model" in message
 
 
 def test_kubernetes_settings_immutable():
