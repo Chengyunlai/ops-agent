@@ -1,0 +1,150 @@
+from dataclasses import asdict
+from typing import Protocol
+
+from langchain_core.tools import BaseTool, tool
+
+from ops_agent.kubernetes import (
+    DeploymentSummary,
+    KubernetesEventSummary,
+    PodDetails,
+    PodSummary,
+    ServiceSummary,
+)
+
+
+class KubernetesOperations(Protocol):
+    def list_pods(self, namespace: str) -> list[PodSummary]: ...
+
+    def get_pod_details(
+        self,
+        namespace: str,
+        pod_name: str,
+    ) -> PodDetails: ...
+
+    def get_pod_logs(
+        self,
+        namespace: str,
+        pod_name: str,
+        *,
+        container: str | None,
+        tail_lines: int,
+    ) -> str: ...
+
+    def list_events(
+        self,
+        namespace: str,
+        *,
+        pod_name: str | None,
+        limit: int,
+    ) -> list[KubernetesEventSummary]: ...
+
+    def list_deployments(
+        self,
+        namespace: str,
+    ) -> list[DeploymentSummary]: ...
+
+    def list_services(
+        self,
+        namespace: str,
+    ) -> list[ServiceSummary]: ...
+
+
+def create_kubernetes_tools(
+    reader: KubernetesOperations,
+    *,
+    namespace: str,
+) -> list[BaseTool]:
+    @tool("list_kubernetes_pods")
+    def list_kubernetes_pods() -> list[dict[str, object]]:
+        """列出已配置 namespace 的 Pod 状态、就绪数和重启次数。"""
+        return [asdict(pod) for pod in reader.list_pods(namespace)]
+
+    @tool("get_kubernetes_pod_details")
+    def get_kubernetes_pod_details(
+        pod_name: str,
+    ) -> dict[str, object]:
+        """查询指定 Pod 的节点、IP、容器镜像、状态和重启次数。"""
+        return asdict(reader.get_pod_details(namespace, pod_name))
+
+    @tool("get_kubernetes_pod_logs")
+    def get_kubernetes_pod_logs(
+        pod_name: str,
+        container: str | None = None,
+        tail_lines: int = 200,
+    ) -> dict[str, object]:
+        """读取指定 Pod 最近的日志。
+
+        tail_lines 必须在 1 到 1000 之间。多容器 Pod 可指定 container。
+        """
+        _require_range(tail_lines, "tail_lines", minimum=1, maximum=1000)
+        logs = reader.get_pod_logs(
+            namespace,
+            pod_name,
+            container=container,
+            tail_lines=tail_lines,
+        )
+        return {
+            "pod_name": pod_name,
+            "container": container,
+            "tail_lines": tail_lines,
+            "logs": logs,
+        }
+
+    @tool("list_kubernetes_events")
+    def list_kubernetes_events(
+        pod_name: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, object]]:
+        """列出已配置 namespace 的 Event。
+
+        可用 pod_name 只查询某个 Pod，limit 必须在 1 到 200 之间。
+        """
+        _require_range(limit, "limit", minimum=1, maximum=200)
+        events = reader.list_events(
+            namespace,
+            pod_name=pod_name,
+            limit=limit,
+        )
+        return [asdict(event) for event in events]
+
+    @tool("list_kubernetes_deployments")
+    def list_kubernetes_deployments() -> list[dict[str, object]]:
+        """列出已配置 namespace 的 Deployment 副本状态。"""
+        return [
+            asdict(deployment)
+            for deployment in reader.list_deployments(namespace)
+        ]
+
+    @tool("list_kubernetes_services")
+    def list_kubernetes_services() -> list[dict[str, object]]:
+        """列出已配置 namespace 的 Service、ClusterIP 和端口。"""
+        return [
+            asdict(service)
+            for service in reader.list_services(namespace)
+        ]
+
+    return [
+        list_kubernetes_pods,
+        get_kubernetes_pod_details,
+        get_kubernetes_pod_logs,
+        list_kubernetes_events,
+        list_kubernetes_deployments,
+        list_kubernetes_services,
+    ]
+
+
+def _require_range(
+    value: int,
+    field_name: str,
+    *,
+    minimum: int,
+    maximum: int,
+) -> None:
+    if (
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or not minimum <= value <= maximum
+    ):
+        raise ValueError(
+            f"{field_name} 必须在 {minimum} 到 {maximum} 之间"
+        )

@@ -4,8 +4,8 @@
 
 > [!IMPORTANT]
 > 项目目前处于早期开发阶段。当前已打通 Kubernetes TOML 配置、
-> Pod 只读工具、LangGraph Agent 和 CLI 自然语言查询链路；
-> 日志、事件、告警接入和自动处置等能力仍在规划中。
+> 六项 Kubernetes 只读工具、LangGraph Agent 和 CLI 自然语言查询链路；
+> 指标、告警接入和自动处置等能力仍在规划中。
 
 ## 项目目标
 
@@ -22,8 +22,7 @@
 | TOML 配置加载 | 已完成 | 从指定文件加载 Kubernetes 配置 |
 | 配置错误处理 | 已完成 | 识别文件缺失、TOML 格式错误、区块或字段缺失 |
 | 不可变配置模型 | 已完成 | 使用冻结的 `KubernetesSettings` 数据类 |
-| Kubernetes Pod 只读查询 | 已完成 | 隔离加载 kubeconfig，按 namespace 查询并转换 Pod 摘要 |
-| Kubernetes 其他只读查询 | 规划中 | 查询 Deployment、Event、日志和资源指标 |
+| Kubernetes 只读诊断 | 已完成 | 查询 Pod 摘要/详情/日志、Event、Deployment 和 Service |
 | 告警接入与诊断 | 规划中 | 接入告警并生成带证据的诊断报告 |
 | 审批与处置执行 | 规划中 | 执行扩缩容、重启、回滚等受控动作 |
 | LLM / Agent 编排 | 基础已完成 | 使用 LangChain `create_agent` 构建 LangGraph 工具调用循环 |
@@ -136,6 +135,20 @@ uv run ops_agent \
 Agent 使用配置中固定的 kubeconfig 和 namespace。模型不能通过工具参数
 切换环境或 namespace。
 
+当前 Agent 可以按需调用以下只读工具：
+
+| 工具 | 用途 | 查询边界 |
+| --- | --- | --- |
+| `list_kubernetes_pods` | 查看 Pod 阶段、就绪容器数和重启数 | 配置中的 namespace |
+| `get_kubernetes_pod_details` | 查看 Pod 节点、IP、镜像和容器状态 | 指定 Pod |
+| `get_kubernetes_pod_logs` | 读取 Pod 最近日志 | 最多 1000 行 |
+| `list_kubernetes_events` | 查看 namespace 或指定 Pod 的 Event | 最多 200 条 |
+| `list_kubernetes_deployments` | 查看 Deployment 期望与就绪副本数 | 配置中的 namespace |
+| `list_kubernetes_services` | 查看 Service 类型、ClusterIP 和端口 | 配置中的 namespace |
+
+这些工具没有接收环境或 namespace 参数，也没有暴露通用 `kubectl` 或
+Shell 执行入口。这样可以把模型的活动范围限制在启动时选定的配置内。
+
 ### 5. 运行测试
 
 ```bash
@@ -171,13 +184,19 @@ ops_agent/
 │       │       ├── __init__.py
 │       │       ├── agent.py
 │       │       ├── bootstrap.py
-│       │       ├── kubernetes.py
+│       │       ├── kubernetes/
+│       │       │   ├── __init__.py
+│       │       │   ├── models.py
+│       │       │   └── reader.py
 │       │       ├── settings.py
-│       │       └── tools.py
+│       │       └── tools/
+│       │           ├── __init__.py
+│       │           └── kubernetes.py
 │       ├── tests/
 │       │   └── unit/
 │       │       ├── test_bootstrap.py
 │       │       ├── test_kubernetes.py
+│       │       ├── test_kubernetes_resources.py
 │       │       ├── test_settings.py
 │       │       └── test_tools.py
 │       └── pyproject.toml
@@ -188,6 +207,16 @@ ops_agent/
 根项目使用 uv workspace 管理两个成员：`ops_agent_cli` 是命令行应用，
 `ops_agent_harness` 是可复用的 Agent 核心包。依赖方向固定为 CLI 指向
 harness，harness 不依赖任何具体入口。
+
+Kubernetes 相关代码采用两层边界：
+
+- `kubernetes/` 是基础设施能力层。`reader.py` 封装 Kubernetes SDK，
+  `models.py` 定义不依赖 SDK 的结构化查询结果。
+- `tools/` 是 Agent 适配层。它把 Kubernetes 能力转换成模型可调用的
+  LangChain Tool，并在这里固定 namespace、限制日志行数和 Event 数量。
+
+`bootstrap.py` 只负责组装配置、模型、Reader、Tool 和 Agent。以后增加
+API 或 SDK 入口时，可以复用同一个 harness，不需要复制 Kubernetes 逻辑。
 
 ## 建议架构
 
@@ -245,7 +274,7 @@ uv run pytest
 - [x] Kubernetes 配置模型
 - [x] 配置加载与基础校验
 - [x] Kubernetes 客户端与 Pod 只读查询
-- [ ] Pod 日志、Event 与其他只读工具
+- [x] Pod 详情、日志、Event、Deployment 与 Service 只读工具
 - [ ] Pod 异常、发布失败和资源压力诊断
 - [ ] Prometheus、日志与告警平台接入
 - [x] LLM 工具调用与基础 Agent 编排
