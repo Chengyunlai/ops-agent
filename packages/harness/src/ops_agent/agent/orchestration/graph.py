@@ -1,3 +1,5 @@
+"""受控主图的 State、Node 与 Edge 拓扑。"""
+
 from collections.abc import Sequence
 
 from langchain_core.language_models import BaseChatModel
@@ -6,17 +8,17 @@ from langchain_core.tools import BaseTool
 from langgraph.graph import END, START, MessagesState, StateGraph
 
 from ops_agent.agent.application import OpsAgent
-from ops_agent.agent.kubernetes import KubernetesAgent
-from ops_agent.agent.planning import (
-    ExecutionPlan,
-    KubernetesDiagnosticPlanner,
-    KubernetesPlanExecutor,
-)
-from ops_agent.agent.routing import (
+from ops_agent.agent.orchestration.routing import (
     RequestRouter,
     RouteAction,
     RouteDecision,
     decide_route,
+)
+from ops_agent.agent.specialists.kubernetes import (
+    ExecutionPlan,
+    KubernetesAgent,
+    KubernetesDiagnosticPlanner,
+    KubernetesPlanExecutor,
 )
 
 OUT_OF_SCOPE_RESPONSE = "当前系统只处理 Kubernetes 运维与诊断问题。"

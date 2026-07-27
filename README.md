@@ -191,10 +191,16 @@ ops_agent/
 │       │       ├── agent/
 │       │       │   ├── __init__.py
 │       │       │   ├── application.py
-│       │       │   ├── graph.py
-│       │       │   ├── kubernetes.py
-│       │       │   ├── planning.py
-│       │       │   └── routing.py
+│       │       │   ├── orchestration/
+│       │       │   │   ├── __init__.py
+│       │       │   │   ├── graph.py
+│       │       │   │   └── routing.py
+│       │       │   └── specialists/
+│       │       │       ├── __init__.py
+│       │       │       └── kubernetes/
+│       │       │           ├── __init__.py
+│       │       │           ├── agent.py
+│       │       │           └── planning.py
 │       │       ├── diagnostics/
 │       │       │   ├── __init__.py
 │       │       │   ├── kubernetes.py
@@ -246,20 +252,24 @@ Reader、Tool 和 Agent 适配器。以后增加 API 或其他应用入口时，
 隐藏 LangGraph 消息结构、调用方式、响应解析和运行错误转换；CLI 不依赖
 模块内部的图、路由、计划或专业 Agent 实现。
 
-`agent/routing.py` 使用冻结的 Pydantic 模型约束模型只能提出已知范围、执行
-模式和读写类型。模型的分类结果是不可信输入；纯代码策略还会核对原始问题中
-的 Kubernetes allowlist、明确的只读查询意图、未接入平台/指标类型和写操作。
-未知请求默认拒绝，因此主图没有自由回答用户的兜底路径。当前策略较保守，
-Kubernetes 请求需要明确包含 Kubernetes/K8s 或 Pod、Deployment、Namespace
-等低歧义资源名称；CPU、内存、QPS 等未接入实时指标不会交给子 Agent 猜测。
-自然语言 allowlist 用于保守分流，不作为权限授权依据；真正的硬约束仍是子图
-只持有固定 namespace 的只读工具，并且没有成功工具证据就不输出实时结论。
+`agent/orchestration/` 负责跨专业 Agent 的主图编排和全局路由策略。
+`graph.py` 定义受控 State、Node 与 Edge，`routing.py` 使用冻结的 Pydantic
+模型约束模型只能提出已知范围、执行模式和读写类型。模型的分类结果是不可信
+输入；纯代码策略还会核对原始问题中的 Kubernetes allowlist、明确的只读查询
+意图、未接入平台/指标类型和写操作。未知请求默认拒绝，因此主图没有自由回答
+用户的兜底路径。当前策略较保守，Kubernetes 请求需要明确包含 Kubernetes/K8s
+或 Pod、Deployment、Namespace 等低歧义资源名称；CPU、内存、QPS 等未接入
+实时指标不会交给子 Agent 猜测。自然语言 allowlist 用于保守分流，不作为权限
+授权依据；真正的硬约束仍是子图只持有固定 namespace 的只读工具，并且没有
+成功工具证据就不输出实时结论。
 
-`agent/planning.py` 声明最多三步的顺序 Kubernetes 只读诊断计划。步骤只能
-从工作负载健康、补充证据和根因分析三个受控目标中选择，不能携带自由文本
-工具指令；计划必须从工作负载健康开始，并按取证到根因的顺序推进。
-`agent/kubernetes.py` 隐藏具体 ReAct 子图、工具选择、响应解析和证据提取。
-每一步必须产生成功的真实工具消息，否则主图不会输出实时诊断结论。
+`agent/specialists/` 按专业能力隔离子 Agent，避免其工具、提示词和专属执行
+协议散落在主图中。当前 `specialists/kubernetes/agent.py` 隐藏 Kubernetes
+ReAct 子图、工具选择、响应解析和证据提取；`planning.py` 声明最多三步的顺序
+Kubernetes 只读诊断计划。步骤只能从工作负载健康、补充证据和根因分析三个
+受控目标中选择，不能携带自由文本工具指令；计划必须从工作负载健康开始，并
+按取证到根因的顺序推进。每一步必须产生成功的真实工具消息，否则主图不会
+输出实时诊断结论。
 
 ```text
 CLI ──► OpsAgent.ask()
@@ -283,9 +293,11 @@ CLI ──► OpsAgent.ask()
                       只读工具与证据校验
 ```
 
-新增指标或日志等第二个真实专业 Agent 时，在 `graph.py` 扩展拓扑，并根据
-真实的共同点再提取注册 seam。审批、持久化和 interrupt/resume 属于有状态
-执行协议，不复用当前的只读诊断计划。
+新增指标或日志等第二个真实专业 Agent 时，在 `agent/specialists/` 增加独立
+子目录，在 `agent/orchestration/graph.py` 扩展拓扑，并根据真实的共同点再
+提取注册 seam。这样专业能力内部变化不会直接扰动全局编排，新增入口也继续
+只依赖 `ops_agent.agent` 的稳定公开接口。审批、持久化和 interrupt/resume
+属于有状态执行协议，不复用当前的只读诊断计划。
 
 `settings/` 保持 `load_settings()` 这一公开接口：`loader.py` 只处理 TOML
 文件读取和统一错误转换，`models.py` 使用 Pydantic 模型声明配置结构、字段

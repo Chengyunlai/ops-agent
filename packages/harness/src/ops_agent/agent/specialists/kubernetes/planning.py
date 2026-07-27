@@ -1,3 +1,5 @@
+"""Kubernetes 专业 Agent 的受控诊断计划。"""
+
 from enum import StrEnum
 from typing import Self
 
@@ -6,7 +8,7 @@ from langchain.agents.structured_output import ToolStrategy
 from langchain_core.language_models import BaseChatModel
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from ops_agent.agent.kubernetes import KubernetesAgent
+from ops_agent.agent.specialists.kubernetes.agent import KubernetesAgent
 
 PLANNER_PROMPT = """\
 你是 Kubernetes 只读诊断计划器，只返回 ExecutionPlan，不回答用户问题。
