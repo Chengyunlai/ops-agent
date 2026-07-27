@@ -7,6 +7,7 @@ from ops_agent.kubernetes import KubernetesError
 from ops_agent.settings import SettingsError, load_settings
 
 from ops_agent_cli.bootstrap import BootstrapError, create_application
+from ops_agent_cli.tui import run_tui
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -28,12 +29,19 @@ def main(argv: list[str] | None = None) -> int:
         "question",
         help="需要 Agent 分析的运维问题",
     )
+    subparsers.add_parser(
+        "tui",
+        help="启动交互式终端界面",
+    )
     args = parser.parse_args(argv)
 
     try:
         if args.command == "ask":
             application = create_application(args.config)
             print(application.ask(args.question))
+            return 0
+        if args.command == "tui":
+            run_tui(args.config)
             return 0
 
         settings = load_settings(args.config)

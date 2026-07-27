@@ -1,4 +1,5 @@
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
 from langchain.chat_models import init_chat_model
@@ -13,7 +14,14 @@ class BootstrapError(Exception):
     """CLI 应用依赖组装失败。"""
 
 
-def create_application(config_path: Path) -> OpsAgent:
+@dataclass(frozen=True)
+class ApplicationRuntime:
+    agent: OpsAgent
+    environment: str
+    namespace: str
+
+
+def create_runtime(config_path: Path) -> ApplicationRuntime:
     settings = load_settings(config_path)
     model = _create_model(settings.model)
     reader = create_kubernetes_reader(settings.kubernetes)
@@ -21,7 +29,15 @@ def create_application(config_path: Path) -> OpsAgent:
         reader,
         namespace=settings.kubernetes.namespace,
     )
-    return create_ops_agent(model, tools)
+    return ApplicationRuntime(
+        agent=create_ops_agent(model, tools),
+        environment=settings.kubernetes.environment,
+        namespace=settings.kubernetes.namespace,
+    )
+
+
+def create_application(config_path: Path) -> OpsAgent:
+    return create_runtime(config_path).agent
 
 
 def _create_model(settings: ModelSettings) -> BaseChatModel:

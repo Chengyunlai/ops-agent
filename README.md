@@ -28,6 +28,7 @@
 | 审批与处置执行 | 规划中 | 执行扩缩容、重启、回滚等受控动作 |
 | LLM / Agent 编排 | 基础已完成 | 受控主图负责范围路由和诊断计划，Kubernetes 子图负责只读诊断 |
 | CLI 自然语言入口 | 已完成 | 使用 `ops_agent ask` 查询真实集群状态 |
+| 交互式终端 | 基础已完成 | 使用 `ops_agent tui` 启动只读诊断 TUI |
 | 审计与可观测性 | 规划中 | 结构化日志、Tracing、指标和操作审计 |
 
 ## 技术栈
@@ -36,6 +37,7 @@
 - LangChain / LangGraph
 - Kubernetes Python Client
 - Pydantic
+- Textual
 - TOML（Python 标准库 `tomllib`）
 - pytest
 - uv（推荐的依赖与虚拟环境管理工具）
@@ -153,7 +155,36 @@ Agent 使用配置中固定的 kubeconfig 和 namespace。模型不能通过工�
 Shell 执行入口。这样可以把模型的活动范围限制在启动时选定的配置内。宽泛的
 工作负载健康检查会先调用确定性诊断工具，再按 finding 查询详情、Event 和日志。
 
-### 5. 运行测试
+### 5. 启动交互式终端
+
+```bash
+uv run ops_agent \
+  --config config/local/test.toml \
+  tui
+```
+
+TUI 显示当前环境、固定 namespace 和只读标识。输入问题并按 Enter 后，
+Agent 在后台执行诊断，终端界面不会被同步模型调用阻塞；原有
+`ops_agent ask` 非交互入口保持不变。
+
+### 6. 开发命令
+
+仓库根目录的 Makefile 统一封装 uv、Ruff 和 pytest：
+
+```bash
+make help
+make sync
+make format
+make check
+make test-cli
+make test-harness
+make tui CONFIG=config/local/test.toml
+```
+
+`make format` 自动修复 Ruff 问题并格式化代码，`make check` 运行静态检查、
+格式检查和全量测试。
+
+也可以直接运行测试：
 
 ```bash
 uv run pytest
@@ -163,6 +194,7 @@ uv run pytest
 
 ```text
 ops_agent/
+├── Makefile
 ├── config/
 │   ├── examples/                  # 可提交的配置模板
 │   │   ├── dev.toml
@@ -177,12 +209,19 @@ ops_agent/
 │       │       ├── __init__.py
 │       │       ├── __main__.py
 │       │       ├── bootstrap.py
-│       │       └── main.py
+│       │       ├── main.py
+│       │       └── tui/
+│       │           ├── __init__.py
+│       │           └── app.py
 │       ├── tests/
 │       │   └── unit/
 │       │       ├── test_bootstrap.py
-│       │       └── test_main.py
+│       │       ├── test_main.py
+│       │       └── test_tui.py
 │       └── pyproject.toml
+├── docs/
+│   └── research/
+│       └── terminal-tui-options.md
 ├── packages/
 │   └── harness/
 │       ├── src/
@@ -243,9 +282,11 @@ Kubernetes 相关代码采用三层边界：
 - `tools/` 是 Agent 适配层。它把 Kubernetes 能力转换成模型可调用的
   LangChain Tool，并在这里固定 namespace、限制日志行数和 Event 数量。
 
-`apps/cli/bootstrap.py` 是 CLI 的组合根，负责读取进程环境并选择具体的模型、
-Reader、Tool 和 Agent 适配器。以后增加 API 或其他应用入口时，各应用拥有
-自己的组合根，harness 不依赖任何具体入口。
+`apps/cli/bootstrap.py` 是终端应用的组合根，负责读取进程环境并选择具体的
+模型、Reader、Tool 和 Agent 适配器。`main.py` 保留脚本化命令，`tui/`
+只管理 Textual 的界面状态、键盘交互和后台任务；两种交互方式都通过
+`OpsAgent` 使用核心能力，不依赖内部图结构。以后增加 API 或其他应用入口时，
+各应用拥有自己的组合根，harness 不依赖任何具体入口。
 
 `agent/` 是 Agent 编排模块，`__init__.py` 只公开 `ApplicationError`、
 `OpsAgent` 和 `create_ops_agent()`。`application.py` 通过 `OpsAgent.ask()`

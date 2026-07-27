@@ -4,7 +4,7 @@ UV ?= uv
 CONFIG ?= config/local/test.toml
 ARGS ?=
 
-.PHONY: help sync lint format format-check test test-cli test-harness check cli
+.PHONY: help sync lint format format-check test test-cli test-harness check cli tui
 
 help: ## 显示可用的开发命令
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z_-]+:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -35,3 +35,6 @@ check: lint format-check test ## 运行提交前完整检查
 
 cli: ## 运行 CLI；使用 ARGS='...' 传递参数
 	$(UV) run ops_agent $(ARGS)
+
+tui: ## 启动交互式终端；使用 CONFIG='...' 指定配置
+	$(UV) run ops_agent --config "$(CONFIG)" tui

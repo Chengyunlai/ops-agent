@@ -111,3 +111,32 @@ def test_main_asks_application(
     assert questions == ["检查所有 Pod"]
     assert captured.out == "sample-api 正在运行\n"
     assert captured.err == ""
+
+
+def test_main_starts_tui_with_configured_path(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config_path = tmp_path / "test.toml"
+    received_paths: list[Path] = []
+
+    def fake_run_tui(received_path: Path) -> None:
+        received_paths.append(received_path)
+
+    monkeypatch.setattr(
+        main_module,
+        "run_tui",
+        fake_run_tui,
+        raising=False,
+    )
+
+    exit_code = main(
+        [
+            "--config",
+            str(config_path),
+            "tui",
+        ]
+    )
+
+    assert exit_code == 0
+    assert received_paths == [config_path]
