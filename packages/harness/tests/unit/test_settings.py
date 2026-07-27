@@ -1,8 +1,8 @@
-from dataclasses import FrozenInstanceError
 from pathlib import Path
 
 import pytest
 from ops_agent.settings import KubernetesSettings, SettingsError, load_settings
+from pydantic import ValidationError
 
 
 @pytest.mark.parametrize("environment", ["dev", "test", "prod"])
@@ -62,6 +62,11 @@ def test_load_settings_rejects_invalid_toml(tmp_path: Path):
         load_settings(config_path)
 
 
+def test_load_settings_translates_file_read_errors(tmp_path: Path) -> None:
+    with pytest.raises(SettingsError, match="配置文件无法读取"):
+        load_settings(tmp_path)
+
+
 def test_load_settings_rejects_missing_kubernetes_section(tmp_path: Path):
     config_path = tmp_path / "missing-section.toml"
     config_path.write_text('environment = "test"\n', encoding="utf-8")
@@ -87,6 +92,31 @@ def test_load_settings_reports_all_missing_fields(tmp_path: Path):
     message = str(error.value)
     assert "namespace" in message
     assert "kubeconfig_path" in message
+
+
+@pytest.mark.parametrize("kubeconfig_path", ['""', '"   "'])
+def test_load_settings_rejects_empty_kubeconfig_path(
+    tmp_path: Path,
+    kubeconfig_path: str,
+) -> None:
+    config_path = tmp_path / "empty-kubeconfig.toml"
+    config_path.write_text(
+        f"""
+        [kubernetes]
+        environment = "test"
+        namespace = "sample"
+        kubeconfig_path = {kubeconfig_path}
+        request_timeout_seconds = 10
+
+        [model]
+        provider = "openai"
+        model = "deepseek-v4-pro"
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SettingsError, match="kubeconfig_path"):
+        load_settings(config_path)
 
 
 def test_load_settings_rejects_missing_model_section(tmp_path: Path):
@@ -242,6 +272,55 @@ def test_load_settings_rejects_invalid_optional_model_strings(
         load_settings(config_path)
 
 
+def test_load_settings_rejects_unknown_fields(tmp_path: Path) -> None:
+    config_path = tmp_path / "unknown-field.toml"
+    config_path.write_text(
+        """
+        [kubernetes]
+        environment = "test"
+        namespace = "sample"
+        kubeconfig_path = "/tmp/ops_agent-kubeconfig"
+        request_timeout_seconds = 10
+        unexpected = "value"
+
+        [model]
+        provider = "openai"
+        model = "deepseek-v4-pro"
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SettingsError, match="unexpected"):
+        load_settings(config_path)
+
+
+def test_load_settings_does_not_expose_invalid_input_values(tmp_path: Path) -> None:
+    secret = "sk-secret-value"
+    config_path = tmp_path / "secret-value.toml"
+    config_path.write_text(
+        f"""
+        [kubernetes]
+        environment = "test"
+        namespace = "sample"
+        kubeconfig_path = "/tmp/ops_agent-kubeconfig"
+        request_timeout_seconds = 10
+
+        [model]
+        provider = "openai"
+        model = "deepseek-v4-pro"
+        api_key = "{secret}"
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SettingsError) as error:
+        load_settings(config_path)
+
+    assert secret not in str(error.value)
+    assert error.value.__cause__ is None
+    assert error.value.__context__ is None
+
+
 def test_kubernetes_settings_immutable():
     settings = KubernetesSettings(
         environment="test",
@@ -250,5 +329,5 @@ def test_kubernetes_settings_immutable():
         request_timeout_seconds=10,
     )
 
-    with pytest.raises(FrozenInstanceError):
+    with pytest.raises(ValidationError, match="frozen_instance"):
         settings.environment = "new-env"

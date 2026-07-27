@@ -20,8 +20,8 @@
 | 能力 | 状态 | 说明 |
 | --- | --- | --- |
 | TOML 配置加载 | 已完成 | 从指定文件加载 Kubernetes 配置 |
-| 配置错误处理 | 已完成 | 识别文件缺失、TOML 格式错误、区块或字段缺失 |
-| 不可变配置模型 | 已完成 | 使用冻结的 `KubernetesSettings` 数据类 |
+| 配置错误处理 | 已完成 | 识别文件缺失、TOML 格式错误、区块、字段缺失或未知字段 |
+| 不可变配置模型 | 已完成 | 使用冻结的 Pydantic 模型声明类型、别名和字段约束 |
 | Kubernetes 只读查询 | 已完成 | 查询 Pod 摘要/详情/日志、Event、Deployment 和 Service |
 | Kubernetes 基础诊断 | 已完成 | Agent 可调用确定性规则识别 Pod 阶段/就绪异常和 Deployment 副本不足 |
 | 告警接入与诊断 | 规划中 | 接入告警并生成带证据的诊断报告 |
@@ -35,6 +35,7 @@
 - Python 3.14+
 - LangChain / LangGraph
 - Kubernetes Python Client
+- Pydantic
 - TOML（Python 标准库 `tomllib`）
 - pytest
 - uv（推荐的依赖与虚拟环境管理工具）
@@ -195,7 +196,10 @@ ops_agent/
 │       │       │   ├── __init__.py
 │       │       │   ├── models.py
 │       │       │   └── reader.py
-│       │       ├── settings.py
+│       │       ├── settings/
+│       │       │   ├── __init__.py
+│       │       │   ├── loader.py
+│       │       │   └── models.py
 │       │       └── tools/
 │       │           ├── __init__.py
 │       │           └── kubernetes.py
@@ -227,6 +231,10 @@ Kubernetes 相关代码采用三层边界：
 
 `bootstrap.py` 只负责组装配置、模型、Reader、Tool 和 Agent。以后增加
 API 或 SDK 入口时，可以复用同一个 harness，不需要复制 Kubernetes 逻辑。
+
+`settings/` 保持 `load_settings()` 这一公开接口：`loader.py` 只处理 TOML
+文件读取和统一错误转换，`models.py` 使用 Pydantic 模型声明配置结构、字段
+说明、不可变性和校验规则。
 
 ## 建议架构
 
