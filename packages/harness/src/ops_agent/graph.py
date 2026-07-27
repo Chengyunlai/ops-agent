@@ -1,72 +1,157 @@
 from collections.abc import Sequence
 
-from langchain.agents import create_agent
 from langchain_core.language_models import BaseChatModel
-from langchain_core.tools import BaseTool, StructuredTool
+from langchain_core.messages import AIMessage
+from langchain_core.tools import BaseTool
+from langgraph.graph import END, START, MessagesState, StateGraph
 
 from ops_agent.agent import OpsAgent
+from ops_agent.kubernetes_agent import KubernetesAgent
+from ops_agent.planning import (
+    ExecutionPlan,
+    KubernetesDiagnosticPlanner,
+    KubernetesPlanExecutor,
+)
+from ops_agent.routing import (
+    RequestRouter,
+    RouteAction,
+    RouteDecision,
+    decide_route,
+)
 
-SUPERVISOR_PROMPT = """\
-你是运维任务的主 Agent，负责理解请求、选择专业子 Agent，并汇总最终回答。
+OUT_OF_SCOPE_RESPONSE = "当前系统只处理 Kubernetes 运维与诊断问题。"
+DEFAULT_REJECT_RESPONSE = "无法安全确定请求所属能力，已拒绝执行。"
+UNSUPPORTED_RESPONSE = (
+    "这是运维问题，但当前尚未接入对应的专业诊断能力，因此无法获取或推测实时状态。"
+)
+NO_EVIDENCE_RESPONSE = "没有获取到 Kubernetes 实时证据，无法给出当前状态结论。"
+PLAN_REJECTED_RESPONSE = "无法生成满足当前只读能力约束的诊断计划。"
 
-规则：
-- 涉及 Kubernetes 当前状态或故障诊断时，必须委派给 kubernetes_diagnostics。
-- 不要绕过子 Agent 猜测集群状态。
-- 清楚区分子 Agent 返回的事实和你的推断。
-- 当前系统只支持只读诊断，不能声称已经执行任何修改操作。
-- 使用简洁中文回答。
-"""
 
-KUBERNETES_AGENT_PROMPT = """\
-你是 Kubernetes 只读诊断子 Agent。
-
-规则：
-- 涉及集群当前状态的问题，必须先调用工具获取真实数据，不能凭空猜测。
-- Kubernetes 环境和 namespace 已由应用配置固定，不要要求用户重复提供。
-- 清楚区分工具返回的事实和你的推断。
-- 宽泛的工作负载健康检查必须先调用 diagnose_kubernetes_workloads 获取确定性诊断。
-- 根据诊断 finding，再按需查询 Pod、Deployment、Event、Pod 详情和日志补充证据。
-- 优先指出未就绪、非 Running 或发生过重启的 Pod，但不要把所有重启都直接判定为故障。
-- 日志只用于验证具体问题，不要无目的地读取大量日志。
-- 当前只能查询，不能声称已经执行重启、删除、扩缩容或其他修改操作。
-- 返回可由主 Agent 直接引用的简洁中文诊断结果。
-"""
+class _OpsGraphState(MessagesState):
+    route_suggestion: RouteDecision | None
+    candidate_answer: str | None
+    evidence_count: int
+    plan: ExecutionPlan | None
 
 
 def create_ops_agent(
     model: BaseChatModel,
     kubernetes_tools: Sequence[BaseTool],
 ) -> OpsAgent:
-    """构建当前运维领域的主 Agent 与 Kubernetes 子 Agent 图。"""
+    """构建受控主图和独立的 Kubernetes 诊断子图。"""
 
-    kubernetes_agent = OpsAgent(
-        create_agent(
-            model=model,
-            tools=list(kubernetes_tools),
-            system_prompt=KUBERNETES_AGENT_PROMPT,
-            name="kubernetes_diagnostics_agent",
-        )
+    router = RequestRouter(model)
+    planner = KubernetesDiagnosticPlanner(model)
+    kubernetes_agent = KubernetesAgent(model, kubernetes_tools)
+    plan_executor = KubernetesPlanExecutor(kubernetes_agent)
+
+    def classify_request(state: _OpsGraphState) -> dict[str, object]:
+        return {
+            "route_suggestion": router.suggest(state["messages"]),
+        }
+
+    def choose_route(state: _OpsGraphState) -> str:
+        return decide_route(
+            _last_user_question(state),
+            state.get("route_suggestion"),
+        ).value
+
+    def execute_kubernetes(state: _OpsGraphState) -> dict[str, object]:
+        result = kubernetes_agent.diagnose(_last_user_question(state))
+        return {
+            "candidate_answer": result.answer,
+            "evidence_count": result.evidence_count,
+        }
+
+    def create_plan(state: _OpsGraphState) -> dict[str, object]:
+        return {
+            "plan": planner.create(_last_user_question(state)),
+        }
+
+    def choose_plan_result(state: _OpsGraphState) -> str:
+        return "execute_plan" if state.get("plan") is not None else "reject_plan"
+
+    def execute_plan(state: _OpsGraphState) -> dict[str, object]:
+        plan = state.get("plan")
+        if plan is None:
+            return {"candidate_answer": None, "evidence_count": 0}
+        result = plan_executor.execute(_last_user_question(state), plan)
+        return {
+            "candidate_answer": result.answer,
+            "evidence_count": result.evidence_count,
+        }
+
+    def validate_evidence(state: _OpsGraphState) -> dict[str, object]:
+        answer = state.get("candidate_answer")
+        if state.get("evidence_count", 0) < 1 or not answer:
+            answer = NO_EVIDENCE_RESPONSE
+        return {"messages": [AIMessage(content=answer)]}
+
+    builder = StateGraph(_OpsGraphState)
+    builder.add_node("classify_request", classify_request)
+    builder.add_node("create_plan", create_plan)
+    builder.add_node("execute_kubernetes", execute_kubernetes)
+    builder.add_node("execute_plan", execute_plan)
+    builder.add_node("validate_evidence", validate_evidence)
+    builder.add_node(
+        "reject_default",
+        _fixed_response(DEFAULT_REJECT_RESPONSE),
     )
-    return OpsAgent(
-        create_agent(
-            model=model,
-            tools=[_create_kubernetes_delegation_tool(kubernetes_agent)],
-            system_prompt=SUPERVISOR_PROMPT,
-            name="ops_supervisor",
-        )
+    builder.add_node(
+        "reject_out_of_scope",
+        _fixed_response(OUT_OF_SCOPE_RESPONSE),
     )
-
-
-def _create_kubernetes_delegation_tool(
-    kubernetes_agent: OpsAgent,
-) -> BaseTool:
-    def delegate(request: str) -> str:
-        return kubernetes_agent.ask(request)
-
-    return StructuredTool.from_function(
-        delegate,
-        name="kubernetes_diagnostics",
-        description=(
-            "检查 Kubernetes 集群当前状态，诊断 Pod、Deployment、Event 和日志问题。"
-        ),
+    builder.add_node(
+        "reject_unsupported",
+        _fixed_response(UNSUPPORTED_RESPONSE),
     )
+    builder.add_node(
+        "reject_plan",
+        _fixed_response(PLAN_REJECTED_RESPONSE),
+    )
+    builder.add_edge(START, "classify_request")
+    builder.add_conditional_edges(
+        "classify_request",
+        choose_route,
+        {
+            action.value: action.value
+            for action in (
+                RouteAction.EXECUTE_KUBERNETES,
+                RouteAction.CREATE_PLAN,
+                RouteAction.REJECT_DEFAULT,
+                RouteAction.REJECT_OUT_OF_SCOPE,
+                RouteAction.REJECT_UNSUPPORTED,
+            )
+        },
+    )
+    builder.add_conditional_edges(
+        "create_plan",
+        choose_plan_result,
+        {
+            "execute_plan": "execute_plan",
+            "reject_plan": "reject_plan",
+        },
+    )
+    builder.add_edge("execute_kubernetes", "validate_evidence")
+    builder.add_edge("execute_plan", "validate_evidence")
+    builder.add_edge("validate_evidence", END)
+    builder.add_edge("reject_default", END)
+    builder.add_edge("reject_out_of_scope", END)
+    builder.add_edge("reject_unsupported", END)
+    builder.add_edge("reject_plan", END)
+    return OpsAgent(builder.compile())
+
+
+def _fixed_response(content: str):
+    def respond(_: _OpsGraphState) -> dict[str, object]:
+        return {"messages": [AIMessage(content=content)]}
+
+    return respond
+
+
+def _last_user_question(state: _OpsGraphState) -> str:
+    for message in reversed(state["messages"]):
+        if message.type == "human" and isinstance(message.content, str):
+            return message.content
+    return ""

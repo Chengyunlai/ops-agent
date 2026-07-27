@@ -26,7 +26,7 @@
 | Kubernetes 基础诊断 | 已完成 | Agent 可调用确定性规则识别 Pod 阶段/就绪异常和 Deployment 副本不足 |
 | 告警接入与诊断 | 规划中 | 接入告警并生成带证据的诊断报告 |
 | 审批与处置执行 | 规划中 | 执行扩缩容、重启、回滚等受控动作 |
-| LLM / Agent 编排 | 基础已完成 | 主 Agent 负责路由与汇总，Kubernetes 子 Agent 负责只读诊断 |
+| LLM / Agent 编排 | 基础已完成 | 受控主图负责范围路由和诊断计划，Kubernetes 子图负责只读诊断 |
 | CLI 自然语言入口 | 已完成 | 使用 `ops_agent ask` 查询真实集群状态 |
 | 审计与可观测性 | 规划中 | 结构化日志、Tracing、指标和操作审计 |
 
@@ -190,6 +190,9 @@ ops_agent/
 │       │       ├── __init__.py
 │       │       ├── agent.py
 │       │       ├── graph.py
+│       │       ├── kubernetes_agent.py
+│       │       ├── planning.py
+│       │       ├── routing.py
 │       │       ├── diagnostics/
 │       │       │   ├── __init__.py
 │       │       │   ├── kubernetes.py
@@ -239,24 +242,46 @@ Reader、Tool 和 Agent 适配器。以后增加 API 或其他应用入口时，
 `agent.py` 通过 `OpsAgent.ask()` 提供小而稳定的公开接口，隐藏 LangGraph
 消息结构、调用方式、响应解析和运行错误转换。
 
-`graph.py` 拥有当前真实的 Agent 拓扑和角色提示词：主 Agent 只负责理解请求、
-委派和汇总；Kubernetes 子 Agent 持有集群只读工具，负责诊断与证据收集。
-新增指标或日志等第二个真实专业 Agent 时，在这里扩展拓扑，不改变 CLI 和
-`OpsAgent.ask()`；届时再根据真实差异提取通用注册 seam。审批、持久化和
-interrupt/resume 属于有状态执行协议，不复用当前的文本委派接口。
+`routing.py` 使用冻结的 Pydantic 模型约束模型只能提出已知范围、执行模式和
+读写类型。模型的分类结果是不可信输入；纯代码策略还会核对原始问题中的
+Kubernetes allowlist、明确的只读查询意图、未接入平台/指标类型和写操作。
+未知请求默认拒绝，因此主图没有自由回答用户的兜底路径。当前策略较保守，
+Kubernetes 请求需要明确包含 Kubernetes/K8s 或 Pod、Deployment、Namespace
+等低歧义资源名称；CPU、内存、QPS 等未接入实时指标不会交给子 Agent 猜测。
+自然语言 allowlist 用于保守分流，不作为权限授权依据；真正的硬约束仍是子图
+只持有固定 namespace 的只读工具，并且没有成功工具证据就不输出实时结论。
+
+`planning.py` 声明最多三步的顺序 Kubernetes 只读诊断计划。步骤只能从
+工作负载健康、补充证据和根因分析三个受控目标中选择，不能携带自由文本工具
+指令；计划必须从工作负载健康开始，并按取证到根因的顺序推进。
+`kubernetes_agent.py` 隐藏具体 ReAct 子图、工具选择、响应解析和证据提取。
+每一步必须产生成功的真实工具消息，否则主图不会输出实时诊断结论。
 
 ```text
 CLI ──► OpsAgent.ask()
              │
              ▼
-        主 Agent（路由、汇总）
+       结构化请求分类（不可信）
              │
              ▼
-        Kubernetes 子 Agent
-             │
-             ▼
-        诊断规则与只读工具
+       纯代码范围与读写策略
+        ┌────┼──────────────┐
+        │    │              │
+      越界  未接入       Kubernetes
+        │    │          ┌───┴────┐
+      固定拒绝         直接执行  诊断计划
+                          │       │
+                          └───┬───┘
+                              ▼
+                      Kubernetes 子图
+                              │
+                              ▼
+                      只读工具与证据校验
 ```
+
+新增指标或日志等第二个真实专业 Agent 时，在 `graph.py` 扩展拓扑，并根据
+真实的共同点再提取注册 seam。审批、持久化和 interrupt/resume 属于有状态
+执行协议，不复用当前的只读诊断计划。
 
 `settings/` 保持 `load_settings()` 这一公开接口：`loader.py` 只处理 TOML
 文件读取和统一错误转换，`models.py` 使用 Pydantic 模型声明配置结构、字段
@@ -320,6 +345,8 @@ uv run pytest
 - [x] Kubernetes 客户端与 Pod 只读查询
 - [x] Pod 详情、日志、Event、Deployment 与 Service 只读工具
 - [x] Pod 和 Deployment 基础症状诊断及 Agent 工具链路
+- [x] 请求范围路由、默认拒绝与实时证据校验
+- [x] 最小 Kubernetes 只读诊断计划
 - [ ] 发布失败根因和资源压力诊断
 - [ ] Prometheus、日志与告警平台接入
 - [x] LLM 工具调用与基础 Agent 编排
