@@ -3,6 +3,10 @@ from typing import Protocol
 
 from langchain_core.tools import BaseTool, tool
 
+from ops_agent.diagnostics import (
+    KubernetesSnapshot,
+    diagnose_kubernetes_snapshot,
+)
 from ops_agent.kubernetes import (
     DeploymentSummary,
     KubernetesEventSummary,
@@ -58,6 +62,16 @@ def create_kubernetes_tools(
     def list_kubernetes_pods() -> list[dict[str, object]]:
         """列出已配置 namespace 的 Pod 状态、就绪数和重启次数。"""
         return [asdict(pod) for pod in reader.list_pods(namespace)]
+
+    @tool("diagnose_kubernetes_workloads")
+    def diagnose_kubernetes_workloads() -> dict[str, object]:
+        """诊断已配置 namespace 的 Pod 和 Deployment 基础健康状态。"""
+        snapshot = KubernetesSnapshot(
+            namespace=namespace,
+            pods=tuple(reader.list_pods(namespace)),
+            deployments=tuple(reader.list_deployments(namespace)),
+        )
+        return asdict(diagnose_kubernetes_snapshot(snapshot))
 
     @tool("get_kubernetes_pod_details")
     def get_kubernetes_pod_details(
@@ -119,6 +133,7 @@ def create_kubernetes_tools(
 
     return [
         list_kubernetes_pods,
+        diagnose_kubernetes_workloads,
         get_kubernetes_pod_details,
         get_kubernetes_pod_logs,
         list_kubernetes_events,

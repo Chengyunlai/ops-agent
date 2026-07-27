@@ -127,6 +127,7 @@ def test_kubernetes_tools_expose_read_only_operations() -> None:
     _, tools = create_tools()
 
     assert set(tools) == {
+        "diagnose_kubernetes_workloads",
         "list_kubernetes_pods",
         "get_kubernetes_pod_details",
         "get_kubernetes_pod_logs",
@@ -144,6 +145,34 @@ def test_list_pods_tool_uses_configured_namespace() -> None:
     assert operations.calls == [("list_pods", "sample")]
     assert result[0]["name"] == "sample-api"
     assert result[0]["ready_containers"] == 1
+
+
+def test_diagnosis_tool_reports_findings_from_configured_namespace() -> None:
+    operations, tools = create_tools()
+
+    report = tools["diagnose_kubernetes_workloads"].invoke({})
+
+    assert report == {
+        "namespace": "sample",
+        "findings": (
+            {
+                "severity": "warning",
+                "resource_kind": "Deployment",
+                "resource_name": "sample-api",
+                "summary": "Deployment 就绪副本少于期望副本",
+                "evidence": (
+                    {
+                        "source": "deployment_status",
+                        "message": "desired_replicas=3, ready_replicas=2",
+                    },
+                ),
+            },
+        ),
+    }
+    assert operations.calls == [
+        ("list_pods", "sample"),
+        ("list_deployments", "sample"),
+    ]
 
 
 def test_pod_details_and_logs_tools_use_configured_namespace() -> None:
