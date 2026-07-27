@@ -34,6 +34,7 @@ def test_create_application_wires_configured_namespace(
     tools = [object()]
     model = object()
     agent = object()
+    monitor = object()
     calls: dict[str, object] = {}
 
     def fake_create_reader(settings):
@@ -53,6 +54,11 @@ def test_create_application_wires_configured_namespace(
         calls["model"] = received_model
         calls["tools"] = received_tools
         return agent
+
+    def fake_create_monitor(received_reader, *, namespace):
+        calls["monitor_reader"] = received_reader
+        calls["monitor_namespace"] = namespace
+        return monitor
 
     monkeypatch.setattr(
         bootstrap_module,
@@ -74,6 +80,11 @@ def test_create_application_wires_configured_namespace(
         "create_ops_agent",
         fake_create_agent,
     )
+    monkeypatch.setattr(
+        bootstrap_module,
+        "KubernetesMonitor",
+        fake_create_monitor,
+    )
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-api-key")
 
     application = create_application(config_path)
@@ -90,6 +101,8 @@ def test_create_application_wires_configured_namespace(
     }
     assert calls["model"] is model
     assert calls["tools"] == tools
+    assert calls["monitor_reader"] is reader
+    assert calls["monitor_namespace"] == "sample"
 
 
 def test_create_application_requires_configured_api_key(

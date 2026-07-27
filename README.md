@@ -163,14 +163,19 @@ uv run ops_agent \
   tui
 ```
 
-TUI 显示当前环境、固定 namespace 和只读标识，并将这些可信信息作为
-`InteractionContext` 传给主图。因此可以使用“现在几个服务”这类上下文简称，
-无需反复声明 Kubernetes 和 namespace。输入问题并按 Enter 后，界面会显示
-意图理解、策略校验、证据查询和回答完成等稳定进度；Conversation Session
-保留本次 TUI 运行期间的历史消息，并把相关历史传给 Planner 和专业 Agent，
-所以澄清确认与指代式追问不会在执行阶段丢失上下文。澄清节点还会保存代码
-选出的候选 Capability；下一轮“是”不会让模型把 Service 偷换成 Pod。原有
-`ops_agent ask` 非交互入口保持不变，并继续采用保守的自动 scope。
+TUI 显示当前环境、固定 namespace 和只读标识。宽终端采用左右布局：左侧每
+5 秒刷新 Pod、Deployment 和 Service 只读快照，按 `1`/`2`/`3` 切换资源；
+右侧保留本次运行中的用户消息和 Agent Markdown 回复。窄终端自动改为上下
+布局。`Ctrl+R` 可立即刷新监盘，`Ctrl+L` 清空右侧显示但保留
+`ConversationSession` 上下文，`F1`/`?` 显示帮助，`Ctrl+C` 在任意焦点下
+退出。
+
+右侧虽然采用普通聊天交互，但仍将可信 `InteractionContext` 传给主图并消费
+受控 `ConversationSession`，不是绕过 Policy 的裸模型入口。因此可以使用
+“现在几个服务”这类上下文简称，无需反复声明 Kubernetes 和 namespace；
+会话历史会传给 Planner 和专业 Agent，澄清确认与指代式追问不会在执行阶段
+丢失上下文。原有 `ops_agent ask` 非交互入口保持不变，并继续采用保守的
+自动 scope。
 
 ### 6. 开发命令
 
@@ -218,7 +223,9 @@ ops_agent/
 │       │       ├── main.py
 │       │       └── tui/
 │       │           ├── __init__.py
-│       │           └── app.py
+│       │           ├── app.py
+│       │           ├── chat.py
+│       │           └── monitor.py
 │       ├── tests/
 │       │   └── unit/
 │       │       ├── test_bootstrap.py
@@ -255,6 +262,9 @@ ops_agent/
 │       │       │   ├── __init__.py
 │       │       │   ├── models.py
 │       │       │   └── reader.py
+│       │       ├── monitoring/
+│       │       │   ├── __init__.py
+│       │       │   └── kubernetes.py
 │       │       ├── settings/
 │       │       │   ├── __init__.py
 │       │       │   ├── loader.py
@@ -288,10 +298,13 @@ Kubernetes 相关代码采用三层边界：
   finding，不访问集群，也不依赖 LLM 或 LangChain。
 - `tools/` 是 Agent 适配层。它把 Kubernetes 能力转换成模型可调用的
   LangChain Tool，并在这里固定 namespace、限制日志行数和 Event 数量。
+- `monitoring/` 用一个无参数 `snapshot()` 接口封装固定 namespace 的资源
+  快照。TUI 只消费这个稳定接口，不导入 Kubernetes SDK，也不解析 Agent
+  文本；以后将轮询替换为 watch 时无需改动聊天与布局。
 
 `apps/cli/bootstrap.py` 是终端应用的组合根，负责读取进程环境并选择具体的
-模型、Reader、Tool 和 Agent 适配器。`main.py` 保留脚本化命令，`tui/`
-只管理 Textual 的界面状态、键盘交互和后台任务。TUI 打开带固定
+模型、Reader、Monitor、Tool 和 Agent 适配器。`main.py` 保留脚本化命令，
+`tui/` 只管理 Textual 的界面状态、键盘交互和后台任务。TUI 打开带固定
 `InteractionContext` 的 `ConversationSession`，并消费稳定的 `AgentEvent`，
 不依赖 LangGraph 节点名。以后增加 API 或其他应用入口时，各应用拥有自己的
 组合根，harness 不依赖任何具体入口。

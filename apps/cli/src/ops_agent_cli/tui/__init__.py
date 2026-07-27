@@ -22,6 +22,7 @@ def run_tui(config_path: Path) -> None:
     )
     OpsAgentTui(
         conversation=session,
+        monitor=runtime.monitor,
         environment=runtime.environment,
         namespace=runtime.namespace,
     ).run()

@@ -6,6 +6,7 @@ from langchain.chat_models import init_chat_model
 from langchain_core.language_models import BaseChatModel
 from ops_agent.agent import OpsAgent, create_ops_agent
 from ops_agent.kubernetes import create_kubernetes_reader
+from ops_agent.monitoring import KubernetesMonitor
 from ops_agent.settings import ModelSettings, load_settings
 from ops_agent.tools import create_kubernetes_tools
 
@@ -17,6 +18,7 @@ class BootstrapError(Exception):
 @dataclass(frozen=True)
 class ApplicationRuntime:
     agent: OpsAgent
+    monitor: KubernetesMonitor
     environment: str
     namespace: str
 
@@ -31,6 +33,10 @@ def create_runtime(config_path: Path) -> ApplicationRuntime:
     )
     return ApplicationRuntime(
         agent=create_ops_agent(model, tools),
+        monitor=KubernetesMonitor(
+            reader,
+            namespace=settings.kubernetes.namespace,
+        ),
         environment=settings.kubernetes.environment,
         namespace=settings.kubernetes.namespace,
     )
