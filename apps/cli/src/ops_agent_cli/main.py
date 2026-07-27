@@ -1,7 +1,6 @@
-
 import argparse
-from pathlib import Path
 import sys
+from pathlib import Path
 
 from ops_agent.bootstrap import (
     ApplicationError,
@@ -15,13 +14,13 @@ from ops_agent.settings import SettingsError, load_settings
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="本地 Kubernetes 运维 Agent",
-        )
+    )
     parser.add_argument(
         "--config",
         type=Path,
         default=Path("config/local/test.toml"),
         help="TOML 配置文件路径",
-        )
+    )
     subparsers = parser.add_subparsers(dest="command")
     ask_parser = subparsers.add_parser(
         "ask",

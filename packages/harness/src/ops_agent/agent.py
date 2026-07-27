@@ -5,7 +5,6 @@ from langchain.agents import create_agent
 from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
 
-
 SYSTEM_PROMPT = """\
 你是一个本地 Kubernetes 只读运维助手。
 

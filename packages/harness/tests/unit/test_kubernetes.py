@@ -4,8 +4,6 @@ from types import SimpleNamespace
 import pytest
 from kubernetes.client.exceptions import ApiException
 from kubernetes.config.config_exception import ConfigException
-from urllib3.exceptions import HTTPError
-
 from ops_agent.kubernetes import (
     KubernetesError,
     KubernetesReader,
@@ -14,6 +12,7 @@ from ops_agent.kubernetes import (
 )
 from ops_agent.kubernetes import reader as reader_module
 from ops_agent.settings import KubernetesSettings
+from urllib3.exceptions import HTTPError
 
 
 class FakeCoreV1Api:

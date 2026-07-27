@@ -1,5 +1,4 @@
 import pytest
-
 from ops_agent.kubernetes import (
     ContainerSummary,
     DeploymentSummary,
@@ -72,9 +71,7 @@ class FakeKubernetesOperations:
         pod_name: str | None,
         limit: int,
     ) -> list[KubernetesEventSummary]:
-        self.calls.append(
-            ("list_events", (namespace, pod_name, limit))
-        )
+        self.calls.append(("list_events", (namespace, pod_name, limit)))
         return [
             KubernetesEventSummary(
                 type="Warning",
@@ -152,9 +149,7 @@ def test_list_pods_tool_uses_configured_namespace() -> None:
 def test_pod_details_and_logs_tools_use_configured_namespace() -> None:
     operations, tools = create_tools()
 
-    details = tools["get_kubernetes_pod_details"].invoke(
-        {"pod_name": "sample-api"}
-    )
+    details = tools["get_kubernetes_pod_details"].invoke({"pod_name": "sample-api"})
     logs = tools["get_kubernetes_pod_logs"].invoke(
         {
             "pod_name": "sample-api",

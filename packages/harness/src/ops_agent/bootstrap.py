@@ -1,5 +1,5 @@
-from dataclasses import dataclass
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
 from langchain.chat_models import init_chat_model
@@ -76,9 +76,7 @@ def _create_model(settings: ModelSettings) -> BaseChatModel:
     if settings.api_key_env is not None:
         api_key = os.getenv(settings.api_key_env)
         if not api_key:
-            raise BootstrapError(
-                f"缺少模型密钥环境变量: {settings.api_key_env}"
-            )
+            raise BootstrapError(f"缺少模型密钥环境变量: {settings.api_key_env}")
         model_kwargs["api_key"] = api_key
 
     try:

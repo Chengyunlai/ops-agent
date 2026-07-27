@@ -110,18 +110,12 @@ def create_kubernetes_tools(
     @tool("list_kubernetes_deployments")
     def list_kubernetes_deployments() -> list[dict[str, object]]:
         """列出已配置 namespace 的 Deployment 副本状态。"""
-        return [
-            asdict(deployment)
-            for deployment in reader.list_deployments(namespace)
-        ]
+        return [asdict(deployment) for deployment in reader.list_deployments(namespace)]
 
     @tool("list_kubernetes_services")
     def list_kubernetes_services() -> list[dict[str, object]]:
         """列出已配置 namespace 的 Service、ClusterIP 和端口。"""
-        return [
-            asdict(service)
-            for service in reader.list_services(namespace)
-        ]
+        return [asdict(service) for service in reader.list_services(namespace)]
 
     return [
         list_kubernetes_pods,
@@ -145,6 +139,4 @@ def _require_range(
         or isinstance(value, bool)
         or not minimum <= value <= maximum
     ):
-        raise ValueError(
-            f"{field_name} 必须在 {minimum} 到 {maximum} 之间"
-        )
+        raise ValueError(f"{field_name} 必须在 {minimum} 到 {maximum} 之间")

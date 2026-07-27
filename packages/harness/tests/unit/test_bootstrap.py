@@ -2,7 +2,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
 from ops_agent import bootstrap as bootstrap_module
 from ops_agent.bootstrap import (
     BootstrapError,

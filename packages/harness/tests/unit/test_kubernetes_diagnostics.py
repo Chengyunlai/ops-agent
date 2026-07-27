@@ -70,9 +70,7 @@ def test_diagnosis_reports_pod_with_unready_containers() -> None:
             evidence=(
                 Evidence(
                     source="pod_status",
-                    message=(
-                        "ready_containers=1, total_containers=2"
-                    ),
+                    message=("ready_containers=1, total_containers=2"),
                 ),
             ),
         ),
@@ -105,9 +103,7 @@ def test_diagnosis_reports_deployment_with_missing_ready_replicas() -> None:
             evidence=(
                 Evidence(
                     source="deployment_status",
-                    message=(
-                        "desired_replicas=3, ready_replicas=2"
-                    ),
+                    message=("desired_replicas=3, ready_replicas=2"),
                 ),
             ),
         ),

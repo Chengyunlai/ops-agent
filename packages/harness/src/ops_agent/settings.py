@@ -64,9 +64,7 @@ def _parse_kubernetes_settings(
         environment=section.string("environment"),
         namespace=section.string("namespace"),
         kubeconfig_path=Path(section.string("kubeconfig_path")),
-        request_timeout_seconds=section.positive_integer(
-            "request_timeout_seconds"
-        ),
+        request_timeout_seconds=section.positive_integer("request_timeout_seconds"),
     )
 
 
@@ -116,16 +114,13 @@ class _SettingsSection:
         ]
         if missing_fields:
             raise SettingsError(
-                f"[{self.name}] 缺少必填配置项或值为空: "
-                f"{', '.join(missing_fields)}"
+                f"[{self.name}] 缺少必填配置项或值为空: {', '.join(missing_fields)}"
             )
 
     def string(self, field_name: str) -> str:
         value = self.values[field_name]
         if not isinstance(value, str):
-            raise SettingsError(
-                f"[{self.name}] 配置项必须是字符串: {field_name}"
-            )
+            raise SettingsError(f"[{self.name}] 配置项必须是字符串: {field_name}")
         return value
 
     def optional_string(self, field_name: str) -> str | None:
@@ -133,19 +128,11 @@ class _SettingsSection:
         if value is None:
             return None
         if not isinstance(value, str) or not value.strip():
-            raise SettingsError(
-                f"[{self.name}] 配置项必须是非空字符串: {field_name}"
-            )
+            raise SettingsError(f"[{self.name}] 配置项必须是非空字符串: {field_name}")
         return value
 
     def positive_integer(self, field_name: str) -> int:
         value = self.values[field_name]
-        if (
-            not isinstance(value, int)
-            or isinstance(value, bool)
-            or value <= 0
-        ):
-            raise SettingsError(
-                f"[{self.name}] 配置项必须是正整数: {field_name}"
-            )
+        if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+            raise SettingsError(f"[{self.name}] 配置项必须是正整数: {field_name}")
         return value

@@ -2,7 +2,6 @@ from dataclasses import FrozenInstanceError
 from pathlib import Path
 
 import pytest
-
 from ops_agent.settings import KubernetesSettings, SettingsError, load_settings
 
 
@@ -40,9 +39,7 @@ def test_load_settings_from_toml(tmp_path: Path):
 
     assert settings.kubernetes.environment == "local-test"
     assert settings.kubernetes.namespace == "operations"
-    assert settings.kubernetes.kubeconfig_path == Path(
-        "/tmp/ops_agent-kubeconfig"
-    )
+    assert settings.kubernetes.kubeconfig_path == Path("/tmp/ops_agent-kubeconfig")
     assert settings.kubernetes.request_timeout_seconds == 17
     assert settings.model.provider == "openai"
     assert settings.model.name == "test-model"

@@ -91,8 +91,7 @@ class KubernetesReader:
         limit: int,
     ) -> list[KubernetesEventSummary]:
         field_selector = (
-            "involvedObject.kind=Pod,"
-            f"involvedObject.name={pod_name}"
+            f"involvedObject.kind=Pod,involvedObject.name={pod_name}"
             if pod_name is not None
             else None
         )
@@ -123,9 +122,7 @@ class KubernetesReader:
                 name=deployment.metadata.name,
                 desired_replicas=deployment.spec.replicas or 0,
                 ready_replicas=deployment.status.ready_replicas or 0,
-                available_replicas=(
-                    deployment.status.available_replicas or 0
-                ),
+                available_replicas=(deployment.status.available_replicas or 0),
                 updated_replicas=deployment.status.updated_replicas or 0,
             )
             for deployment in response.items
@@ -149,9 +146,7 @@ class KubernetesReader:
         try:
             return request()
         except (ApiException, HTTPError) as error:
-            raise KubernetesError(
-                f"{failure_message}: {error}"
-            ) from error
+            raise KubernetesError(f"{failure_message}: {error}") from error
 
 
 def create_kubernetes_reader(
@@ -186,10 +181,7 @@ def _to_pod_summary(pod) -> PodSummary:
 
 
 def _to_pod_details(pod) -> PodDetails:
-    statuses = {
-        status.name: status
-        for status in (pod.status.container_statuses or [])
-    }
+    statuses = {status.name: status for status in (pod.status.container_statuses or [])}
     containers = [
         _to_container_summary(container, statuses.get(container.name))
         for container in (pod.spec.containers or [])
@@ -208,9 +200,7 @@ def _to_container_summary(container, status) -> ContainerSummary:
         name=container.name,
         image=container.image,
         ready=bool(status.ready) if status is not None else False,
-        restart_count=(
-            status.restart_count if status is not None else 0
-        ),
+        restart_count=(status.restart_count if status is not None else 0),
         state=_container_state(status),
     )
 
@@ -235,9 +225,7 @@ def _container_state(status) -> str:
 def _to_event_summary(event) -> KubernetesEventSummary:
     involved_object = event.involved_object
     timestamp = (
-        event.event_time
-        or event.last_timestamp
-        or event.metadata.creation_timestamp
+        event.event_time or event.last_timestamp or event.metadata.creation_timestamp
     )
     return KubernetesEventSummary(
         type=event.type or "Unknown",
