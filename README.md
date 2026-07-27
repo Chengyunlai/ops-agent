@@ -306,6 +306,9 @@ Decision、注册 Capability 和稳定 Agent Event。`application.py` 通过
 `graph.py` 定义 State、Node 与 Edge；`routing.py` 让模型只提出结构化
 Intent Proposal，再由纯代码 Policy 校验应用 scope、已注册只读 Capability、
 未接入平台和写操作。模型不能授予能力或改变 environment/namespace。
+Intent Interpreter 对模型只发起一次调用，同时兼容标准 tool call 和
+OpenAI-compatible Provider 常见的 JSON 文本响应；两种响应都必须通过同一个
+Pydantic `IntentProposal` 校验，避免结构化输出不兼容时进入 Agent 重试循环。
 原始文本中明确出现 Service、Pod 等资源时，代码还会用它锁定资源
 Capability；模型结构化输出中的 resource 不能把 Service 偷换成 Pod。
 Capability Registry 由组合根实际传入的 Kubernetes 工具派生，而不是根据

@@ -11,6 +11,7 @@ from ops_agent.agent import (
     InteractionContext,
     create_ops_agent,
 )
+from ops_agent.agent.orchestration.routing import IntentInterpreter
 from pydantic import Field
 
 
@@ -48,11 +49,26 @@ class RecordingToolCallingModel(FakeMessagesListChatModel):
     ):
         self.bound_tool_names.append(
             [
-                tool.name if isinstance(tool, BaseTool) else tool["name"]
+                (
+                    tool.name
+                    if isinstance(tool, BaseTool)
+                    else (tool["name"] if isinstance(tool, dict) else tool.__name__)
+                )
                 for tool in tools
             ]
         )
         return self
+
+
+class JsonOnlyModel(FakeMessagesListChatModel):
+    def bind_tools(
+        self,
+        tools,
+        *,
+        tool_choice=None,
+        **kwargs,
+    ):
+        raise NotImplementedError
 
 
 def route_response(
@@ -282,6 +298,135 @@ def test_kubernetes_scoped_session_understands_contextual_service_count(
     )
 
 
+@pytest.mark.parametrize(
+    "intent_content",
+    [
+        (
+            '{"destination":"kubernetes","execution_mode":"direct",'
+            '"operation":"read_only","resource":"service",'
+            '"result_shape":"count","ambiguities":[]}'
+        ),
+        (
+            "```json\n"
+            '{"destination":"kubernetes","execution_mode":"direct",'
+            '"operation":"read_only","resource":"service",'
+            '"result_shape":"count","ambiguities":[]}\n'
+            "```"
+        ),
+        (
+            "<think>"
+            '{"destination":"kubernetes","execution_mode":"direct",'
+            '"operation":"read_only","resource":"pod",'
+            '"result_shape":"count","ambiguities":[]}'
+            "</think>\n"
+            '{"destination":"kubernetes","execution_mode":"direct",'
+            '"operation":"read_only","resource":"service",'
+            '"result_shape":"count","ambiguities":[]}'
+        ),
+        [
+            {
+                "type": "text",
+                "text": (
+                    '{"destination":"kubernetes","execution_mode":"direct",'
+                    '"operation":"read_only","resource":"service",'
+                    '"result_shape":"count","ambiguities":[]}'
+                ),
+            }
+        ],
+    ],
+)
+def test_kubernetes_session_accepts_json_intent_from_compatible_model(
+    intent_content: str | list[dict[str, str]],
+) -> None:
+    model = RecordingToolCallingModel(
+        responses=[
+            AIMessage(content=intent_content),
+            kubernetes_tool_response(
+                "services",
+                "tool-1",
+                tool_name="list_kubernetes_services",
+            ),
+            AIMessage(content="sample namespace 中有 4 个 Service"),
+        ]
+    )
+    session = create_ops_agent(
+        model,
+        [create_test_kubernetes_tool("list_kubernetes_services")],
+    ).open_session(
+        InteractionContext(
+            channel=InteractionChannel.TUI,
+            scope=CapabilityScope.KUBERNETES,
+            environment="test",
+            namespace="sample",
+        )
+    )
+
+    events = list(session.stream("sample现在几个服务"))
+
+    assert events[-1].answer == "sample namespace 中有 4 个 Service"
+
+
+@pytest.mark.parametrize(
+    "intent_content",
+    [
+        (
+            '{"wrapper":{"destination":"kubernetes","execution_mode":"direct",'
+            '"operation":"read_only","resource":"service",'
+            '"result_shape":"count","ambiguities":[]}}'
+        ),
+        (
+            '{"destination":"kubernetes","execution_mode":"direct",'
+            '"operation":"read_only","resource":"service",'
+            '"result_shape":"count","ambiguities":[]}'
+            '{"destination":"kubernetes","execution_mode":"direct",'
+            '"operation":"read_only","resource":"pod",'
+            '"result_shape":"count","ambiguities":[]}'
+        ),
+    ],
+)
+def test_kubernetes_session_rejects_wrapped_or_multiple_json_intents(
+    intent_content: str,
+) -> None:
+    model = RecordingToolCallingModel(responses=[AIMessage(content=intent_content)])
+    session = create_ops_agent(
+        model,
+        [create_test_kubernetes_tool("list_kubernetes_services")],
+    ).open_session(
+        InteractionContext(
+            channel=InteractionChannel.TUI,
+            scope=CapabilityScope.KUBERNETES,
+            environment="test",
+            namespace="sample",
+        )
+    )
+
+    answer = session.ask("sample现在几个服务")
+
+    assert answer == "无法安全确定请求所属能力，已拒绝执行。"
+
+
+def test_intent_interpreter_falls_back_when_tool_binding_is_unsupported() -> None:
+    model = JsonOnlyModel(
+        responses=[
+            AIMessage(
+                content=(
+                    '{"destination":"kubernetes","execution_mode":"direct",'
+                    '"operation":"read_only","resource":"service",'
+                    '"result_shape":"count","ambiguities":[]}'
+                )
+            )
+        ]
+    )
+
+    proposal = IntentInterpreter(model).suggest(
+        [],
+        InteractionContext(),
+    )
+
+    assert proposal is not None
+    assert proposal.resource.value == "service"
+
+
 def test_kubernetes_scope_rejects_unregistered_capability() -> None:
     model = RecordingToolCallingModel(
         responses=[
@@ -391,7 +536,6 @@ def test_kubernetes_scope_does_not_accept_requested_scope_override(
 
     assert confirmed_answer == "sample namespace 中有 4 个 Service"
     assert model.bound_tool_names == [
-        ["IntentProposal"],
         ["IntentProposal"],
         ["list_kubernetes_services"],
         ["list_kubernetes_services"],
@@ -508,7 +652,6 @@ def test_referential_follow_up_keeps_previous_capability() -> None:
         ["IntentProposal"],
         ["list_kubernetes_services"],
         ["list_kubernetes_services"],
-        ["IntentProposal"],
         ["list_kubernetes_services"],
         ["list_kubernetes_services"],
     ]

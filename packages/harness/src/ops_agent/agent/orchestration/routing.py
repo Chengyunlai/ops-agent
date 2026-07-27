@@ -1,14 +1,13 @@
 """主图的结构化意图理解和纯代码策略。"""
 
+import json
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
-from langchain.agents import create_agent
-from langchain.agents.structured_output import ToolStrategy
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import AIMessage, SystemMessage
 
 from ops_agent.agent.models import (
     CapabilityId,
@@ -116,6 +115,14 @@ _PLAN_INTENT_PATTERN = re.compile(
 _AFFIRMATIVE_PATTERN = re.compile(
     r"^\s*(?:是|是的|对|对的|没错|确认|可以|yes|y|correct)\s*[。.!！]?\s*$",
     re.IGNORECASE,
+)
+_THINK_PREFIX_PATTERN = re.compile(
+    r"^\s*<think>.*?</think>\s*",
+    re.DOTALL,
+)
+_JSON_FENCE_PATTERN = re.compile(
+    r"^\s*```(?:json)?\s*(?P<body>.*?)\s*```\s*$",
+    re.DOTALL | re.IGNORECASE,
 )
 _SCOPE_REFERENCE_PATTERNS = {
     "namespace": (
@@ -265,16 +272,10 @@ class IntentInterpreter:
     """隐藏结构化模型调用及失败到空建议的转换。"""
 
     def __init__(self, model: BaseChatModel) -> None:
-        self._runner = create_agent(
-            model=model,
-            tools=[],
-            system_prompt=INTERPRETER_PROMPT,
-            response_format=ToolStrategy(
-                IntentProposal,
-                handle_errors=False,
-            ),
-            name="ops_intent_interpreter",
-        )
+        try:
+            self._model = model.bind_tools([IntentProposal])
+        except NotImplementedError:
+            self._model = model
 
     def suggest(
         self,
@@ -282,15 +283,22 @@ class IntentInterpreter:
         context: InteractionContext,
     ) -> IntentProposal | None:
         contextual_messages = [
-            SystemMessage(content=_format_trusted_context(context)),
+            SystemMessage(
+                content=(
+                    f"{INTERPRETER_PROMPT}\n"
+                    f"{_format_trusted_context(context)}\n"
+                    "优先调用 IntentProposal 工具；若 Provider 不支持，"
+                    "只输出符合以下 JSON Schema 的对象，不要使用 Markdown：\n"
+                    f"{json.dumps(IntentProposal.model_json_schema(), ensure_ascii=False)}"
+                )
+            ),
             *messages,
         ]
         try:
-            result = self._runner.invoke({"messages": contextual_messages})
+            response = self._model.invoke(contextual_messages)
         except Exception:  # noqa: BLE001 - 解释失败必须返回空建议
             return None
-        proposal = result.get("structured_response")
-        return proposal if isinstance(proposal, IntentProposal) else None
+        return _intent_proposal_from_response(response)
 
 
 def evaluate_policy(
@@ -484,6 +492,64 @@ def _format_trusted_context(context: InteractionContext) -> str:
         f"environment={context.environment or 'unset'}, "
         f"namespace={context.namespace or 'unset'}。"
     )
+
+
+def _intent_proposal_from_response(
+    response: object,
+) -> IntentProposal | None:
+    if not isinstance(response, AIMessage):
+        return None
+    for tool_call in response.tool_calls:
+        if tool_call.get("name") != "IntentProposal":
+            continue
+        proposal = _validate_intent_proposal(tool_call.get("args"))
+        if proposal is not None:
+            return proposal
+
+    content = _text_content(response.content)
+    if content is None:
+        return None
+    normalized_content = _normalized_json_content(content)
+    if normalized_content is None:
+        return None
+    try:
+        value = json.loads(normalized_content)
+    except json.JSONDecodeError:
+        return None
+    return _validate_intent_proposal(value)
+
+
+def _validate_intent_proposal(value: object) -> IntentProposal | None:
+    try:
+        return IntentProposal.model_validate(value)
+    except TypeError, ValueError:
+        return None
+
+
+def _normalized_json_content(content: str) -> str | None:
+    normalized = content.strip()
+    if normalized.startswith("<think>"):
+        think_prefix = _THINK_PREFIX_PATTERN.match(normalized)
+        if think_prefix is None:
+            return None
+        normalized = normalized[think_prefix.end() :]
+    fenced = _JSON_FENCE_PATTERN.fullmatch(normalized)
+    if fenced is not None:
+        normalized = fenced.group("body")
+    return normalized.strip() or None
+
+
+def _text_content(content: object) -> str | None:
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return None
+    text_blocks = [
+        block.get("text")
+        for block in content
+        if isinstance(block, dict) and isinstance(block.get("text"), str)
+    ]
+    return "\n".join(text_blocks) if text_blocks else None
 
 
 def _contains_write_action(question: str) -> bool:
