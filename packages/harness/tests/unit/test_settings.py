@@ -25,6 +25,7 @@ def test_load_settings_from_toml(tmp_path: Path):
         namespace = "operations"
         kubeconfig_path = "/tmp/ops_agent-kubeconfig"
         request_timeout_seconds = 17
+        proxy_url = "http://127.0.0.1:7897"
 
         [model]
         provider = "openai"
@@ -41,6 +42,7 @@ def test_load_settings_from_toml(tmp_path: Path):
     assert settings.kubernetes.namespace == "operations"
     assert settings.kubernetes.kubeconfig_path == Path("/tmp/ops_agent-kubeconfig")
     assert settings.kubernetes.request_timeout_seconds == 17
+    assert str(settings.kubernetes.proxy_url) == "http://127.0.0.1:7897/"
     assert settings.model.provider == "openai"
     assert settings.model.name == "test-model"
     assert settings.model.base_url == "https://api.deepseek.com"
@@ -235,6 +237,40 @@ def test_load_settings_rejects_invalid_request_timeout(
         SettingsError,
         match="request_timeout_seconds",
     ):
+        load_settings(config_path)
+
+
+@pytest.mark.parametrize(
+    "proxy_url",
+    [
+        '""',
+        '"ftp://127.0.0.1:7897"',
+        '"not-a-url"',
+        "123",
+    ],
+)
+def test_load_settings_rejects_invalid_kubernetes_proxy_url(
+    tmp_path: Path,
+    proxy_url: str,
+) -> None:
+    config_path = tmp_path / "invalid-proxy.toml"
+    config_path.write_text(
+        f"""
+        [kubernetes]
+        environment = "test"
+        namespace = "sample"
+        kubeconfig_path = "/tmp/ops_agent-kubeconfig"
+        request_timeout_seconds = 10
+        proxy_url = {proxy_url}
+
+        [model]
+        provider = "openai"
+        model = "deepseek-v4-pro"
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SettingsError, match="proxy_url"):
         load_settings(config_path)
 
 

@@ -144,14 +144,15 @@ def test_create_kubernetes_reader_uses_settings(monkeypatch) -> None:
     api_client = object()
     core_api = FakeCoreV1Api([])
     apps_api = object()
-    client_calls: list[tuple[str, bool]] = []
+    client_calls: list[tuple[str, bool, object]] = []
 
     def fake_new_client_from_config(
         *,
         config_file: str,
         persist_config: bool,
+        client_configuration: object,
     ) -> object:
-        client_calls.append((config_file, persist_config))
+        client_calls.append((config_file, persist_config, client_configuration))
         return api_client
 
     def fake_core_v1_api(received_api_client: object) -> FakeCoreV1Api:
@@ -182,15 +183,19 @@ def test_create_kubernetes_reader_uses_settings(monkeypatch) -> None:
         namespace="sample",
         kubeconfig_path=Path("/tmp/ops_agent-kubeconfig"),
         request_timeout_seconds=11,
+        proxy_url="http://127.0.0.1:7897",
     )
 
     reader = create_kubernetes_reader(settings)
     pods = reader.list_pods(settings.namespace)
 
     assert pods == []
-    assert client_calls == [
-        ("/tmp/ops_agent-kubeconfig", False),
-    ]
+    assert len(client_calls) == 1
+    assert client_calls[0][:2] == (
+        "/tmp/ops_agent-kubeconfig",
+        False,
+    )
+    assert client_calls[0][2].proxy == "http://127.0.0.1:7897/"
     assert core_api.calls == [("sample", 11)]
 
 
@@ -201,6 +206,7 @@ def test_create_kubernetes_reader_reports_invalid_kubeconfig(
         *,
         config_file: str,
         persist_config: bool,
+        client_configuration: object,
     ) -> object:
         raise ConfigException("Invalid kube-config file")
 

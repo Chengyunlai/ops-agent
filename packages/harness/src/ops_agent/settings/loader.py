@@ -65,5 +65,8 @@ def _format_validation_issue(issue: dict[str, object]) -> str:
         "int_type": "配置项必须是正整数",
         "string_too_short": "配置项必须是非空字符串",
         "string_type": "配置项必须是字符串",
+        "url_parsing": "配置项必须是有效的 HTTP(S) URL",
+        "url_scheme": "配置项必须是 HTTP(S) URL",
+        "url_type": "配置项必须是 HTTP(S) URL 字符串",
     }.get(issue_type, "配置项无效")
     return f"[{section}] {issue_message}: {field_name}"

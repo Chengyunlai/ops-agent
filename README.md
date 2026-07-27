@@ -105,14 +105,16 @@ export DEEPSEEK_API_KEY="..."
 | `namespace` | string | Agent 默认访问的 Kubernetes 命名空间 |
 | `kubeconfig_path` | string | kubeconfig 路径，推荐使用绝对路径 |
 | `request_timeout_seconds` | integer | Kubernetes API 请求超时时间（秒） |
+| `proxy_url` | HTTP(S) URL | 可选；访问 Kubernetes API 使用的代理，例如 `http://127.0.0.1:7897` |
 | `model.provider` | string | LangChain 模型适配器；DeepSeek 兼容接口使用 `openai` |
 | `model.model` | string | 供应商提供的、支持工具调用的模型名称 |
 | `model.base_url` | string | 可选的模型接口地址 |
 | `model.api_key_env` | string | 保存 API Key 的环境变量名称 |
 
 当前加载器校验配置文件、TOML 格式、`[kubernetes]` / `[model]`
-区块、字段类型和正整数超时；kubeconfig 是否存在由创建 Kubernetes
-Client 时检查。
+区块、字段类型、正整数超时和可选代理 URL；kubeconfig 是否存在由创建
+Kubernetes Client 时检查。`proxy_url` 由配置模型校验并在 Kubernetes
+Client 创建前注入，因此不依赖启动 Shell 是否继承 macOS 系统代理。
 
 当前可通过 Python API 加载配置：
 

@@ -4,7 +4,13 @@ from datetime import date, datetime
 from typing import TypeVar
 
 from kubernetes import config
-from kubernetes.client import AppsV1Api, BatchV1Api, CoreV1Api, NetworkingV1Api
+from kubernetes.client import (
+    AppsV1Api,
+    BatchV1Api,
+    Configuration,
+    CoreV1Api,
+    NetworkingV1Api,
+)
 from kubernetes.client.exceptions import ApiException
 from kubernetes.config.config_exception import ConfigException
 from urllib3.exceptions import HTTPError
@@ -379,10 +385,14 @@ class KubernetesReader:
 def create_kubernetes_reader(
     settings: KubernetesSettings,
 ) -> KubernetesReader:
+    client_configuration = Configuration()
+    if settings.proxy_url is not None:
+        client_configuration.proxy = str(settings.proxy_url)
     try:
         api_client = config.new_client_from_config(
             config_file=str(settings.kubeconfig_path),
             persist_config=False,
+            client_configuration=client_configuration,
         )
     except ConfigException as error:
         raise KubernetesError(

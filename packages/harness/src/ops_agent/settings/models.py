@@ -6,6 +6,7 @@ from pydantic import (
     BeforeValidator,
     ConfigDict,
     Field,
+    HttpUrl,
     StrictInt,
     StrictStr,
 )
@@ -50,6 +51,10 @@ class KubernetesSettings(_ConfigModel):
     kubeconfig_path: _ConfigPath = Field(description="kubeconfig 文件路径")
     request_timeout_seconds: _PositiveInteger = Field(
         description="Kubernetes 请求超时秒数"
+    )
+    proxy_url: HttpUrl | None = Field(
+        default=None,
+        description="可选的 Kubernetes API HTTP(S) 代理地址",
     )
 
 
