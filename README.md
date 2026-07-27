@@ -28,7 +28,7 @@
 | 审批与处置执行 | 规划中 | 执行扩缩容、重启、回滚等受控动作 |
 | LLM / Agent 编排 | 基础已完成 | 受控主图负责范围路由和诊断计划，Kubernetes 子图负责只读诊断 |
 | CLI 自然语言入口 | 已完成 | 使用 `ops_agent ask` 查询真实集群状态 |
-| 交互式终端 | 基础已完成 | 使用 `ops_agent tui` 启动只读诊断 TUI |
+| 交互式终端 | 基础已完成 | TUI 提供可信 Kubernetes 上下文、多轮会话和受控进度事件 |
 | 审计与可观测性 | 规划中 | 结构化日志、Tracing、指标和操作审计 |
 
 ## 技术栈
@@ -163,9 +163,14 @@ uv run ops_agent \
   tui
 ```
 
-TUI 显示当前环境、固定 namespace 和只读标识。输入问题并按 Enter 后，
-Agent 在后台执行诊断，终端界面不会被同步模型调用阻塞；原有
-`ops_agent ask` 非交互入口保持不变。
+TUI 显示当前环境、固定 namespace 和只读标识，并将这些可信信息作为
+`InteractionContext` 传给主图。因此可以使用“现在几个服务”这类上下文简称，
+无需反复声明 Kubernetes 和 namespace。输入问题并按 Enter 后，界面会显示
+意图理解、策略校验、证据查询和回答完成等稳定进度；Conversation Session
+保留本次 TUI 运行期间的历史消息，并把相关历史传给 Planner 和专业 Agent，
+所以澄清确认与指代式追问不会在执行阶段丢失上下文。澄清节点还会保存代码
+选出的候选 Capability；下一轮“是”不会让模型把 Service 偷换成 Pod。原有
+`ops_agent ask` 非交互入口保持不变，并继续采用保守的自动 scope。
 
 ### 6. 开发命令
 
@@ -194,6 +199,7 @@ uv run pytest
 
 ```text
 ops_agent/
+├── CONTEXT.md
 ├── Makefile
 ├── config/
 │   ├── examples/                  # 可提交的配置模板
@@ -230,6 +236,7 @@ ops_agent/
 │       │       ├── agent/
 │       │       │   ├── __init__.py
 │       │       │   ├── application.py
+│       │       │   ├── models.py
 │       │       │   ├── orchestration/
 │       │       │   │   ├── __init__.py
 │       │       │   │   ├── graph.py
@@ -284,25 +291,36 @@ Kubernetes 相关代码采用三层边界：
 
 `apps/cli/bootstrap.py` 是终端应用的组合根，负责读取进程环境并选择具体的
 模型、Reader、Tool 和 Agent 适配器。`main.py` 保留脚本化命令，`tui/`
-只管理 Textual 的界面状态、键盘交互和后台任务；两种交互方式都通过
-`OpsAgent` 使用核心能力，不依赖内部图结构。以后增加 API 或其他应用入口时，
-各应用拥有自己的组合根，harness 不依赖任何具体入口。
+只管理 Textual 的界面状态、键盘交互和后台任务。TUI 打开带固定
+`InteractionContext` 的 `ConversationSession`，并消费稳定的 `AgentEvent`，
+不依赖 LangGraph 节点名。以后增加 API 或其他应用入口时，各应用拥有自己的
+组合根，harness 不依赖任何具体入口。
 
-`agent/` 是 Agent 编排模块，`__init__.py` 只公开 `ApplicationError`、
-`OpsAgent` 和 `create_ops_agent()`。`application.py` 通过 `OpsAgent.ask()`
-隐藏 LangGraph 消息结构、调用方式、响应解析和运行错误转换；CLI 不依赖
-模块内部的图、路由、计划或专业 Agent 实现。
+`agent/` 是 Agent 编排模块。`models.py` 定义应用可以依赖的冻结 Pydantic
+契约：可信 Interaction Context、不可信 Intent Proposal、可信 Policy
+Decision、注册 Capability 和稳定 Agent Event。`application.py` 通过
+`OpsAgent` 与 `ConversationSession` 隐藏 LangGraph 调用、历史消息、事件映射、
+响应解析和错误转换；CLI 不依赖模块内部的图、路由、计划或专业 Agent 实现。
 
-`agent/orchestration/` 负责跨专业 Agent 的主图编排和全局路由策略。
-`graph.py` 定义受控 State、Node 与 Edge，`routing.py` 使用冻结的 Pydantic
-模型约束模型只能提出已知范围、执行模式和读写类型。模型的分类结果是不可信
-输入；纯代码策略还会核对原始问题中的 Kubernetes allowlist、明确的只读查询
-意图、未接入平台/指标类型和写操作。未知请求默认拒绝，因此主图没有自由回答
-用户的兜底路径。当前策略较保守，Kubernetes 请求需要明确包含 Kubernetes/K8s
-或 Pod、Deployment、Namespace 等低歧义资源名称；CPU、内存、QPS 等未接入
-实时指标不会交给子 Agent 猜测。自然语言 allowlist 用于保守分流，不作为权限
-授权依据；真正的硬约束仍是子图只持有固定 namespace 的只读工具，并且没有
-成功工具证据就不输出实时结论。
+`agent/orchestration/` 负责跨专业 Agent 的主图编排和全局策略。
+`graph.py` 定义 State、Node 与 Edge；`routing.py` 让模型只提出结构化
+Intent Proposal，再由纯代码 Policy 校验应用 scope、已注册只读 Capability、
+未接入平台和写操作。模型不能授予能力或改变 environment/namespace。
+原始文本中明确出现 Service、Pod 等资源时，代码还会用它锁定资源
+Capability；模型结构化输出中的 resource 不能把 Service 偷换成 Pod。
+Capability Registry 由组合根实际传入的 Kubernetes 工具派生，而不是根据
+Prompt 声称的能力生成；没有完整对应工具的资源查询不会进入专业 Agent。
+直接执行时，主图只向子 Agent 暴露 Policy Decision 选中的 Capability 所绑定
+的工具，其他已注册工具也不可见，因此 Service 回答不能用 Pod 证据冒充；
+只有原始请求本身也包含根因、分析或失败等复杂诊断语义时，才允许进入
+多阶段计划，并且必须获得包含全部所需只读工具的完整诊断 Capability。
+自动 scope 下，没有明确 Kubernetes 语义的普通请求仍会拒绝；“服务”等有合理
+多义性的表达会先澄清。TUI 的 Kubernetes scope 来自应用配置，因此可以安全
+理解上下文简称；代码仍要求诊断/查询语义，并阻止用户文本切换固定的
+environment 或 namespace。真正的硬约束仍是子图只持有固定 namespace 的
+只读工具，并且没有与所选 Capability 匹配的成功工具证据就不输出实时结论。
+Interaction Context 保持在类型化图状态和 Policy 中，不会被拼接成专业 Agent
+收到的普通用户请求。
 
 `agent/specialists/` 按专业能力隔离子 Agent，避免其工具、提示词和专属执行
 协议散落在主图中。当前 `specialists/kubernetes/agent.py` 隐藏 Kubernetes
@@ -313,25 +331,24 @@ Kubernetes 只读诊断计划。步骤只能从工作负载健康、补充证据
 输出实时诊断结论。
 
 ```text
-CLI ──► OpsAgent.ask()
-             │
-             ▼
-       结构化请求分类（不可信）
-             │
-             ▼
-       纯代码范围与读写策略
-        ┌────┼──────────────┐
-        │    │              │
-      越界  未接入       Kubernetes
-        │    │          ┌───┴────┐
-      固定拒绝         直接执行  诊断计划
-                          │       │
-                          └───┬───┘
-                              ▼
-                      Kubernetes 子图
-                              │
-                              ▼
-                      只读工具与证据校验
+CLI / TUI ──► Interaction Context（可信）
+                    │
+                    ▼
+              Intent Proposal（不可信）
+                    │
+                    ▼
+              Policy Decision（代码）
+           ┌────────┼───────────┐
+           │        │           │
+         澄清      拒绝       已注册 Capability
+                                ┌┴─────────┐
+                              直接执行   诊断计划
+                                └────┬─────┘
+                                     ▼
+                             Kubernetes 专业子图
+                                     │
+                                     ▼
+                              工具证据校验与回答
 ```
 
 新增指标或日志等第二个真实专业 Agent 时，在 `agent/specialists/` 增加独立

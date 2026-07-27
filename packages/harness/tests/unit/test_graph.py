@@ -4,12 +4,40 @@ from langchain_core.language_models.fake_chat_models import (
 )
 from langchain_core.messages import AIMessage
 from langchain_core.tools import BaseTool, StructuredTool
-from ops_agent.agent import create_ops_agent
+from ops_agent.agent import (
+    AgentStage,
+    CapabilityScope,
+    InteractionChannel,
+    InteractionContext,
+    create_ops_agent,
+)
 from pydantic import Field
 
 
 class RecordingToolCallingModel(FakeMessagesListChatModel):
     bound_tool_names: list[list[str]] = Field(default_factory=list)
+    received_message_contents: list[list[str]] = Field(default_factory=list)
+
+    def _generate(
+        self,
+        messages,
+        stop=None,
+        run_manager=None,
+        **kwargs,
+    ):
+        self.received_message_contents.append(
+            [
+                message.content
+                for message in messages
+                if isinstance(message.content, str)
+            ]
+        )
+        return super()._generate(
+            messages,
+            stop=stop,
+            run_manager=run_manager,
+            **kwargs,
+        )
 
     def bind_tools(
         self,
@@ -32,18 +60,24 @@ def route_response(
     destination: str = "kubernetes",
     execution_mode: str = "direct",
     operation: str = "read_only",
+    resource: str = "kubernetes",
+    result_shape: str = "diagnosis",
+    ambiguities: tuple[str, ...] = (),
 ) -> AIMessage:
     return AIMessage(
         content="",
         tool_calls=[
             {
-                "name": "RouteDecision",
+                "name": "IntentProposal",
                 "args": {
                     "destination": destination,
                     "execution_mode": execution_mode,
                     "operation": operation,
+                    "resource": resource,
+                    "result_shape": result_shape,
+                    "ambiguities": list(ambiguities),
                 },
-                "id": "route-1",
+                "id": "proposal-1",
                 "type": "tool_call",
             }
         ],
@@ -66,12 +100,17 @@ def plan_response(*objectives: str) -> AIMessage:
     )
 
 
-def kubernetes_tool_response(resource: str, call_id: str) -> AIMessage:
+def kubernetes_tool_response(
+    resource: str,
+    call_id: str,
+    *,
+    tool_name: str = "diagnose_kubernetes_workloads",
+) -> AIMessage:
     return AIMessage(
         content="",
         tool_calls=[
             {
-                "name": "inspect_kubernetes",
+                "name": tool_name,
                 "args": {"resource": resource},
                 "id": call_id,
                 "type": "tool_call",
@@ -80,12 +119,36 @@ def kubernetes_tool_response(resource: str, call_id: str) -> AIMessage:
     )
 
 
-def create_test_kubernetes_tool() -> BaseTool:
+def create_test_kubernetes_tool(
+    name: str = "diagnose_kubernetes_workloads",
+) -> BaseTool:
     return StructuredTool.from_function(
         lambda resource: f"{resource}: evidence",
-        name="inspect_kubernetes",
+        name=name,
         description="读取 Kubernetes 诊断证据",
     )
+
+
+def create_test_kubernetes_tools() -> list[BaseTool]:
+    return [
+        create_test_kubernetes_tool(name)
+        for name in (
+            "diagnose_kubernetes_workloads",
+            "get_kubernetes_pod_details",
+            "get_kubernetes_pod_logs",
+            "list_kubernetes_deployments",
+            "list_kubernetes_events",
+            "list_kubernetes_pods",
+            "list_kubernetes_services",
+        )
+    ]
+
+
+def create_test_pod_tools() -> list[BaseTool]:
+    return [
+        create_test_kubernetes_tool("get_kubernetes_pod_details"),
+        create_test_kubernetes_tool("list_kubernetes_pods"),
+    ]
 
 
 @pytest.mark.parametrize(
@@ -104,7 +167,7 @@ def test_out_of_scope_request_is_rejected_when_model_claims_kubernetes(
     answer = create_ops_agent(model, []).ask(question)
 
     assert answer == "当前系统只处理 Kubernetes 运维与诊断问题。"
-    assert model.bound_tool_names == [["RouteDecision"]]
+    assert model.bound_tool_names == [["IntentProposal"]]
 
 
 @pytest.mark.parametrize(
@@ -124,7 +187,7 @@ def test_unsupported_capability_is_rejected_when_model_claims_kubernetes(
     assert answer == (
         "这是运维问题，但当前尚未接入对应的专业诊断能力，因此无法获取或推测实时状态。"
     )
-    assert model.bound_tool_names == [["RouteDecision"]]
+    assert model.bound_tool_names == [["IntentProposal"]]
 
 
 def test_invalid_route_defaults_to_rejection() -> None:
@@ -139,22 +202,465 @@ def test_kubernetes_request_is_executed_by_specialist_with_evidence() -> None:
     model = RecordingToolCallingModel(
         responses=[
             route_response(),
-            kubernetes_tool_response("pods", "tool-1"),
+            kubernetes_tool_response(
+                "pods",
+                "tool-1",
+                tool_name="list_kubernetes_pods",
+            ),
             AIMessage(content="3 个 Pod 均为 Running"),
         ]
     )
 
     answer = create_ops_agent(
         model,
-        [create_test_kubernetes_tool()],
+        create_test_pod_tools(),
     ).ask("检查所有 Pod 和重启次数")
 
     assert answer == "3 个 Pod 均为 Running"
     assert model.bound_tool_names == [
-        ["RouteDecision"],
-        ["inspect_kubernetes"],
-        ["inspect_kubernetes"],
+        ["IntentProposal"],
+        ["get_kubernetes_pod_details", "list_kubernetes_pods"],
+        ["get_kubernetes_pod_details", "list_kubernetes_pods"],
     ]
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "sample现在几个服务",
+        "sample namespace 现在几个服务",
+        "services in namespace sample 现在有几个",
+    ],
+)
+def test_kubernetes_scoped_session_understands_contextual_service_count(
+    question: str,
+) -> None:
+    model = RecordingToolCallingModel(
+        responses=[
+            route_response(resource="pod", result_shape="count"),
+            kubernetes_tool_response(
+                "services",
+                "tool-1",
+                tool_name="list_kubernetes_services",
+            ),
+            AIMessage(content="sample namespace 中有 4 个 Service"),
+        ]
+    )
+    session = create_ops_agent(
+        model,
+        [
+            create_test_kubernetes_tool("list_kubernetes_services"),
+            create_test_kubernetes_tool(),
+        ],
+    ).open_session(
+        InteractionContext(
+            channel=InteractionChannel.TUI,
+            scope=CapabilityScope.KUBERNETES,
+            environment="test",
+            namespace="sample",
+        )
+    )
+
+    events = list(session.stream(question))
+
+    assert [event.stage for event in events] == [
+        AgentStage.UNDERSTANDING,
+        AgentStage.INTENT_INTERPRETED,
+        AgentStage.POLICY_VALIDATED,
+        AgentStage.QUERYING,
+        AgentStage.EVIDENCE_VALIDATED,
+        AgentStage.COMPLETED,
+    ]
+    assert events[-1].answer == "sample namespace 中有 4 个 Service"
+    assert model.bound_tool_names == [
+        ["IntentProposal"],
+        ["list_kubernetes_services"],
+        ["list_kubernetes_services"],
+    ]
+    assert not any(
+        "可信执行上下文" in content for content in model.received_message_contents[-1]
+    )
+
+
+def test_kubernetes_scope_rejects_unregistered_capability() -> None:
+    model = RecordingToolCallingModel(
+        responses=[
+            route_response(resource="pod", result_shape="count"),
+        ]
+    )
+    session = create_ops_agent(
+        model,
+        [create_test_kubernetes_tool("list_kubernetes_pods")],
+    ).open_session(
+        InteractionContext(
+            channel=InteractionChannel.TUI,
+            scope=CapabilityScope.KUBERNETES,
+            environment="test",
+            namespace="sample",
+        )
+    )
+
+    answer = session.ask("现在有几个服务")
+
+    assert answer == (
+        "这是运维问题，但当前尚未接入对应的专业诊断能力，因此无法获取或推测实时状态。"
+    )
+    assert model.bound_tool_names == [["IntentProposal"]]
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "今天北京天气怎么样？",
+        "帮我发布一篇新闻",
+        "介绍 Node.js service",
+        "讲个笑话",
+        "你有几个朋友？",
+    ],
+)
+def test_kubernetes_scope_rejects_clear_non_operations_requests(
+    question: str,
+) -> None:
+    model = RecordingToolCallingModel(
+        responses=[
+            route_response(resource="service"),
+        ]
+    )
+    session = create_ops_agent(
+        model,
+        [create_test_kubernetes_tool("list_kubernetes_services")],
+    ).open_session(
+        InteractionContext(
+            channel=InteractionChannel.TUI,
+            scope=CapabilityScope.KUBERNETES,
+            environment="test",
+            namespace="sample",
+        )
+    )
+
+    answer = session.ask(question)
+
+    assert answer == "当前系统只处理 Kubernetes 运维与诊断问题。"
+    assert model.bound_tool_names == [["IntentProposal"]]
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "prod namespace 现在几个服务",
+        "namespace prod 现在几个服务",
+        "生产环境现在几个服务",
+    ],
+)
+def test_kubernetes_scope_does_not_accept_requested_scope_override(
+    question: str,
+) -> None:
+    model = RecordingToolCallingModel(
+        responses=[
+            route_response(resource="pod", result_shape="count"),
+            route_response(resource="pod", result_shape="count"),
+            kubernetes_tool_response(
+                "services",
+                "tool-1",
+                tool_name="list_kubernetes_services",
+            ),
+            AIMessage(content="sample namespace 中有 4 个 Service"),
+        ]
+    )
+    session = create_ops_agent(
+        model,
+        [create_test_kubernetes_tool("list_kubernetes_services")],
+    ).open_session(
+        InteractionContext(
+            channel=InteractionChannel.TUI,
+            scope=CapabilityScope.KUBERNETES,
+            environment="test",
+            namespace="sample",
+        )
+    )
+
+    answer = session.ask(question)
+
+    assert answer == (
+        "当前会话固定为环境 test、namespace sample，不能切换到请求中的其他 scope。"
+        "你是否要继续查询当前固定 scope？"
+    )
+    assert model.bound_tool_names == [["IntentProposal"]]
+
+    confirmed_answer = session.ask("是")
+
+    assert confirmed_answer == "sample namespace 中有 4 个 Service"
+    assert model.bound_tool_names == [
+        ["IntentProposal"],
+        ["IntentProposal"],
+        ["list_kubernetes_services"],
+        ["list_kubernetes_services"],
+    ]
+
+
+def test_kubernetes_scope_accepts_matching_chinese_environment() -> None:
+    model = RecordingToolCallingModel(
+        responses=[
+            route_response(resource="service", result_shape="detail"),
+            kubernetes_tool_response(
+                "services",
+                "tool-1",
+                tool_name="list_kubernetes_services",
+            ),
+            AIMessage(content="生产环境的 Service 均正常"),
+        ]
+    )
+    session = create_ops_agent(
+        model,
+        [create_test_kubernetes_tool("list_kubernetes_services")],
+    ).open_session(
+        InteractionContext(
+            channel=InteractionChannel.TUI,
+            scope=CapabilityScope.KUBERNETES,
+            environment="生产",
+            namespace="sample",
+        )
+    )
+
+    answer = session.ask("查看生产环境的服务")
+
+    assert answer == "生产环境的 Service 均正常"
+
+
+def test_auto_scope_clarifies_ambiguous_service_language() -> None:
+    model = RecordingToolCallingModel(
+        responses=[
+            route_response(resource="pod", result_shape="count"),
+        ]
+    )
+
+    answer = create_ops_agent(model, []).ask("现在有几个服务")
+
+    assert answer == "你指的是 Kubernetes Service 吗？"
+
+
+def test_auto_scope_accepts_confirmation_with_conversation_history() -> None:
+    model = RecordingToolCallingModel(
+        responses=[
+            route_response(resource="pod", result_shape="count"),
+            route_response(resource="pod", result_shape="count"),
+            kubernetes_tool_response(
+                "services",
+                "tool-1",
+                tool_name="list_kubernetes_services",
+            ),
+            AIMessage(content="当前有 4 个 Kubernetes Service"),
+        ]
+    )
+    session = create_ops_agent(
+        model,
+        [create_test_kubernetes_tool("list_kubernetes_services")],
+    ).open_session(InteractionContext())
+
+    clarification = session.ask("现在有几个服务")
+    answer = session.ask("是")
+
+    assert clarification == "你指的是 Kubernetes Service 吗？"
+    assert answer == "当前有 4 个 Kubernetes Service"
+    specialist_request = model.received_message_contents[-1][1]
+    assert "用户：现在有几个服务" in specialist_request
+    assert "助手：你指的是 Kubernetes Service 吗？" in specialist_request
+    assert "当前用户请求：是" in specialist_request
+    assert "可信执行上下文" not in specialist_request
+
+
+def test_referential_follow_up_keeps_previous_capability() -> None:
+    model = RecordingToolCallingModel(
+        responses=[
+            route_response(resource="service", result_shape="count"),
+            kubernetes_tool_response(
+                "services",
+                "tool-1",
+                tool_name="list_kubernetes_services",
+            ),
+            AIMessage(content="当前有 4 个 Kubernetes Service"),
+            route_response(resource="pod", result_shape="diagnosis"),
+            kubernetes_tool_response(
+                "services",
+                "tool-2",
+                tool_name="list_kubernetes_services",
+            ),
+            AIMessage(content="其中 sample-api Service 需要检查"),
+        ]
+    )
+    session = create_ops_agent(
+        model,
+        [create_test_kubernetes_tool("list_kubernetes_services")],
+    ).open_session(
+        InteractionContext(
+            channel=InteractionChannel.TUI,
+            scope=CapabilityScope.KUBERNETES,
+            environment="test",
+            namespace="sample",
+        )
+    )
+
+    session.ask("现在有几个服务")
+    answer = session.ask("哪个有问题？")
+
+    assert answer == "其中 sample-api Service 需要检查"
+    assert model.bound_tool_names == [
+        ["IntentProposal"],
+        ["list_kubernetes_services"],
+        ["list_kubernetes_services"],
+        ["IntentProposal"],
+        ["list_kubernetes_services"],
+        ["list_kubernetes_services"],
+    ]
+
+
+def test_auto_scope_referential_follow_up_uses_previous_capability() -> None:
+    model = RecordingToolCallingModel(
+        responses=[
+            route_response(resource="service", result_shape="detail"),
+            kubernetes_tool_response(
+                "services",
+                "tool-1",
+                tool_name="list_kubernetes_services",
+            ),
+            AIMessage(content="Kubernetes Service 状态已获取"),
+            route_response(resource="pod", result_shape="diagnosis"),
+            kubernetes_tool_response(
+                "services",
+                "tool-2",
+                tool_name="list_kubernetes_services",
+            ),
+            AIMessage(content="sample-api Service 需要检查"),
+        ]
+    )
+    session = create_ops_agent(
+        model,
+        [create_test_kubernetes_tool("list_kubernetes_services")],
+    ).open_session(InteractionContext())
+
+    session.ask("查看 Kubernetes Service 状态")
+    answer = session.ask("哪个有问题？")
+
+    assert answer == "sample-api Service 需要检查"
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Kubernetes 现在有几个 Service",
+        "查看 Kubernetes Service",
+    ],
+)
+def test_simple_service_request_cannot_expand_to_plan_capability(
+    question: str,
+) -> None:
+    model = RecordingToolCallingModel(
+        responses=[
+            route_response(
+                execution_mode="plan",
+                resource="service",
+                result_shape="diagnosis",
+            ),
+            kubernetes_tool_response(
+                "services",
+                "tool-1",
+                tool_name="list_kubernetes_services",
+            ),
+            AIMessage(content="当前有 4 个 Kubernetes Service"),
+        ]
+    )
+
+    answer = create_ops_agent(
+        model,
+        create_test_kubernetes_tools(),
+    ).ask(question)
+
+    assert answer == "当前有 4 个 Kubernetes Service"
+    assert model.bound_tool_names == [
+        ["IntentProposal"],
+        ["list_kubernetes_services"],
+        ["list_kubernetes_services"],
+    ]
+
+
+def test_diagnostic_follow_up_reuses_complete_diagnostic_capability() -> None:
+    model = RecordingToolCallingModel(
+        responses=[
+            route_response(execution_mode="plan"),
+            plan_response("workload_health"),
+            kubernetes_tool_response("workloads", "tool-1"),
+            AIMessage(content="发现一个异常工作负载"),
+            route_response(resource="pod", result_shape="diagnosis"),
+            kubernetes_tool_response("workloads", "tool-2"),
+            AIMessage(content="checkout Deployment 有问题"),
+        ]
+    )
+    session = create_ops_agent(
+        model,
+        create_test_kubernetes_tools(),
+    ).open_session(
+        InteractionContext(
+            channel=InteractionChannel.TUI,
+            scope=CapabilityScope.KUBERNETES,
+            environment="test",
+            namespace="sample",
+        )
+    )
+
+    session.ask("完整分析 Kubernetes 工作负载异常")
+    answer = session.ask("哪个有问题？")
+
+    assert answer == "checkout Deployment 有问题"
+    diagnostic_tool_names = [tool.name for tool in create_test_kubernetes_tools()]
+    assert model.bound_tool_names[-2:] == [
+        diagnostic_tool_names,
+        diagnostic_tool_names,
+    ]
+
+
+def test_kubernetes_scope_clarifies_unknown_resource() -> None:
+    model = RecordingToolCallingModel(
+        responses=[
+            route_response(resource="unknown", result_shape="unknown"),
+        ]
+    )
+    session = create_ops_agent(model, []).open_session(
+        InteractionContext(
+            channel=InteractionChannel.TUI,
+            scope=CapabilityScope.KUBERNETES,
+            environment="test",
+            namespace="sample",
+        )
+    )
+
+    answer = session.ask("帮我看看现在怎么样")
+
+    assert answer == (
+        "当前环境是 test，namespace 是 sample。"
+        "你想查询 Pod、Deployment、Service、Event 还是日志？"
+    )
+
+
+def test_kubernetes_scope_still_rejects_write_request() -> None:
+    model = RecordingToolCallingModel(
+        responses=[
+            route_response(resource="service", result_shape="detail"),
+        ]
+    )
+    session = create_ops_agent(model, []).open_session(
+        InteractionContext(
+            channel=InteractionChannel.TUI,
+            scope=CapabilityScope.KUBERNETES,
+            environment="test",
+            namespace="sample",
+        )
+    )
+
+    answer = session.ask("删除这个服务")
+
+    assert answer == (
+        "这是运维问题，但当前尚未接入对应的专业诊断能力，因此无法获取或推测实时状态。"
+    )
 
 
 def test_kubernetes_answer_without_tool_evidence_is_rejected() -> None:
@@ -167,7 +673,7 @@ def test_kubernetes_answer_without_tool_evidence_is_rejected() -> None:
 
     answer = create_ops_agent(
         model,
-        [create_test_kubernetes_tool()],
+        create_test_pod_tools(),
     ).ask("检查所有 Pod")
 
     assert answer == "没有获取到 Kubernetes 实时证据，无法给出当前状态结论。"
@@ -195,7 +701,7 @@ def test_write_request_is_rejected_when_model_claims_read_only(
     assert answer == (
         "这是运维问题，但当前尚未接入对应的专业诊断能力，因此无法获取或推测实时状态。"
     )
-    assert model.bound_tool_names == [["RouteDecision"]]
+    assert model.bound_tool_names == [["IntentProposal"]]
 
 
 @pytest.mark.parametrize(
@@ -212,14 +718,18 @@ def test_restart_history_question_is_treated_as_read_only(
     model = RecordingToolCallingModel(
         responses=[
             route_response(),
-            kubernetes_tool_response("pods", "tool-1"),
+            kubernetes_tool_response(
+                "pods",
+                "tool-1",
+                tool_name="list_kubernetes_pods",
+            ),
             AIMessage(content="Pod 曾经重启 1 次"),
         ]
     )
 
     answer = create_ops_agent(
         model,
-        [create_test_kubernetes_tool()],
+        create_test_pod_tools(),
     ).ask(question)
 
     assert answer == "Pod 曾经重启 1 次"
@@ -239,7 +749,7 @@ def test_complex_kubernetes_request_executes_validated_plan() -> None:
 
     answer = create_ops_agent(
         model,
-        [create_test_kubernetes_tool()],
+        create_test_kubernetes_tools(),
     ).ask("分析 Kubernetes checkout Deployment 发布失败的完整原因")
 
     assert answer == (
@@ -247,6 +757,15 @@ def test_complex_kubernetes_request_executes_validated_plan() -> None:
         "1. 收集相关工作负载健康状态：checkout Deployment 就绪副本不足\n"
         "2. 根据已有异常补充事件和日志证据：事件显示 Pod 调度失败"
     )
+    diagnostic_tool_names = [tool.name for tool in create_test_kubernetes_tools()]
+    assert model.bound_tool_names == [
+        ["IntentProposal"],
+        ["ExecutionPlan"],
+        diagnostic_tool_names,
+        diagnostic_tool_names,
+        diagnostic_tool_names,
+        diagnostic_tool_names,
+    ]
 
 
 def test_plan_with_free_form_tool_instruction_is_rejected() -> None:
@@ -257,10 +776,13 @@ def test_plan_with_free_form_tool_instruction_is_rejected() -> None:
         ]
     )
 
-    answer = create_ops_agent(model, []).ask("完整分析 Kubernetes 发布失败原因")
+    answer = create_ops_agent(
+        model,
+        create_test_kubernetes_tools(),
+    ).ask("完整分析 Kubernetes 发布失败原因")
 
     assert answer == "无法生成满足当前只读能力约束的诊断计划。"
-    assert model.bound_tool_names == [["RouteDecision"], ["ExecutionPlan"]]
+    assert model.bound_tool_names == [["IntentProposal"], ["ExecutionPlan"]]
 
 
 def test_plan_that_analyzes_root_cause_before_evidence_is_rejected() -> None:
@@ -271,6 +793,9 @@ def test_plan_that_analyzes_root_cause_before_evidence_is_rejected() -> None:
         ]
     )
 
-    answer = create_ops_agent(model, []).ask("完整分析 Kubernetes 发布失败原因")
+    answer = create_ops_agent(
+        model,
+        create_test_kubernetes_tools(),
+    ).ask("完整分析 Kubernetes 发布失败原因")
 
     assert answer == "无法生成满足当前只读能力约束的诊断计划。"

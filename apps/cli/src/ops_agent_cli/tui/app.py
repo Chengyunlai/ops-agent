@@ -1,14 +1,16 @@
 import asyncio
+from collections.abc import Iterator
 from typing import ClassVar, Protocol
 
+from ops_agent.agent import AgentEvent, AgentStage, ApplicationError
 from textual import on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.widgets import Footer, Input, Static
 
 
-class QuestionAnswerer(Protocol):
-    def ask(self, question: str) -> str: ...
+class Conversation(Protocol):
+    def stream(self, question: str) -> Iterator[AgentEvent]: ...
 
 
 class OpsAgentTui(App[None]):
@@ -77,12 +79,12 @@ class OpsAgentTui(App[None]):
     def __init__(
         self,
         *,
-        agent: QuestionAnswerer,
+        conversation: Conversation,
         environment: str,
         namespace: str,
     ) -> None:
         super().__init__()
-        self._agent = agent
+        self._conversation = conversation
         self._environment = environment
         self._namespace = namespace
         self._busy = False
@@ -122,11 +124,19 @@ class OpsAgentTui(App[None]):
     @work(exclusive=True, exit_on_error=False)
     async def _ask_agent(self, question: str) -> None:
         try:
-            answer = await asyncio.to_thread(self._agent.ask, question)
+            events = iter(self._conversation.stream(question))
+            while True:
+                event = await asyncio.to_thread(_next_event, events)
+                if event is None:
+                    raise ApplicationError("Agent 事件流未返回最终回答")
+                if event.stage is AgentStage.COMPLETED:
+                    if event.answer is None:
+                        raise ApplicationError("Agent 完成事件缺少回答")
+                    self._finish_with_answer(event.answer)
+                    return
+                self.query_one("#status", Static).update(event.message)
         except Exception as error:  # noqa: BLE001 - TUI 必须恢复应用边界异常
             self._finish_with_error(str(error))
-            return
-        self._finish_with_answer(answer)
 
     def _finish_with_answer(self, answer: str) -> None:
         self.query_one("#result", Static).update(answer)
@@ -153,3 +163,10 @@ class OpsAgentTui(App[None]):
 
     def action_focus_question(self) -> None:
         self.query_one("#question", Input).focus()
+
+
+def _next_event(events: Iterator[AgentEvent]) -> AgentEvent | None:
+    try:
+        return next(events)
+    except StopIteration:
+        return None
