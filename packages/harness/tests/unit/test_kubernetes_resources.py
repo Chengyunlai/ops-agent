@@ -3,12 +3,20 @@ from types import SimpleNamespace
 
 from ops_agent.kubernetes import (
     ContainerSummary,
+    CronJobSummary,
+    DaemonSetSummary,
     DeploymentSummary,
+    IngressSummary,
+    JobSummary,
     KubernetesEventSummary,
     KubernetesReader,
+    KubernetesResourceKind,
+    PersistentVolumeClaimSummary,
     PodDetails,
+    ReplicaSetSummary,
     ServicePortSummary,
     ServiceSummary,
+    StatefulSetSummary,
 )
 
 
@@ -102,6 +110,34 @@ class FakeCoreV1Api:
             ]
         )
 
+    def read_namespaced_service(self, **kwargs):
+        self.calls.append(("read_namespaced_service", kwargs))
+        return SimpleNamespace(
+            api_version="v1",
+            kind="Service",
+            metadata=SimpleNamespace(name=kwargs["name"]),
+        )
+
+    def list_namespaced_persistent_volume_claim(self, **kwargs):
+        self.calls.append(("list_namespaced_persistent_volume_claim", kwargs))
+        return SimpleNamespace(
+            items=[
+                SimpleNamespace(
+                    metadata=SimpleNamespace(name="mysql-data"),
+                    spec=SimpleNamespace(
+                        volume_name="pvc-123",
+                        access_modes=["ReadWriteOnce"],
+                        storage_class_name="local-path",
+                    ),
+                    status=SimpleNamespace(
+                        phase="Bound",
+                        capacity={"storage": "10Gi"},
+                        access_modes=["ReadWriteOnce"],
+                    ),
+                )
+            ]
+        )
+
 
 class FakeAppsV1Api:
     def __init__(self) -> None:
@@ -118,6 +154,121 @@ class FakeAppsV1Api:
                         ready_replicas=2,
                         available_replicas=2,
                         updated_replicas=3,
+                    ),
+                )
+            ]
+        )
+
+    def list_namespaced_stateful_set(self, **kwargs):
+        self.calls.append(("list_namespaced_stateful_set", kwargs))
+        return SimpleNamespace(
+            items=[
+                SimpleNamespace(
+                    metadata=SimpleNamespace(name="mysql"),
+                    spec=SimpleNamespace(replicas=1),
+                    status=SimpleNamespace(
+                        ready_replicas=1,
+                        current_replicas=1,
+                        updated_replicas=1,
+                    ),
+                )
+            ]
+        )
+
+    def list_namespaced_daemon_set(self, **kwargs):
+        self.calls.append(("list_namespaced_daemon_set", kwargs))
+        return SimpleNamespace(
+            items=[
+                SimpleNamespace(
+                    metadata=SimpleNamespace(name="log-agent"),
+                    status=SimpleNamespace(
+                        desired_number_scheduled=3,
+                        current_number_scheduled=3,
+                        number_ready=2,
+                        number_available=2,
+                    ),
+                )
+            ]
+        )
+
+    def list_namespaced_replica_set(self, **kwargs):
+        self.calls.append(("list_namespaced_replica_set", kwargs))
+        return SimpleNamespace(
+            items=[
+                SimpleNamespace(
+                    metadata=SimpleNamespace(name="sample-api-7f8"),
+                    spec=SimpleNamespace(replicas=2),
+                    status=SimpleNamespace(
+                        replicas=2,
+                        ready_replicas=2,
+                    ),
+                )
+            ]
+        )
+
+    def read_namespaced_deployment(self, **kwargs):
+        self.calls.append(("read_namespaced_deployment", kwargs))
+        return SimpleNamespace(
+            api_version="apps/v1",
+            kind="Deployment",
+            metadata=SimpleNamespace(name=kwargs["name"]),
+        )
+
+
+class FakeBatchV1Api:
+    def list_namespaced_job(self, **kwargs):
+        return SimpleNamespace(
+            items=[
+                SimpleNamespace(
+                    metadata=SimpleNamespace(name="database-migration"),
+                    spec=SimpleNamespace(completions=1),
+                    status=SimpleNamespace(
+                        succeeded=1,
+                        active=None,
+                        failed=None,
+                    ),
+                )
+            ]
+        )
+
+    def list_namespaced_cron_job(self, **kwargs):
+        return SimpleNamespace(
+            items=[
+                SimpleNamespace(
+                    metadata=SimpleNamespace(name="nightly-backup"),
+                    spec=SimpleNamespace(
+                        schedule="0 2 * * *",
+                        suspend=False,
+                    ),
+                    status=SimpleNamespace(
+                        active=[],
+                        last_schedule_time=datetime(
+                            2026,
+                            7,
+                            27,
+                            2,
+                            tzinfo=UTC,
+                        ),
+                    ),
+                )
+            ]
+        )
+
+
+class FakeNetworkingV1Api:
+    def list_namespaced_ingress(self, **kwargs):
+        return SimpleNamespace(
+            items=[
+                SimpleNamespace(
+                    metadata=SimpleNamespace(name="sample"),
+                    spec=SimpleNamespace(
+                        ingress_class_name="nginx",
+                        rules=[SimpleNamespace(host="sample.example.com")],
+                    ),
+                    status=SimpleNamespace(
+                        load_balancer=SimpleNamespace(
+                            ingress=[SimpleNamespace(ip="10.0.0.8", hostname=None)]
+                        )
                     ),
                 )
             ]
@@ -260,3 +411,118 @@ def test_list_services_returns_ports() -> None:
         )
     ]
     assert core_api.calls[0][1]["namespace"] == "sample"
+
+
+def test_list_additional_workloads_returns_replica_status() -> None:
+    reader, _, apps_api = create_reader()
+
+    stateful_sets = reader.list_stateful_sets("sample")
+    daemon_sets = reader.list_daemon_sets("sample")
+    replica_sets = reader.list_replica_sets("sample")
+
+    assert stateful_sets == [
+        StatefulSetSummary(
+            name="mysql",
+            desired_replicas=1,
+            ready_replicas=1,
+            current_replicas=1,
+            updated_replicas=1,
+        )
+    ]
+    assert daemon_sets == [
+        DaemonSetSummary(
+            name="log-agent",
+            desired_scheduled=3,
+            current_scheduled=3,
+            ready_scheduled=2,
+            available_scheduled=2,
+        )
+    ]
+    assert replica_sets == [
+        ReplicaSetSummary(
+            name="sample-api-7f8",
+            desired_replicas=2,
+            current_replicas=2,
+            ready_replicas=2,
+        )
+    ]
+    assert [call[0] for call in apps_api.calls] == [
+        "list_namespaced_stateful_set",
+        "list_namespaced_daemon_set",
+        "list_namespaced_replica_set",
+    ]
+
+
+def test_describe_resource_includes_object_and_related_events() -> None:
+    reader, _, apps_api = create_reader()
+
+    description = reader.describe_resource(
+        "sample",
+        KubernetesResourceKind.DEPLOYMENT,
+        "sample-api",
+    )
+
+    assert "Name:       sample-api" in description
+    assert "Namespace:  sample" in description
+    assert "Kind:       Deployment" in description
+    assert '"api_version": "apps/v1"' in description
+    assert "Warning BackOff (count=3" in description
+    assert "Back-off restarting failed container" in description
+    assert apps_api.calls == [
+        (
+            "read_namespaced_deployment",
+            {
+                "name": "sample-api",
+                "namespace": "sample",
+                "_request_timeout": 7,
+            },
+        )
+    ]
+
+
+def test_list_batch_network_and_storage_resources() -> None:
+    core_api = FakeCoreV1Api()
+    reader = KubernetesReader(
+        core_api=core_api,
+        apps_api=FakeAppsV1Api(),
+        batch_api=FakeBatchV1Api(),
+        networking_api=FakeNetworkingV1Api(),
+        request_timeout_seconds=7,
+    )
+
+    assert reader.list_jobs("sample") == [
+        JobSummary(
+            name="database-migration",
+            completions=1,
+            succeeded=1,
+            active=0,
+            failed=0,
+        )
+    ]
+    assert reader.list_cron_jobs("sample") == [
+        CronJobSummary(
+            name="nightly-backup",
+            schedule="0 2 * * *",
+            suspended=False,
+            active=0,
+            last_schedule_time="2026-07-27T02:00:00+00:00",
+        )
+    ]
+    assert reader.list_ingresses("sample") == [
+        IngressSummary(
+            name="sample",
+            ingress_class="nginx",
+            hosts=("sample.example.com",),
+            addresses=("10.0.0.8",),
+        )
+    ]
+    assert reader.list_persistent_volume_claims("sample") == [
+        PersistentVolumeClaimSummary(
+            name="mysql-data",
+            phase="Bound",
+            volume_name="pvc-123",
+            capacity="10Gi",
+            access_modes=("ReadWriteOnce",),
+            storage_class="local-path",
+        )
+    ]

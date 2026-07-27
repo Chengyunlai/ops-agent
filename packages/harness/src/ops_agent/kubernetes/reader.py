@@ -1,21 +1,30 @@
+import json
 from collections.abc import Callable
-from datetime import datetime
+from datetime import date, datetime
 from typing import TypeVar
 
 from kubernetes import config
-from kubernetes.client import AppsV1Api, CoreV1Api
+from kubernetes.client import AppsV1Api, BatchV1Api, CoreV1Api, NetworkingV1Api
 from kubernetes.client.exceptions import ApiException
 from kubernetes.config.config_exception import ConfigException
 from urllib3.exceptions import HTTPError
 
 from ops_agent.kubernetes.models import (
     ContainerSummary,
+    CronJobSummary,
+    DaemonSetSummary,
     DeploymentSummary,
+    IngressSummary,
+    JobSummary,
     KubernetesEventSummary,
+    KubernetesResourceKind,
+    PersistentVolumeClaimSummary,
     PodDetails,
     PodSummary,
+    ReplicaSetSummary,
     ServicePortSummary,
     ServiceSummary,
+    StatefulSetSummary,
 )
 from ops_agent.settings import KubernetesSettings
 
@@ -33,9 +42,13 @@ class KubernetesReader:
         core_api: CoreV1Api,
         apps_api: AppsV1Api,
         request_timeout_seconds: int,
+        batch_api: BatchV1Api | None = None,
+        networking_api: NetworkingV1Api | None = None,
     ) -> None:
         self._core_api = core_api
         self._apps_api = apps_api
+        self._batch_api = batch_api
+        self._networking_api = networking_api
         self._request_timeout_seconds = request_timeout_seconds
 
     def list_pods(self, namespace: str) -> list[PodSummary]:
@@ -128,6 +141,71 @@ class KubernetesReader:
             for deployment in response.items
         ]
 
+    def list_stateful_sets(
+        self,
+        namespace: str,
+    ) -> list[StatefulSetSummary]:
+        response = self._request(
+            f"查询 namespace '{namespace}' 的 StatefulSet 失败",
+            lambda: self._apps_api.list_namespaced_stateful_set(
+                namespace=namespace,
+                _request_timeout=self._request_timeout_seconds,
+            ),
+        )
+        return [
+            StatefulSetSummary(
+                name=stateful_set.metadata.name,
+                desired_replicas=stateful_set.spec.replicas or 0,
+                ready_replicas=stateful_set.status.ready_replicas or 0,
+                current_replicas=stateful_set.status.current_replicas or 0,
+                updated_replicas=stateful_set.status.updated_replicas or 0,
+            )
+            for stateful_set in response.items
+        ]
+
+    def list_daemon_sets(
+        self,
+        namespace: str,
+    ) -> list[DaemonSetSummary]:
+        response = self._request(
+            f"查询 namespace '{namespace}' 的 DaemonSet 失败",
+            lambda: self._apps_api.list_namespaced_daemon_set(
+                namespace=namespace,
+                _request_timeout=self._request_timeout_seconds,
+            ),
+        )
+        return [
+            DaemonSetSummary(
+                name=daemon_set.metadata.name,
+                desired_scheduled=(daemon_set.status.desired_number_scheduled or 0),
+                current_scheduled=(daemon_set.status.current_number_scheduled or 0),
+                ready_scheduled=daemon_set.status.number_ready or 0,
+                available_scheduled=daemon_set.status.number_available or 0,
+            )
+            for daemon_set in response.items
+        ]
+
+    def list_replica_sets(
+        self,
+        namespace: str,
+    ) -> list[ReplicaSetSummary]:
+        response = self._request(
+            f"查询 namespace '{namespace}' 的 ReplicaSet 失败",
+            lambda: self._apps_api.list_namespaced_replica_set(
+                namespace=namespace,
+                _request_timeout=self._request_timeout_seconds,
+            ),
+        )
+        return [
+            ReplicaSetSummary(
+                name=replica_set.metadata.name,
+                desired_replicas=replica_set.spec.replicas or 0,
+                current_replicas=replica_set.status.replicas or 0,
+                ready_replicas=replica_set.status.ready_replicas or 0,
+            )
+            for replica_set in response.items
+        ]
+
     def list_services(self, namespace: str) -> list[ServiceSummary]:
         response = self._request(
             f"查询 namespace '{namespace}' 的 Service 失败",
@@ -137,6 +215,155 @@ class KubernetesReader:
             ),
         )
         return [_to_service_summary(service) for service in response.items]
+
+    def list_jobs(self, namespace: str) -> list[JobSummary]:
+        batch_api = self._require_api(self._batch_api, "BatchV1Api")
+        response = self._request(
+            f"查询 namespace '{namespace}' 的 Job 失败",
+            lambda: batch_api.list_namespaced_job(
+                namespace=namespace,
+                _request_timeout=self._request_timeout_seconds,
+            ),
+        )
+        return [
+            JobSummary(
+                name=job.metadata.name,
+                completions=job.spec.completions or 1,
+                succeeded=job.status.succeeded or 0,
+                active=job.status.active or 0,
+                failed=job.status.failed or 0,
+            )
+            for job in response.items
+        ]
+
+    def list_cron_jobs(self, namespace: str) -> list[CronJobSummary]:
+        batch_api = self._require_api(self._batch_api, "BatchV1Api")
+        response = self._request(
+            f"查询 namespace '{namespace}' 的 CronJob 失败",
+            lambda: batch_api.list_namespaced_cron_job(
+                namespace=namespace,
+                _request_timeout=self._request_timeout_seconds,
+            ),
+        )
+        return [
+            CronJobSummary(
+                name=cron_job.metadata.name,
+                schedule=cron_job.spec.schedule,
+                suspended=bool(cron_job.spec.suspend),
+                active=len(cron_job.status.active or []),
+                last_schedule_time=_isoformat(cron_job.status.last_schedule_time),
+            )
+            for cron_job in response.items
+        ]
+
+    def list_ingresses(self, namespace: str) -> list[IngressSummary]:
+        networking_api = self._require_api(
+            self._networking_api,
+            "NetworkingV1Api",
+        )
+        response = self._request(
+            f"查询 namespace '{namespace}' 的 Ingress 失败",
+            lambda: networking_api.list_namespaced_ingress(
+                namespace=namespace,
+                _request_timeout=self._request_timeout_seconds,
+            ),
+        )
+        return [_to_ingress_summary(ingress) for ingress in response.items]
+
+    def list_persistent_volume_claims(
+        self,
+        namespace: str,
+    ) -> list[PersistentVolumeClaimSummary]:
+        response = self._request(
+            f"查询 namespace '{namespace}' 的 PersistentVolumeClaim 失败",
+            lambda: self._core_api.list_namespaced_persistent_volume_claim(
+                namespace=namespace,
+                _request_timeout=self._request_timeout_seconds,
+            ),
+        )
+        return [_to_pvc_summary(claim) for claim in response.items]
+
+    def describe_resource(
+        self,
+        namespace: str,
+        kind: KubernetesResourceKind,
+        name: str,
+    ) -> str:
+        reader = self._resource_reader(kind)
+        resource = self._request(
+            f"查询 {kind} '{name}' 详情失败",
+            lambda: reader(
+                name=name,
+                namespace=namespace,
+                _request_timeout=self._request_timeout_seconds,
+            ),
+        )
+        related_events_error = None
+        try:
+            events = self._resource_events(namespace, kind, name)
+        except KubernetesError as error:
+            events = []
+            related_events_error = str(error)
+        return _format_description(
+            namespace=namespace,
+            kind=kind,
+            name=name,
+            resource=resource,
+            events=events,
+            related_events_error=related_events_error,
+        )
+
+    def _resource_reader(self, kind: KubernetesResourceKind):
+        match kind:
+            case KubernetesResourceKind.POD:
+                return self._core_api.read_namespaced_pod
+            case KubernetesResourceKind.SERVICE:
+                return self._core_api.read_namespaced_service
+            case KubernetesResourceKind.DEPLOYMENT:
+                return self._apps_api.read_namespaced_deployment
+            case KubernetesResourceKind.STATEFUL_SET:
+                return self._apps_api.read_namespaced_stateful_set
+            case KubernetesResourceKind.DAEMON_SET:
+                return self._apps_api.read_namespaced_daemon_set
+            case KubernetesResourceKind.REPLICA_SET:
+                return self._apps_api.read_namespaced_replica_set
+            case KubernetesResourceKind.JOB:
+                batch_api = self._require_api(self._batch_api, "BatchV1Api")
+                return batch_api.read_namespaced_job
+            case KubernetesResourceKind.CRON_JOB:
+                batch_api = self._require_api(self._batch_api, "BatchV1Api")
+                return batch_api.read_namespaced_cron_job
+            case KubernetesResourceKind.INGRESS:
+                networking_api = self._require_api(
+                    self._networking_api,
+                    "NetworkingV1Api",
+                )
+                return networking_api.read_namespaced_ingress
+            case KubernetesResourceKind.PERSISTENT_VOLUME_CLAIM:
+                return self._core_api.read_namespaced_persistent_volume_claim
+
+    def _resource_events(
+        self,
+        namespace: str,
+        kind: KubernetesResourceKind,
+        name: str,
+    ) -> list[object]:
+        response = self._request(
+            f"查询 {kind} '{name}' 关联 Event 失败",
+            lambda: self._core_api.list_namespaced_event(
+                namespace=namespace,
+                field_selector=f"involvedObject.kind={kind},involvedObject.name={name}",
+                limit=100,
+                _request_timeout=self._request_timeout_seconds,
+            ),
+        )
+        return list(response.items)
+
+    @staticmethod
+    def _require_api(api, name: str):
+        if api is None:
+            raise KubernetesError(f"{name} 未配置")
+        return api
 
     def _request(
         self,
@@ -164,6 +391,8 @@ def create_kubernetes_reader(
     return KubernetesReader(
         core_api=CoreV1Api(api_client),
         apps_api=AppsV1Api(api_client),
+        batch_api=BatchV1Api(api_client),
+        networking_api=NetworkingV1Api(api_client),
         request_timeout_seconds=settings.request_timeout_seconds,
     )
 
@@ -255,5 +484,109 @@ def _to_service_summary(service) -> ServiceSummary:
     )
 
 
+def _to_ingress_summary(ingress) -> IngressSummary:
+    load_balancers = (
+        ingress.status.load_balancer.ingress
+        if ingress.status.load_balancer is not None
+        else None
+    )
+    addresses = tuple(
+        address
+        for item in (load_balancers or [])
+        for address in (item.ip, item.hostname)
+        if address
+    )
+    return IngressSummary(
+        name=ingress.metadata.name,
+        ingress_class=ingress.spec.ingress_class_name,
+        hosts=tuple(
+            rule.host for rule in (ingress.spec.rules or []) if rule.host is not None
+        ),
+        addresses=addresses,
+    )
+
+
+def _to_pvc_summary(claim) -> PersistentVolumeClaimSummary:
+    capacity = claim.status.capacity or {}
+    return PersistentVolumeClaimSummary(
+        name=claim.metadata.name,
+        phase=claim.status.phase,
+        volume_name=claim.spec.volume_name,
+        capacity=capacity.get("storage"),
+        access_modes=tuple(claim.status.access_modes or claim.spec.access_modes or []),
+        storage_class=claim.spec.storage_class_name,
+    )
+
+
 def _isoformat(value: datetime | None) -> str | None:
     return value.isoformat() if value is not None else None
+
+
+def _to_serializable(value):
+    if value is None or isinstance(value, str | int | float | bool):
+        return value
+    if isinstance(value, date | datetime):
+        return value.isoformat()
+    if isinstance(value, list | tuple):
+        return [_to_serializable(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: _to_serializable(item)
+            for key, item in value.items()
+            if item is not None
+        }
+    if hasattr(value, "to_dict"):
+        return _to_serializable(value.to_dict())
+    if hasattr(value, "__dict__"):
+        return {
+            key: _to_serializable(item)
+            for key, item in vars(value).items()
+            if item is not None
+        }
+    return str(value)
+
+
+def _format_description(
+    *,
+    namespace: str,
+    kind: KubernetesResourceKind,
+    name: str,
+    resource,
+    events: list[object],
+    related_events_error: str | None,
+) -> str:
+    details = json.dumps(
+        _to_serializable(resource),
+        ensure_ascii=False,
+        indent=2,
+    )
+    lines = [
+        f"Name:       {name}",
+        f"Namespace:  {namespace}",
+        f"Kind:       {kind}",
+        "",
+        "Resource details",
+        "----------------",
+        details,
+        "",
+        "Related events",
+        "--------------",
+    ]
+    if related_events_error is not None:
+        lines.append(f"Unavailable: {related_events_error}")
+    elif not events:
+        lines.append("No related events.")
+    else:
+        for event in events:
+            summary = _to_event_summary(event)
+            header = (
+                f"{summary.type} {summary.reason} "
+                f"(count={summary.count}, last={summary.last_seen or '-'})"
+            )
+            lines.extend(
+                (
+                    header,
+                    f"  {summary.message}",
+                )
+            )
+    return "\n".join(lines)

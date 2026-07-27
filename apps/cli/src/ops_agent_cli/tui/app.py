@@ -1,17 +1,23 @@
 import asyncio
 from collections.abc import Iterator
+from enum import StrEnum
 from typing import ClassVar, Protocol
 
 from ops_agent.agent import AgentEvent, AgentStage, ApplicationError
-from ops_agent.monitoring import KubernetesMonitorSnapshot
+from ops_agent.monitoring import (
+    KubernetesMonitorSnapshot,
+    KubernetesResourceContent,
+    KubernetesResourceKind,
+    KubernetesResourceRef,
+)
 from textual import events, on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Input, Static
+from textual.widgets import DataTable, Input, Static
 
 from ops_agent_cli.tui.chat import ChatTranscript
-from ops_agent_cli.tui.monitor import MonitorPane, MonitorView
+from ops_agent_cli.tui.monitor import MonitorPane, ResourceViewer
 
 
 class Conversation(Protocol):
@@ -21,12 +27,29 @@ class Conversation(Protocol):
 class Monitor(Protocol):
     def snapshot(self) -> KubernetesMonitorSnapshot: ...
 
+    def describe(
+        self,
+        resource: KubernetesResourceRef,
+    ) -> KubernetesResourceContent: ...
+
+    def pod_logs(
+        self,
+        resource: KubernetesResourceRef,
+        *,
+        tail_lines: int = 200,
+    ) -> KubernetesResourceContent: ...
+
+
+class ResourceOperation(StrEnum):
+    DESCRIBE = "describe"
+    LOGS = "logs"
+
 
 class QuestionInput(Input):
     """保留普通文本输入，同时让全局帮助键优先于输入框。"""
 
     def check_consume_key(self, key: str, character: str | None) -> bool:
-        if key == "question_mark":
+        if key in {"escape", "question_mark"}:
             return False
         return super().check_consume_key(key, character)
 
@@ -124,6 +147,44 @@ class OpsAgentTui(App[None]):
         padding: 0 1;
         background: #111820;
         color: #8fa1b3;
+    }
+
+    ResourceViewer {
+        align: center middle;
+        background: #000000 70%;
+    }
+
+    #resource-viewer {
+        width: 92%;
+        height: 88%;
+        background: #090e13;
+        border: solid #1fb5ad;
+    }
+
+    #resource-title {
+        height: 1;
+        padding: 0 1;
+        background: #172029;
+        color: #ffcc66;
+        text-style: bold;
+    }
+
+    #resource-content {
+        height: 1fr;
+        padding: 0 1;
+        background: #090e13;
+        color: #d7dee7;
+        scrollbar-color: #1fb5ad;
+        scrollbar-color-hover: #51d8d0;
+        scrollbar-color-active: #ffcc66;
+    }
+
+    #resource-footer {
+        height: 1;
+        padding: 0 1;
+        background: #1fb5ad;
+        color: #001c1a;
+        text-style: bold;
     }
 
     #chat-pane {
@@ -231,9 +292,16 @@ class OpsAgentTui(App[None]):
         ),
         Binding("ctrl+l", "clear_display", "清空显示", priority=True),
         Binding("ctrl+r", "refresh_monitor", "刷新监盘", priority=True),
+        Binding("ctrl+k", "focus_monitor", "资源监盘", priority=True),
+        Binding("0", "show_overview", "Overview", show=False),
         Binding("1", "show_pods", "Pods", show=False),
         Binding("2", "show_deployments", "Deployments", show=False),
-        Binding("3", "show_services", "Services", show=False),
+        Binding("3", "show_stateful_sets", "StatefulSets", show=False),
+        Binding("4", "show_daemon_sets", "DaemonSets", show=False),
+        Binding("5", "show_services", "Services", show=False),
+        Binding("6", "show_replica_sets", "ReplicaSets", show=False),
+        Binding("d", "describe_resource", "Describe", show=False),
+        Binding("l", "show_logs", "Logs", show=False),
         Binding("q", "quit", "退出"),
         Binding("i", "focus_question", "输入"),
         Binding(
@@ -241,7 +309,6 @@ class OpsAgentTui(App[None]):
             "command_mode",
             "命令模式",
             show=False,
-            priority=True,
         ),
     ]
 
@@ -269,9 +336,9 @@ class OpsAgentTui(App[None]):
             id="context",
         )
         yield Static(
-            "全局：Ctrl+C 退出 · F1/? 帮助 · Ctrl+R 刷新监盘 · Ctrl+L 清空显示\n"
-            "输入模式：Enter 提交 · Esc 进入命令模式\n"
-            "命令模式：1/2/3 切换资源 · q 退出 · i 返回输入",
+            "全局：Ctrl+C 退出 · F1/? 帮助 · Ctrl+R 刷新 · Ctrl+K 聚焦监盘\n"
+            "聊天：Enter 提交 · i 返回输入 · Ctrl+L 清空右侧显示\n"
+            "监盘：0 总览 · 1~6 切换资源 · Enter/d 详情 · l Pod 日志 · q 退出",
             id="help",
         )
         with Horizontal(id="workspace"):
@@ -285,12 +352,12 @@ class OpsAgentTui(App[None]):
                     id="question",
                 )
         yield Static(
-            " 1 Pods  2 Deploy  3 Services  │  Ctrl+R 刷新"
-            "  │  Enter 发送  │  F1/? 帮助  │  Ctrl+C 退出",
+            " ^K 监盘  0 总览  1 Pods  2 Deploy  3 Stateful"
+            "  4 Daemon  5 Services  6 Replica  │  d 详情  l 日志  i 聊天",
             id="hotkeys",
         )
         yield Static(
-            " 1/2/3 资源 │ Enter 发送 │ F1 帮助 │ ^R 刷新 │ ^C 退出",
+            " ^K 监盘 │ 0~6 资源 │ d 详情 │ l 日志 │ i 聊天 │ F1 帮助",
             id="hotkeys-compact",
         )
 
@@ -389,24 +456,128 @@ class OpsAgentTui(App[None]):
     def action_refresh_monitor(self) -> None:
         self._request_monitor_refresh()
 
-    def action_show_pods(self) -> None:
-        self.query_one("#monitor-pane", MonitorPane).show_view(MonitorView.PODS)
-
-    def action_show_deployments(self) -> None:
-        self.query_one("#monitor-pane", MonitorPane).show_view(MonitorView.DEPLOYMENTS)
-
-    def action_show_services(self) -> None:
-        self.query_one("#monitor-pane", MonitorPane).show_view(MonitorView.SERVICES)
-
-    def action_command_mode(self) -> None:
-        self.set_focus(None)
+    def action_focus_monitor(self) -> None:
+        self.query_one("#monitor-pane", MonitorPane).focus_table()
         if not self._busy:
             self.query_one("#status", Static).update(
-                "命令模式 · 1/2/3 资源 · q 退出 · i 输入"
+                "监盘模式 · ↑/↓ 选择 · Enter/d 详情 · l Pod 日志 · i 聊天"
             )
+
+    def action_show_overview(self) -> None:
+        self.query_one("#monitor-pane", MonitorPane).show_overview()
+
+    def action_show_pods(self) -> None:
+        self._show_monitor_kind(KubernetesResourceKind.POD)
+
+    def action_show_deployments(self) -> None:
+        self._show_monitor_kind(KubernetesResourceKind.DEPLOYMENT)
+
+    def action_show_stateful_sets(self) -> None:
+        self._show_monitor_kind(KubernetesResourceKind.STATEFUL_SET)
+
+    def action_show_daemon_sets(self) -> None:
+        self._show_monitor_kind(KubernetesResourceKind.DAEMON_SET)
+
+    def action_show_services(self) -> None:
+        self._show_monitor_kind(KubernetesResourceKind.SERVICE)
+
+    def action_show_replica_sets(self) -> None:
+        self._show_monitor_kind(KubernetesResourceKind.REPLICA_SET)
+
+    def action_describe_resource(self) -> None:
+        pane = self.query_one("#monitor-pane", MonitorPane)
+        if pane.open_selected_overview_kind():
+            return
+        resource = pane.selected_resource()
+        if resource is None:
+            self.query_one("#status", Static).update("请先在左侧选择一个资源")
+            return
+        self._open_resource_viewer(
+            loading_title=f"Describe · {resource.kind}/{resource.name}",
+            operation=ResourceOperation.DESCRIBE,
+            resource=resource,
+        )
+
+    def action_show_logs(self) -> None:
+        resource = self.query_one(
+            "#monitor-pane",
+            MonitorPane,
+        ).selected_resource()
+        if resource is None or resource.kind is not KubernetesResourceKind.POD:
+            self.query_one("#status", Static).update(
+                "Logs 仅适用于 Pod；请切换到 Pods 并选择一行"
+            )
+            return
+        self._open_resource_viewer(
+            loading_title=f"Logs · Pod/{resource.name}",
+            operation=ResourceOperation.LOGS,
+            resource=resource,
+        )
+
+    def action_command_mode(self) -> None:
+        self.action_focus_monitor()
 
     def action_focus_question(self) -> None:
         self.query_one("#question", Input).focus()
+        if not self._busy:
+            self.query_one("#status", Static).update("聊天模式 · Enter 发送")
+
+    @on(DataTable.RowSelected, "#monitor-table")
+    def open_selected_resource(self) -> None:
+        self.action_describe_resource()
+
+    def _show_monitor_kind(self, kind: KubernetesResourceKind) -> None:
+        pane = self.query_one("#monitor-pane", MonitorPane)
+        pane.show_kind(kind)
+        if not self.query_one("#question", Input).has_focus:
+            pane.focus_table()
+
+    def _open_resource_viewer(
+        self,
+        *,
+        loading_title: str,
+        operation: ResourceOperation,
+        resource: KubernetesResourceRef,
+    ) -> None:
+        viewer = ResourceViewer(loading_title=loading_title)
+        self.push_screen(viewer)
+        self.call_after_refresh(
+            self._load_resource_content,
+            viewer=viewer,
+            operation=operation,
+            resource=resource,
+        )
+
+    @work(
+        group="resource-content",
+        exclusive=True,
+        exit_on_error=False,
+    )
+    async def _load_resource_content(
+        self,
+        *,
+        viewer: ResourceViewer,
+        operation: ResourceOperation,
+        resource: KubernetesResourceRef,
+    ) -> None:
+        try:
+            if operation is ResourceOperation.LOGS:
+                content = await asyncio.to_thread(
+                    self._monitor.pod_logs,
+                    resource,
+                    tail_lines=200,
+                )
+            else:
+                content = await asyncio.to_thread(
+                    self._monitor.describe,
+                    resource,
+                )
+        except Exception as error:  # noqa: BLE001 - 资源弹窗必须恢复 API 异常
+            if viewer.is_mounted:
+                viewer.display_error(str(error))
+        else:
+            if viewer.is_mounted:
+                viewer.display_content(content)
 
     def _request_monitor_refresh(self) -> None:
         if self._monitor_refresh_in_progress:

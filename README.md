@@ -22,7 +22,7 @@
 | TOML 配置加载 | 已完成 | 从指定文件加载 Kubernetes 配置 |
 | 配置错误处理 | 已完成 | 识别文件缺失、TOML 格式错误、区块、字段缺失或未知字段 |
 | 不可变配置模型 | 已完成 | 使用冻结的 Pydantic 模型声明类型、别名和字段约束 |
-| Kubernetes 只读查询 | 已完成 | 查询 Pod 摘要/详情/日志、Event、Deployment 和 Service |
+| Kubernetes 只读查询 | 已完成 | 查询常用工作负载、网络入口、PVC、Pod 详情/日志和关联 Event |
 | Kubernetes 基础诊断 | 已完成 | Agent 可调用确定性规则识别 Pod 阶段/就绪异常和 Deployment 副本不足 |
 | 告警接入与诊断 | 规划中 | 接入告警并生成带证据的诊断报告 |
 | 审批与处置执行 | 规划中 | 执行扩缩容、重启、回滚等受控动作 |
@@ -164,11 +164,20 @@ uv run ops_agent \
 ```
 
 TUI 显示当前环境、固定 namespace 和只读标识。宽终端采用左右布局：左侧每
-5 秒刷新 Pod、Deployment 和 Service 只读快照，按 `1`/`2`/`3` 切换资源；
-右侧保留本次运行中的用户消息和 Agent Markdown 回复。窄终端自动改为上下
-布局。`Ctrl+R` 可立即刷新监盘，`Ctrl+L` 清空右侧显示但保留
-`ConversationSession` 上下文，`F1`/`?` 显示帮助，`Ctrl+C` 在任意焦点下
-退出。
+5 秒刷新资源目录，默认 Overview 明确列出 Pod、Deployment、StatefulSet、
+DaemonSet、Service、ReplicaSet、Job、CronJob、Ingress 和 PVC 的数量与
+状态；右侧保留本次运行中的用户消息和 Agent Markdown 回复。窄终端自动改为
+上下布局。每类资源独立查询，单类 API 或 RBAC 失败会在该行显示
+`Unavailable`，不会让 Pod、Service 等其他目录一起消失。
+
+`Ctrl+K` 聚焦左侧监盘，`0` 返回 Overview，`1`～`6` 切换具体资源；
+Overview 中可用方向键和 `Enter` 进入任意资源类型。选中资源后按
+`Enter`/`d` 读取对象详情与关联 Event；Pod 上按 `l` 读取每个容器最近
+200 行日志。
+这些固定操作直接使用绑定 namespace 的 Monitor/Reader，不经过 Agent，也不
+读取或改变右侧 Conversation Session。`i` 返回聊天输入，`Ctrl+R` 立即刷新
+监盘，`Ctrl+L` 清空右侧显示但保留会话上下文，`F1`/`?` 显示帮助，
+`Ctrl+C` 在任意焦点下退出。
 
 右侧虽然采用普通聊天交互，但仍将可信 `InteractionContext` 传给主图并消费
 受控 `ConversationSession`，不是绕过 Policy 的裸模型入口。因此可以使用
@@ -298,9 +307,10 @@ Kubernetes 相关代码采用三层边界：
   finding，不访问集群，也不依赖 LLM 或 LangChain。
 - `tools/` 是 Agent 适配层。它把 Kubernetes 能力转换成模型可调用的
   LangChain Tool，并在这里固定 namespace、限制日志行数和 Event 数量。
-- `monitoring/` 用一个无参数 `snapshot()` 接口封装固定 namespace 的资源
-  快照。TUI 只消费这个稳定接口，不导入 Kubernetes SDK，也不解析 Agent
-  文本；以后将轮询替换为 watch 时无需改动聊天与布局。
+- `monitoring/` 用无参数 `snapshot()` 以及固定 namespace 的 `describe()` /
+  `pod_logs()` 接口封装资源浏览能力。TUI 只消费这些稳定接口，不导入
+  Kubernetes SDK，也不解析 Agent 文本；以后将轮询替换为 watch 时无需改动
+  聊天与布局。
 
 `apps/cli/bootstrap.py` 是终端应用的组合根，负责读取进程环境并选择具体的
 模型、Reader、Monitor、Tool 和 Agent 适配器。`main.py` 保留脚本化命令，

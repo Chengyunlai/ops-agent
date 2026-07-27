@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime
 from threading import Event, Lock
 from types import SimpleNamespace
@@ -9,18 +10,19 @@ from ops_agent.agent import (
     CapabilityScope,
     InteractionChannel,
 )
-from ops_agent.kubernetes import (
-    DeploymentSummary,
-    PodSummary,
-    ServicePortSummary,
-    ServiceSummary,
+from ops_agent.kubernetes import KubernetesResourceKind
+from ops_agent.monitoring import (
+    KubernetesMonitorSnapshot,
+    KubernetesResourceCollection,
+    KubernetesResourceContent,
+    KubernetesResourceRef,
+    KubernetesResourceRow,
 )
-from ops_agent.monitoring import KubernetesMonitorSnapshot
 from ops_agent_cli import tui as tui_module
 from ops_agent_cli.tui import run_tui
 from ops_agent_cli.tui.app import OpsAgentTui
 from textual.coordinate import Coordinate
-from textual.widgets import DataTable, Input, Markdown, Static
+from textual.widgets import DataTable, Input, Markdown, RichLog, Static
 
 
 class FakeAgent:
@@ -58,47 +60,132 @@ class FakeConversation:
 class FakeMonitor:
     def __init__(self) -> None:
         self.calls = 0
+        self.content_calls: list[tuple[str, object]] = []
 
     def snapshot(self) -> KubernetesMonitorSnapshot:
         self.calls += 1
         return create_monitor_snapshot()
 
+    def describe(
+        self,
+        resource: KubernetesResourceRef,
+    ) -> KubernetesResourceContent:
+        self.content_calls.append(("describe", resource))
+        return KubernetesResourceContent(
+            title=f"Describe · {resource.kind}/{resource.name}",
+            content=f"kind: {resource.kind}\nmetadata:\n  name: {resource.name}",
+        )
+
+    def pod_logs(
+        self,
+        resource: KubernetesResourceRef,
+        *,
+        tail_lines: int = 200,
+    ) -> KubernetesResourceContent:
+        self.content_calls.append(("logs", (resource, tail_lines)))
+        return KubernetesResourceContent(
+            title=f"Logs · Pod/{resource.name} · last {tail_lines} lines",
+            content="2026-07-27T10:30:00Z server started",
+        )
+
 
 def create_monitor_snapshot() -> KubernetesMonitorSnapshot:
+    def collection(
+        kind: KubernetesResourceKind,
+        label: str,
+        shortcut: str | None,
+        columns: tuple[str, ...],
+        values: tuple[str, ...] | None,
+        *,
+        healthy: bool | None = True,
+    ) -> KubernetesResourceCollection:
+        rows = (
+            (
+                KubernetesResourceRow(
+                    ref=KubernetesResourceRef(kind=kind, name=values[0]),
+                    values=values,
+                    healthy=healthy,
+                ),
+            )
+            if values is not None
+            else ()
+        )
+        return KubernetesResourceCollection(
+            kind=kind,
+            label=label,
+            shortcut=shortcut,
+            columns=columns,
+            rows=rows,
+        )
+
     return KubernetesMonitorSnapshot(
         namespace="sample",
         observed_at=datetime(2026, 7, 27, 10, 30, tzinfo=UTC),
-        pods=(
-            PodSummary(
-                name="sample-api-7f8",
-                phase="Running",
-                restart_count=1,
-                ready_containers=2,
-                total_containers=2,
+        resources=(
+            collection(
+                KubernetesResourceKind.POD,
+                "Pods",
+                "1",
+                ("NAME", "READY", "STATUS", "RESTARTS"),
+                ("sample-api-7f8", "2/2", "Running", "1"),
             ),
-        ),
-        deployments=(
-            DeploymentSummary(
-                name="sample-api",
-                desired_replicas=2,
-                ready_replicas=2,
-                available_replicas=2,
-                updated_replicas=2,
+            collection(
+                KubernetesResourceKind.DEPLOYMENT,
+                "Deployments",
+                "2",
+                ("NAME", "READY", "AVAILABLE", "UPDATED"),
+                ("sample-api", "2/2", "2", "2"),
             ),
-        ),
-        services=(
-            ServiceSummary(
-                name="sample-api",
-                type="ClusterIP",
-                cluster_ip="10.43.0.10",
-                ports=[
-                    ServicePortSummary(
-                        name="http",
-                        port=80,
-                        protocol="TCP",
-                        target_port="8080",
-                    )
-                ],
+            collection(
+                KubernetesResourceKind.STATEFUL_SET,
+                "StatefulSets",
+                "3",
+                ("NAME", "READY", "CURRENT", "UPDATED"),
+                ("mysql", "1/1", "1", "1"),
+            ),
+            collection(
+                KubernetesResourceKind.DAEMON_SET,
+                "DaemonSets",
+                "4",
+                ("NAME", "READY", "CURRENT", "AVAILABLE"),
+                ("log-agent", "2/2", "2", "2"),
+            ),
+            collection(
+                KubernetesResourceKind.SERVICE,
+                "Services",
+                "5",
+                ("NAME", "TYPE", "CLUSTER-IP", "PORTS"),
+                ("sample-api", "ClusterIP", "10.43.0.10", "80/TCP"),
+                healthy=None,
+            ),
+            collection(
+                KubernetesResourceKind.REPLICA_SET,
+                "ReplicaSets",
+                "6",
+                ("NAME", "READY", "CURRENT", "DESIRED"),
+                ("sample-api-7f8", "2", "2", "2"),
+            ),
+            collection(KubernetesResourceKind.JOB, "Jobs", None, ("NAME",), None),
+            collection(
+                KubernetesResourceKind.CRON_JOB,
+                "CronJobs",
+                None,
+                ("NAME",),
+                None,
+            ),
+            collection(
+                KubernetesResourceKind.INGRESS,
+                "Ingresses",
+                None,
+                ("NAME",),
+                None,
+            ),
+            collection(
+                KubernetesResourceKind.PERSISTENT_VOLUME_CLAIM,
+                "PVCs",
+                None,
+                ("NAME",),
+                None,
             ),
         ),
     )
@@ -203,17 +290,144 @@ def test_tui_displays_context_and_agent_answer() -> None:
             assert str(status.content) == "完成"
             assert question.disabled is False
             assert monitor.calls == 1
-            assert app.query_one("#monitor-table", DataTable).row_count == 1
+            assert app.query_one("#monitor-table", DataTable).row_count == 10
             assert (
                 app.query_one("#monitor-pane").region.x
                 < app.query_one("#chat-pane").region.x
             )
 
-            await pilot.press("escape", "3")
+            await pilot.press("escape", "5")
             assert (
-                app.query_one("#monitor-table", DataTable).get_cell_at(Coordinate(0, 0))
+                str(
+                    app.query_one("#monitor-table", DataTable).get_cell_at(
+                        Coordinate(0, 0)
+                    )
+                )
                 == "sample-api"
             )
+
+    asyncio.run(exercise())
+
+
+def test_tui_overview_names_every_monitored_resource_type() -> None:
+    async def exercise() -> None:
+        app = create_tui(FakeAgent(answer="unused"))
+
+        async with app.run_test(size=(140, 34)) as pilot:
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            table = app.query_one("#monitor-table", DataTable)
+            assert table.row_count == 10
+            assert [
+                table.get_cell_at(Coordinate(row, 0)) for row in range(table.row_count)
+            ] == [
+                "Pods",
+                "Deployments",
+                "StatefulSets",
+                "DaemonSets",
+                "Services",
+                "ReplicaSets",
+                "Jobs",
+                "CronJobs",
+                "Ingresses",
+                "PVCs",
+            ]
+            assert [
+                table.get_cell_at(Coordinate(row, 1)) for row in range(table.row_count)
+            ] == ["1", "1", "1", "1", "1", "1", "0", "0", "0", "0"]
+            title = str(app.query_one("#monitor-title", Static).content)
+            assert "Namespace sample" in title
+            assert "Overview" in title
+
+    asyncio.run(exercise())
+
+
+def test_tui_opens_describe_and_pod_logs_for_selected_resource() -> None:
+    async def exercise() -> None:
+        monitor = FakeMonitor()
+        app = create_tui(FakeAgent(answer="unused"), monitor=monitor)
+
+        async with app.run_test(size=(140, 34)) as pilot:
+            await app.workers.wait_for_complete()
+
+            await pilot.press("ctrl+k", "5", "d")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert "Describe · Service/sample-api" in str(
+                app.screen.query_one("#resource-title", Static).content
+            )
+            assert "kind: Service" in "\n".join(
+                line.text
+                for line in app.screen.query_one(
+                    "#resource-content",
+                    RichLog,
+                ).lines
+            )
+            await pilot.press("escape")
+
+            await pilot.press("1", "l")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert "Logs · Pod/sample-api-7f8" in str(
+                app.screen.query_one("#resource-title", Static).content
+            )
+            assert monitor.content_calls == [
+                (
+                    "describe",
+                    KubernetesResourceRef(
+                        kind=KubernetesResourceKind.SERVICE,
+                        name="sample-api",
+                    ),
+                ),
+                (
+                    "logs",
+                    (
+                        KubernetesResourceRef(
+                            kind=KubernetesResourceKind.POD,
+                            name="sample-api-7f8",
+                        ),
+                        200,
+                    ),
+                ),
+            ]
+
+    asyncio.run(exercise())
+
+
+def test_tui_distinguishes_unavailable_resource_type_from_empty() -> None:
+    class PartiallyUnavailableMonitor(FakeMonitor):
+        def snapshot(self) -> KubernetesMonitorSnapshot:
+            self.calls += 1
+            snapshot = create_monitor_snapshot()
+            resources = tuple(
+                replace(
+                    resource,
+                    rows=(),
+                    error="services is forbidden",
+                )
+                if resource.kind is KubernetesResourceKind.SERVICE
+                else resource
+                for resource in snapshot.resources
+            )
+            return replace(snapshot, resources=resources)
+
+    async def exercise() -> None:
+        app = create_tui(
+            FakeAgent(answer="unused"),
+            monitor=PartiallyUnavailableMonitor(),
+        )
+
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete()
+            await pilot.press("ctrl+k", "5")
+
+            assert "Services · Unavailable" in str(
+                app.query_one("#monitor-title", Static).content
+            )
+            table = app.query_one("#monitor-table", DataTable)
+            assert str(table.get_cell_at(Coordinate(0, 0))) == "Unavailable"
+            assert table.get_cell_at(Coordinate(0, 1)) == "services is forbidden"
 
     asyncio.run(exercise())
 
@@ -500,8 +714,10 @@ def test_tui_monitor_failure_can_recover_with_manual_refresh() -> None:
             await app.workers.wait_for_complete()
 
             assert monitor.calls == 2
-            assert "Pods 1/1" in str(app.query_one("#monitor-title", Static).content)
-            assert app.query_one("#monitor-table", DataTable).row_count == 1
+            assert "Overview · 6 resources" in str(
+                app.query_one("#monitor-title", Static).content
+            )
+            assert app.query_one("#monitor-table", DataTable).row_count == 10
 
     asyncio.run(exercise())
 
@@ -554,7 +770,7 @@ def test_tui_coalesces_slow_refresh_and_ignores_late_snapshot_after_exit() -> No
             release.set()
             assert await asyncio.to_thread(finished.wait, 1)
             await asyncio.sleep(0)
-            assert str(title.content) == " LIVE MONITOR · 正在连接…"
+            assert str(title.content) == " LIVE · 正在连接 Kubernetes…"
             assert monitor.maximum_active == 1
         finally:
             release.set()

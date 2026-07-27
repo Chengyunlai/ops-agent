@@ -1,12 +1,21 @@
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Protocol
+from typing import Protocol, TypeVar
 
 from ops_agent.kubernetes import (
+    CronJobSummary,
+    DaemonSetSummary,
     DeploymentSummary,
+    IngressSummary,
+    JobSummary,
+    KubernetesResourceKind,
+    PersistentVolumeClaimSummary,
+    PodDetails,
     PodSummary,
+    ReplicaSetSummary,
     ServiceSummary,
+    StatefulSetSummary,
 )
 
 
@@ -18,23 +27,110 @@ class KubernetesMonitoringSource(Protocol):
         namespace: str,
     ) -> Sequence[DeploymentSummary]: ...
 
+    def list_stateful_sets(
+        self,
+        namespace: str,
+    ) -> Sequence[StatefulSetSummary]: ...
+
+    def list_daemon_sets(
+        self,
+        namespace: str,
+    ) -> Sequence[DaemonSetSummary]: ...
+
+    def list_replica_sets(
+        self,
+        namespace: str,
+    ) -> Sequence[ReplicaSetSummary]: ...
+
     def list_services(
         self,
         namespace: str,
     ) -> Sequence[ServiceSummary]: ...
+
+    def list_jobs(self, namespace: str) -> Sequence[JobSummary]: ...
+
+    def list_cron_jobs(self, namespace: str) -> Sequence[CronJobSummary]: ...
+
+    def list_ingresses(self, namespace: str) -> Sequence[IngressSummary]: ...
+
+    def list_persistent_volume_claims(
+        self,
+        namespace: str,
+    ) -> Sequence[PersistentVolumeClaimSummary]: ...
+
+    def describe_resource(
+        self,
+        namespace: str,
+        kind: KubernetesResourceKind,
+        name: str,
+    ) -> str: ...
+
+    def get_pod_details(
+        self,
+        namespace: str,
+        pod_name: str,
+    ) -> PodDetails: ...
+
+    def get_pod_logs(
+        self,
+        namespace: str,
+        pod_name: str,
+        *,
+        container: str | None,
+        tail_lines: int,
+    ) -> str: ...
+
+
+@dataclass(frozen=True)
+class KubernetesResourceRef:
+    kind: KubernetesResourceKind
+    name: str
+
+
+@dataclass(frozen=True)
+class KubernetesResourceRow:
+    ref: KubernetesResourceRef
+    values: tuple[str, ...]
+    healthy: bool | None
+
+
+@dataclass(frozen=True)
+class KubernetesResourceCollection:
+    kind: KubernetesResourceKind
+    label: str
+    shortcut: str | None
+    columns: tuple[str, ...]
+    rows: tuple[KubernetesResourceRow, ...]
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class KubernetesResourceContent:
+    title: str
+    content: str
 
 
 @dataclass(frozen=True)
 class KubernetesMonitorSnapshot:
     namespace: str
     observed_at: datetime
-    pods: tuple[PodSummary, ...]
-    deployments: tuple[DeploymentSummary, ...]
-    services: tuple[ServiceSummary, ...]
+    resources: tuple[KubernetesResourceCollection, ...]
+
+    def collection(
+        self,
+        kind: KubernetesResourceKind,
+    ) -> KubernetesResourceCollection | None:
+        return next(
+            (resource for resource in self.resources if resource.kind is kind),
+            None,
+        )
+
+
+Summary = TypeVar("Summary")
 
 
 class KubernetesMonitor:
-    """读取固定 namespace 的只读资源快照。"""
+    """读取固定 namespace 的只读资源目录、详情与日志。"""
 
     def __init__(
         self,
@@ -49,7 +145,325 @@ class KubernetesMonitor:
         return KubernetesMonitorSnapshot(
             namespace=self._namespace,
             observed_at=datetime.now(UTC),
-            pods=tuple(self._source.list_pods(self._namespace)),
-            deployments=tuple(self._source.list_deployments(self._namespace)),
-            services=tuple(self._source.list_services(self._namespace)),
+            resources=(
+                self._capture(
+                    kind=KubernetesResourceKind.POD,
+                    label="Pods",
+                    shortcut="1",
+                    columns=("NAME", "READY", "STATUS", "RESTARTS"),
+                    request=self._source.list_pods,
+                    to_row=_pod_row,
+                ),
+                self._capture(
+                    kind=KubernetesResourceKind.DEPLOYMENT,
+                    label="Deployments",
+                    shortcut="2",
+                    columns=("NAME", "READY", "AVAILABLE", "UPDATED"),
+                    request=self._source.list_deployments,
+                    to_row=_deployment_row,
+                ),
+                self._capture(
+                    kind=KubernetesResourceKind.STATEFUL_SET,
+                    label="StatefulSets",
+                    shortcut="3",
+                    columns=("NAME", "READY", "CURRENT", "UPDATED"),
+                    request=self._source.list_stateful_sets,
+                    to_row=_stateful_set_row,
+                ),
+                self._capture(
+                    kind=KubernetesResourceKind.DAEMON_SET,
+                    label="DaemonSets",
+                    shortcut="4",
+                    columns=("NAME", "READY", "CURRENT", "AVAILABLE"),
+                    request=self._source.list_daemon_sets,
+                    to_row=_daemon_set_row,
+                ),
+                self._capture(
+                    kind=KubernetesResourceKind.SERVICE,
+                    label="Services",
+                    shortcut="5",
+                    columns=("NAME", "TYPE", "CLUSTER-IP", "PORTS"),
+                    request=self._source.list_services,
+                    to_row=_service_row,
+                ),
+                self._capture(
+                    kind=KubernetesResourceKind.REPLICA_SET,
+                    label="ReplicaSets",
+                    shortcut="6",
+                    columns=("NAME", "READY", "CURRENT", "DESIRED"),
+                    request=self._source.list_replica_sets,
+                    to_row=_replica_set_row,
+                ),
+                self._capture(
+                    kind=KubernetesResourceKind.JOB,
+                    label="Jobs",
+                    shortcut=None,
+                    columns=("NAME", "STATUS", "SUCCEEDED", "ACTIVE", "FAILED"),
+                    request=self._source.list_jobs,
+                    to_row=_job_row,
+                ),
+                self._capture(
+                    kind=KubernetesResourceKind.CRON_JOB,
+                    label="CronJobs",
+                    shortcut=None,
+                    columns=("NAME", "SCHEDULE", "SUSPEND", "ACTIVE", "LAST"),
+                    request=self._source.list_cron_jobs,
+                    to_row=_cron_job_row,
+                ),
+                self._capture(
+                    kind=KubernetesResourceKind.INGRESS,
+                    label="Ingresses",
+                    shortcut=None,
+                    columns=("NAME", "CLASS", "HOSTS", "ADDRESS"),
+                    request=self._source.list_ingresses,
+                    to_row=_ingress_row,
+                ),
+                self._capture(
+                    kind=KubernetesResourceKind.PERSISTENT_VOLUME_CLAIM,
+                    label="PVCs",
+                    shortcut=None,
+                    columns=("NAME", "STATUS", "VOLUME", "CAPACITY", "STORAGECLASS"),
+                    request=self._source.list_persistent_volume_claims,
+                    to_row=_pvc_row,
+                ),
+            ),
         )
+
+    def describe(
+        self,
+        resource: KubernetesResourceRef,
+    ) -> KubernetesResourceContent:
+        return KubernetesResourceContent(
+            title=f"Describe · {resource.kind}/{resource.name}",
+            content=self._source.describe_resource(
+                self._namespace,
+                resource.kind,
+                resource.name,
+            ),
+        )
+
+    def pod_logs(
+        self,
+        resource: KubernetesResourceRef,
+        *,
+        tail_lines: int = 200,
+    ) -> KubernetesResourceContent:
+        if resource.kind is not KubernetesResourceKind.POD:
+            raise ValueError("日志仅支持 Pod")
+        details = self._source.get_pod_details(self._namespace, resource.name)
+        containers = [container.name for container in details.containers]
+        if not containers:
+            containers = [None]
+        logs = [
+            (
+                container,
+                self._read_container_logs(
+                    resource.name,
+                    container=container,
+                    tail_lines=tail_lines,
+                ),
+            )
+            for container in containers
+        ]
+        if len(logs) == 1:
+            content = logs[0][1]
+            container_label = f" · {logs[0][0]}" if logs[0][0] is not None else ""
+        else:
+            content = "\n\n".join(
+                f"===== container: {container} =====\n{container_logs}"
+                for container, container_logs in logs
+            )
+            container_label = f" · all {len(logs)} containers"
+        return KubernetesResourceContent(
+            title=(
+                f"Logs · Pod/{resource.name}{container_label}"
+                f" · last {tail_lines} lines/container"
+            ),
+            content=content,
+        )
+
+    def _read_container_logs(
+        self,
+        pod_name: str,
+        *,
+        container: str | None,
+        tail_lines: int,
+    ) -> str:
+        try:
+            return self._source.get_pod_logs(
+                self._namespace,
+                pod_name,
+                container=container,
+                tail_lines=tail_lines,
+            )
+        except Exception as error:  # noqa: BLE001 - 其他容器日志仍应可读
+            return f"[读取失败] {error}"
+
+    def _capture(
+        self,
+        *,
+        kind: KubernetesResourceKind,
+        label: str,
+        shortcut: str | None,
+        columns: tuple[str, ...],
+        request: Callable[[str], Sequence[Summary]],
+        to_row: Callable[[Summary], KubernetesResourceRow],
+    ) -> KubernetesResourceCollection:
+        try:
+            rows = tuple(to_row(item) for item in request(self._namespace))
+        except Exception as error:  # noqa: BLE001 - 每类资源必须能独立降级
+            return KubernetesResourceCollection(
+                kind=kind,
+                label=label,
+                shortcut=shortcut,
+                columns=columns,
+                rows=(),
+                error=str(error),
+            )
+        return KubernetesResourceCollection(
+            kind=kind,
+            label=label,
+            shortcut=shortcut,
+            columns=columns,
+            rows=rows,
+        )
+
+
+def _ref(kind: KubernetesResourceKind, name: str) -> KubernetesResourceRef:
+    return KubernetesResourceRef(kind=kind, name=name)
+
+
+def _pod_row(pod: PodSummary) -> KubernetesResourceRow:
+    healthy = pod.phase == "Running" and pod.ready_containers == pod.total_containers
+    return KubernetesResourceRow(
+        ref=_ref(KubernetesResourceKind.POD, pod.name),
+        values=(
+            pod.name,
+            f"{pod.ready_containers}/{pod.total_containers}",
+            pod.phase,
+            str(pod.restart_count),
+        ),
+        healthy=healthy,
+    )
+
+
+def _deployment_row(item: DeploymentSummary) -> KubernetesResourceRow:
+    return KubernetesResourceRow(
+        ref=_ref(KubernetesResourceKind.DEPLOYMENT, item.name),
+        values=(
+            item.name,
+            f"{item.ready_replicas}/{item.desired_replicas}",
+            str(item.available_replicas),
+            str(item.updated_replicas),
+        ),
+        healthy=item.ready_replicas == item.desired_replicas,
+    )
+
+
+def _stateful_set_row(item: StatefulSetSummary) -> KubernetesResourceRow:
+    return KubernetesResourceRow(
+        ref=_ref(KubernetesResourceKind.STATEFUL_SET, item.name),
+        values=(
+            item.name,
+            f"{item.ready_replicas}/{item.desired_replicas}",
+            str(item.current_replicas),
+            str(item.updated_replicas),
+        ),
+        healthy=item.ready_replicas == item.desired_replicas,
+    )
+
+
+def _daemon_set_row(item: DaemonSetSummary) -> KubernetesResourceRow:
+    return KubernetesResourceRow(
+        ref=_ref(KubernetesResourceKind.DAEMON_SET, item.name),
+        values=(
+            item.name,
+            f"{item.ready_scheduled}/{item.desired_scheduled}",
+            str(item.current_scheduled),
+            str(item.available_scheduled),
+        ),
+        healthy=item.ready_scheduled == item.desired_scheduled,
+    )
+
+
+def _service_row(item: ServiceSummary) -> KubernetesResourceRow:
+    ports = ", ".join(f"{port.port}/{port.protocol}" for port in item.ports)
+    return KubernetesResourceRow(
+        ref=_ref(KubernetesResourceKind.SERVICE, item.name),
+        values=(item.name, item.type, item.cluster_ip or "-", ports or "-"),
+        healthy=None,
+    )
+
+
+def _replica_set_row(item: ReplicaSetSummary) -> KubernetesResourceRow:
+    return KubernetesResourceRow(
+        ref=_ref(KubernetesResourceKind.REPLICA_SET, item.name),
+        values=(
+            item.name,
+            str(item.ready_replicas),
+            str(item.current_replicas),
+            str(item.desired_replicas),
+        ),
+        healthy=item.ready_replicas == item.desired_replicas,
+    )
+
+
+def _job_row(item: JobSummary) -> KubernetesResourceRow:
+    if item.failed:
+        status = "Failed"
+    elif item.completions and item.succeeded >= item.completions:
+        status = "Complete"
+    else:
+        status = "Running"
+    return KubernetesResourceRow(
+        ref=_ref(KubernetesResourceKind.JOB, item.name),
+        values=(
+            item.name,
+            status,
+            f"{item.succeeded}/{item.completions}",
+            str(item.active),
+            str(item.failed),
+        ),
+        healthy=item.failed == 0,
+    )
+
+
+def _cron_job_row(item: CronJobSummary) -> KubernetesResourceRow:
+    return KubernetesResourceRow(
+        ref=_ref(KubernetesResourceKind.CRON_JOB, item.name),
+        values=(
+            item.name,
+            item.schedule,
+            str(item.suspended),
+            str(item.active),
+            item.last_schedule_time or "-",
+        ),
+        healthy=None,
+    )
+
+
+def _ingress_row(item: IngressSummary) -> KubernetesResourceRow:
+    return KubernetesResourceRow(
+        ref=_ref(KubernetesResourceKind.INGRESS, item.name),
+        values=(
+            item.name,
+            item.ingress_class or "-",
+            ",".join(item.hosts) or "-",
+            ",".join(item.addresses) or "-",
+        ),
+        healthy=bool(item.addresses),
+    )
+
+
+def _pvc_row(item: PersistentVolumeClaimSummary) -> KubernetesResourceRow:
+    return KubernetesResourceRow(
+        ref=_ref(KubernetesResourceKind.PERSISTENT_VOLUME_CLAIM, item.name),
+        values=(
+            item.name,
+            item.phase,
+            item.volume_name or "-",
+            item.capacity or "-",
+            item.storage_class or "-",
+        ),
+        healthy=item.phase == "Bound",
+    )
