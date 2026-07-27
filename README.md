@@ -22,7 +22,8 @@
 | TOML 配置加载 | 已完成 | 从指定文件加载 Kubernetes 配置 |
 | 配置错误处理 | 已完成 | 识别文件缺失、TOML 格式错误、区块或字段缺失 |
 | 不可变配置模型 | 已完成 | 使用冻结的 `KubernetesSettings` 数据类 |
-| Kubernetes 只读诊断 | 已完成 | 查询 Pod 摘要/详情/日志、Event、Deployment 和 Service |
+| Kubernetes 只读查询 | 已完成 | 查询 Pod 摘要/详情/日志、Event、Deployment 和 Service |
+| Kubernetes 基础诊断 | 已完成 | 识别 Pod 阶段/就绪异常和 Deployment 副本不足 |
 | 告警接入与诊断 | 规划中 | 接入告警并生成带证据的诊断报告 |
 | 审批与处置执行 | 规划中 | 执行扩缩容、重启、回滚等受控动作 |
 | LLM / Agent 编排 | 基础已完成 | 使用 LangChain `create_agent` 构建 LangGraph 工具调用循环 |
@@ -184,6 +185,10 @@ ops_agent/
 │       │       ├── __init__.py
 │       │       ├── agent.py
 │       │       ├── bootstrap.py
+│       │       ├── diagnostics/
+│       │       │   ├── __init__.py
+│       │       │   ├── kubernetes.py
+│       │       │   └── models.py
 │       │       ├── kubernetes/
 │       │       │   ├── __init__.py
 │       │       │   ├── models.py
@@ -196,6 +201,7 @@ ops_agent/
 │       │   └── unit/
 │       │       ├── test_bootstrap.py
 │       │       ├── test_kubernetes.py
+│       │       ├── test_kubernetes_diagnostics.py
 │       │       ├── test_kubernetes_resources.py
 │       │       ├── test_settings.py
 │       │       └── test_tools.py
@@ -208,10 +214,12 @@ ops_agent/
 `ops_agent_harness` 是可复用的 Agent 核心包。依赖方向固定为 CLI 指向
 harness，harness 不依赖任何具体入口。
 
-Kubernetes 相关代码采用两层边界：
+Kubernetes 相关代码采用三层边界：
 
 - `kubernetes/` 是基础设施能力层。`reader.py` 封装 Kubernetes SDK，
   `models.py` 定义不依赖 SDK 的结构化查询结果。
+- `diagnostics/` 是确定性诊断层。它消费查询结果，输出带证据的结构化
+  finding，不访问集群，也不依赖 LLM 或 LangChain。
 - `tools/` 是 Agent 适配层。它把 Kubernetes 能力转换成模型可调用的
   LangChain Tool，并在这里固定 namespace、限制日志行数和 Event 数量。
 
@@ -275,7 +283,8 @@ uv run pytest
 - [x] 配置加载与基础校验
 - [x] Kubernetes 客户端与 Pod 只读查询
 - [x] Pod 详情、日志、Event、Deployment 与 Service 只读工具
-- [ ] Pod 异常、发布失败和资源压力诊断
+- [x] Pod 和 Deployment 基础症状诊断
+- [ ] 发布失败根因和资源压力诊断
 - [ ] Prometheus、日志与告警平台接入
 - [x] LLM 工具调用与基础 Agent 编排
 - [x] CLI 自然语言查询入口
