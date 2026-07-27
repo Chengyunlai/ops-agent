@@ -11,7 +11,7 @@ from ops_agent.agent import (
 from ops_agent_cli import tui as tui_module
 from ops_agent_cli.tui import run_tui
 from ops_agent_cli.tui.app import OpsAgentTui
-from textual.widgets import Input, Static
+from textual.widgets import Input, Markdown, Static
 
 
 class FakeAgent:
@@ -117,10 +117,10 @@ def test_tui_displays_context_and_agent_answer() -> None:
             await pilot.press("enter")
             await app.workers.wait_for_complete()
 
-            result = app.query_one("#result", Static)
+            result = app.query_one("#result", Markdown)
             status = app.query_one("#status", Static)
             assert agent.questions == ["检查所有 Pod"]
-            assert str(result.content) == "sample-api 正在运行"
+            assert result.source == "sample-api 正在运行"
             assert str(status.content) == "完成"
             assert question.disabled is False
 
@@ -143,10 +143,89 @@ def test_tui_consumes_stable_conversation_events() -> None:
             await app.workers.wait_for_complete()
 
             assert conversation.questions == ["sample现在几个服务"]
-            assert str(app.query_one("#result", Static).content) == (
+            assert app.query_one("#result", Markdown).source == (
                 "sample 中有 4 个 Service"
             )
             assert str(app.query_one("#status", Static).content) == "完成"
+
+    asyncio.run(exercise())
+
+
+def test_tui_renders_and_normalizes_markdown_answer() -> None:
+    async def exercise() -> None:
+        answer = (
+            "当前共有 **3 个服务**：\n\n"
+            "| 服务名 | 类型 |\n"
+            "| ====== | ==== |\n"
+            "| **sample-api** | `ClusterIP` |\n\n"
+            "| 名称 |\n"
+            "| ==== |\n"
+            "| sample |\n\n"
+            "````text\n"
+            "```text\n"
+            "| ==== | ==== |\n"
+            "```\n"
+            "| ==== | ==== |\n"
+            "````"
+        )
+        app = OpsAgentTui(
+            conversation=FakeAgent(answer=answer),
+            environment="test",
+            namespace="sample",
+        )
+
+        async with app.run_test() as pilot:
+            question = app.query_one("#question", Input)
+            question.value = "sample现在几个服务"
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            result = app.query_one("#result", Markdown)
+            assert "| ------ | ---- |" in result.source
+            assert "\n| ---- |\n| sample |" in result.source
+            assert (
+                "````text\n```text\n| ==== | ==== |\n```\n| ==== | ==== |\n````"
+            ) in result.source
+            assert "**3 个服务**" in result.source
+            assert len(result.query("MarkdownTable")) == 2
+
+    asyncio.run(exercise())
+
+
+def test_tui_help_and_exit_work_from_input_mode() -> None:
+    async def exercise() -> None:
+        app = OpsAgentTui(
+            conversation=FakeAgent(answer="unused"),
+            environment="test",
+            namespace="sample",
+        )
+
+        async with app.run_test() as pilot:
+            question = app.query_one("#question", Input)
+            assert question.has_focus
+
+            await pilot.press("q")
+            assert question.value == "q"
+            assert app.is_running is True
+            question.value = ""
+
+            await pilot.press("?")
+            assert app.query_one("#help", Static).has_class("visible")
+            assert question.value == ""
+
+            await pilot.press("f1")
+            assert not app.query_one("#help", Static).has_class("visible")
+
+            result = app.query_one("#result", Markdown)
+            await result.update("临时结果")
+            await pilot.press("ctrl+l")
+            assert result.source == "输入问题后按 Enter 开始诊断。"
+            assert str(app.query_one("#status", Static).content) == "结果已清空"
+
+            await pilot.press("ctrl+c")
+
+        assert app.is_running is False
 
     asyncio.run(exercise())
 
@@ -170,9 +249,9 @@ def test_tui_recovers_after_agent_error() -> None:
             await pilot.press("enter")
             await app.workers.wait_for_complete()
 
-            result = app.query_one("#result", Static)
+            result = app.query_one("#result", Markdown)
             status = app.query_one("#status", Static)
-            assert str(result.content) == "诊断失败：无法处理：检查所有 Pod"
+            assert result.source == "诊断失败：无法处理：检查所有 Pod"
             assert str(status.content) == "失败"
             assert question.disabled is False
 
@@ -279,7 +358,7 @@ def test_tui_ignores_late_answer_after_exit() -> None:
         try:
             async with app.run_test() as pilot:
                 question = app.query_one("#question", Input)
-                result = app.query_one("#result", Static)
+                result = app.query_one("#result", Markdown)
                 question.value = "检查所有 Pod"
                 await pilot.press("enter")
                 assert await asyncio.to_thread(started.wait, 1)
@@ -288,7 +367,7 @@ def test_tui_ignores_late_answer_after_exit() -> None:
             release.set()
             assert await asyncio.to_thread(finished.wait, 1)
             await asyncio.sleep(0)
-            assert str(result.content) == "正在获取实时证据，请稍候。"
+            assert result.source == "正在获取实时证据，请稍候。"
         finally:
             release.set()
 
