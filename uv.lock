@@ -613,11 +613,15 @@ name = "ops-agent-cli"
 version = "0.1.0"
 source = { editable = "apps/cli" }
 dependencies = [
+    { name = "langchain", extra = ["openai"] },
     { name = "ops-agent-harness" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "ops-agent-harness", editable = "packages/harness" }]
+requires-dist = [
+    { name = "langchain", extras = ["openai"], specifier = ">=1.0,<2" },
+    { name = "ops-agent-harness", editable = "packages/harness" },
+]
 
 [[package]]
 name = "ops-agent-harness"
@@ -625,7 +629,7 @@ version = "0.1.0"
 source = { editable = "packages/harness" }
 dependencies = [
     { name = "kubernetes" },
-    { name = "langchain", extra = ["openai"] },
+    { name = "langchain" },
     { name = "langgraph" },
     { name = "pydantic" },
     { name = "urllib3" },
@@ -634,7 +638,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "kubernetes", specifier = ">=36.0.3" },
-    { name = "langchain", extras = ["openai"], specifier = ">=1.0,<2" },
+    { name = "langchain", specifier = ">=1.0,<2" },
     { name = "langgraph", specifier = ">=1.0,<2" },
     { name = "pydantic", specifier = ">=2.13,<3" },
     { name = "urllib3" },

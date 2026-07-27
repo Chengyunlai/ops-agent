@@ -1,58 +1,13 @@
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
-from ops_agent import bootstrap as bootstrap_module
-from ops_agent.bootstrap import (
-    BootstrapError,
-    OpsApplication,
-    create_application,
-)
+from ops_agent_cli import bootstrap as bootstrap_module
+from ops_agent_cli.bootstrap import BootstrapError, create_application
 
 
-class FakeAgent:
-    def __init__(self, answer: str) -> None:
-        self.answer = answer
-        self.inputs: list[dict[str, object]] = []
-
-    def invoke(self, input: dict[str, object]) -> dict[str, object]:
-        self.inputs.append(input)
-        return {
-            "messages": [
-                SimpleNamespace(content=self.answer),
-            ]
-        }
-
-
-def test_application_asks_agent() -> None:
-    agent = FakeAgent("sample 中有 3 个 Running Pod")
-    application = OpsApplication(
-        settings=SimpleNamespace(),
-        agent=agent,
-    )
-
-    answer = application.ask("检查所有 Pod")
-
-    assert answer == "sample 中有 3 个 Running Pod"
-    assert agent.inputs == [
-        {
-            "messages": [
-                {
-                    "role": "user",
-                    "content": "检查所有 Pod",
-                }
-            ]
-        }
-    ]
-
-
-def test_create_application_wires_configured_namespace(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    config_path = tmp_path / "test.toml"
+def write_config(config_path: Path, *, model: str) -> None:
     config_path.write_text(
-        """
+        f"""
         [kubernetes]
         environment = "test"
         namespace = "sample"
@@ -61,16 +16,24 @@ def test_create_application_wires_configured_namespace(
 
         [model]
         provider = "openai"
-        model = "test-model"
+        model = "{model}"
         base_url = "https://api.deepseek.com"
         api_key_env = "DEEPSEEK_API_KEY"
         """,
         encoding="utf-8",
     )
+
+
+def test_create_application_wires_configured_namespace(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config_path = tmp_path / "test.toml"
+    write_config(config_path, model="test-model")
     reader = object()
     tools = [object()]
     model = object()
-    agent = FakeAgent("answer")
+    agent = object()
     calls: dict[str, object] = {}
 
     def fake_create_reader(settings):
@@ -115,7 +78,7 @@ def test_create_application_wires_configured_namespace(
 
     application = create_application(config_path)
 
-    assert application.agent is agent
+    assert application is agent
     assert calls["namespace"] == "sample"
     assert calls["reader"] is reader
     assert calls["model_kwargs"] == {
@@ -134,22 +97,7 @@ def test_create_application_requires_configured_api_key(
     monkeypatch,
 ) -> None:
     config_path = tmp_path / "test.toml"
-    config_path.write_text(
-        """
-        [kubernetes]
-        environment = "test"
-        namespace = "sample"
-        kubeconfig_path = "/tmp/ops-agent-kubeconfig"
-        request_timeout_seconds = 10
-
-        [model]
-        provider = "openai"
-        model = "deepseek-v4-pro"
-        base_url = "https://api.deepseek.com"
-        api_key_env = "DEEPSEEK_API_KEY"
-        """,
-        encoding="utf-8",
-    )
+    write_config(config_path, model="deepseek-v4-pro")
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
 
     with pytest.raises(

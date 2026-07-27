@@ -2,13 +2,11 @@ import argparse
 import sys
 from pathlib import Path
 
-from ops_agent.bootstrap import (
-    ApplicationError,
-    BootstrapError,
-    create_application,
-)
+from ops_agent.agent import ApplicationError
 from ops_agent.kubernetes import KubernetesError
 from ops_agent.settings import SettingsError, load_settings
+
+from ops_agent_cli.bootstrap import BootstrapError, create_application
 
 
 def main(argv: list[str] | None = None) -> int:

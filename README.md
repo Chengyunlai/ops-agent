@@ -176,9 +176,11 @@ ops_agent/
 │       │   └── ops_agent_cli/
 │       │       ├── __init__.py
 │       │       ├── __main__.py
+│       │       ├── bootstrap.py
 │       │       └── main.py
 │       ├── tests/
 │       │   └── unit/
+│       │       ├── test_bootstrap.py
 │       │       └── test_main.py
 │       └── pyproject.toml
 ├── packages/
@@ -187,7 +189,6 @@ ops_agent/
 │       │   └── ops_agent/
 │       │       ├── __init__.py
 │       │       ├── agent.py
-│       │       ├── bootstrap.py
 │       │       ├── diagnostics/
 │       │       │   ├── __init__.py
 │       │       │   ├── kubernetes.py
@@ -205,7 +206,7 @@ ops_agent/
 │       │           └── kubernetes.py
 │       ├── tests/
 │       │   └── unit/
-│       │       ├── test_bootstrap.py
+│       │       ├── test_agent.py
 │       │       ├── test_kubernetes.py
 │       │       ├── test_kubernetes_diagnostics.py
 │       │       ├── test_kubernetes_resources.py
@@ -229,8 +230,12 @@ Kubernetes 相关代码采用三层边界：
 - `tools/` 是 Agent 适配层。它把 Kubernetes 能力转换成模型可调用的
   LangChain Tool，并在这里固定 namespace、限制日志行数和 Event 数量。
 
-`bootstrap.py` 只负责组装配置、模型、Reader、Tool 和 Agent。以后增加
-API 或 SDK 入口时，可以复用同一个 harness，不需要复制 Kubernetes 逻辑。
+`apps/cli/bootstrap.py` 是 CLI 的组合根，负责读取进程环境并选择具体的模型、
+Reader、Tool 和 Agent 适配器。以后增加 API 或其他应用入口时，各应用拥有
+自己的组合根，harness 不依赖任何具体入口。
+
+`agent.py` 通过 `OpsAgent.ask()` 提供小而稳定的公开接口，在模块内部隐藏
+LangGraph 的消息结构、调用方式、响应解析和运行错误转换。
 
 `settings/` 保持 `load_settings()` 这一公开接口：`loader.py` 只处理 TOML
 文件读取和统一错误转换，`models.py` 使用 Pydantic 模型声明配置结构、字段
