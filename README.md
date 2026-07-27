@@ -4,7 +4,7 @@
 
 > [!IMPORTANT]
 > 项目目前处于早期开发阶段。当前已打通 Kubernetes TOML 配置、
-> 七项 Kubernetes 只读工具、LangGraph Agent 和 CLI 自然语言查询链路；
+> 七项 Kubernetes 只读工具、LangGraph 主/子 Agent 和 CLI 自然语言查询链路；
 > 指标、告警接入和自动处置等能力仍在规划中。
 
 ## 项目目标
@@ -26,7 +26,7 @@
 | Kubernetes 基础诊断 | 已完成 | Agent 可调用确定性规则识别 Pod 阶段/就绪异常和 Deployment 副本不足 |
 | 告警接入与诊断 | 规划中 | 接入告警并生成带证据的诊断报告 |
 | 审批与处置执行 | 规划中 | 执行扩缩容、重启、回滚等受控动作 |
-| LLM / Agent 编排 | 基础已完成 | 使用 LangChain `create_agent` 构建 LangGraph 工具调用循环 |
+| LLM / Agent 编排 | 基础已完成 | 主 Agent 负责路由与汇总，Kubernetes 子 Agent 负责只读诊断 |
 | CLI 自然语言入口 | 已完成 | 使用 `ops_agent ask` 查询真实集群状态 |
 | 审计与可观测性 | 规划中 | 结构化日志、Tracing、指标和操作审计 |
 
@@ -189,6 +189,7 @@ ops_agent/
 │       │   └── ops_agent/
 │       │       ├── __init__.py
 │       │       ├── agent.py
+│       │       ├── graph.py
 │       │       ├── diagnostics/
 │       │       │   ├── __init__.py
 │       │       │   ├── kubernetes.py
@@ -207,6 +208,7 @@ ops_agent/
 │       ├── tests/
 │       │   └── unit/
 │       │       ├── test_agent.py
+│       │       ├── test_graph.py
 │       │       ├── test_kubernetes.py
 │       │       ├── test_kubernetes_diagnostics.py
 │       │       ├── test_kubernetes_resources.py
@@ -234,8 +236,27 @@ Kubernetes 相关代码采用三层边界：
 Reader、Tool 和 Agent 适配器。以后增加 API 或其他应用入口时，各应用拥有
 自己的组合根，harness 不依赖任何具体入口。
 
-`agent.py` 通过 `OpsAgent.ask()` 提供小而稳定的公开接口，在模块内部隐藏
-LangGraph 的消息结构、调用方式、响应解析和运行错误转换。
+`agent.py` 通过 `OpsAgent.ask()` 提供小而稳定的公开接口，隐藏 LangGraph
+消息结构、调用方式、响应解析和运行错误转换。
+
+`graph.py` 拥有当前真实的 Agent 拓扑和角色提示词：主 Agent 只负责理解请求、
+委派和汇总；Kubernetes 子 Agent 持有集群只读工具，负责诊断与证据收集。
+新增指标或日志等第二个真实专业 Agent 时，在这里扩展拓扑，不改变 CLI 和
+`OpsAgent.ask()`；届时再根据真实差异提取通用注册 seam。审批、持久化和
+interrupt/resume 属于有状态执行协议，不复用当前的文本委派接口。
+
+```text
+CLI ──► OpsAgent.ask()
+             │
+             ▼
+        主 Agent（路由、汇总）
+             │
+             ▼
+        Kubernetes 子 Agent
+             │
+             ▼
+        诊断规则与只读工具
+```
 
 `settings/` 保持 `load_settings()` 这一公开接口：`loader.py` 只处理 TOML
 文件读取和统一错误转换，`models.py` 使用 Pydantic 模型声明配置结构、字段
