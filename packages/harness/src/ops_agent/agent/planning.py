@@ -6,7 +6,7 @@ from langchain.agents.structured_output import ToolStrategy
 from langchain_core.language_models import BaseChatModel
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from ops_agent.kubernetes_agent import KubernetesAgent
+from ops_agent.agent.kubernetes import KubernetesAgent
 
 PLANNER_PROMPT = """\
 你是 Kubernetes 只读诊断计划器，只返回 ExecutionPlan，不回答用户问题。

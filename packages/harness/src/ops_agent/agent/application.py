@@ -1,3 +1,5 @@
+"""运维 Agent 的应用门面。"""
+
 from dataclasses import dataclass
 from typing import Protocol
 

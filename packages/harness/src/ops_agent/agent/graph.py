@@ -5,14 +5,14 @@ from langchain_core.messages import AIMessage
 from langchain_core.tools import BaseTool
 from langgraph.graph import END, START, MessagesState, StateGraph
 
-from ops_agent.agent import OpsAgent
-from ops_agent.kubernetes_agent import KubernetesAgent
-from ops_agent.planning import (
+from ops_agent.agent.application import OpsAgent
+from ops_agent.agent.kubernetes import KubernetesAgent
+from ops_agent.agent.planning import (
     ExecutionPlan,
     KubernetesDiagnosticPlanner,
     KubernetesPlanExecutor,
 )
-from ops_agent.routing import (
+from ops_agent.agent.routing import (
     RequestRouter,
     RouteAction,
     RouteDecision,

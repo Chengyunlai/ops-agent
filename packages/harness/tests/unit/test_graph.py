@@ -4,7 +4,7 @@ from langchain_core.language_models.fake_chat_models import (
 )
 from langchain_core.messages import AIMessage
 from langchain_core.tools import BaseTool, StructuredTool
-from ops_agent.graph import create_ops_agent
+from ops_agent.agent import create_ops_agent
 from pydantic import Field
 
 

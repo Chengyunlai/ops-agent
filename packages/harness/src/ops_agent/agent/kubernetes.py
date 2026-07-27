@@ -1,3 +1,5 @@
+"""Kubernetes 专业 Agent 子图。"""
+
 from collections.abc import Sequence
 
 from langchain.agents import create_agent
