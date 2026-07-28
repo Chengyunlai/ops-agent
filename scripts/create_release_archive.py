@@ -46,6 +46,11 @@ def main() -> int:
             f"{release_name}/README.md",
             0o644,
         ),
+        (
+            _REPOSITORY_ROOT / "LICENSE",
+            f"{release_name}/LICENSE",
+            0o644,
+        ),
     )
 
     with (

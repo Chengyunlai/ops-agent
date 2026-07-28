@@ -1,6 +1,7 @@
 [project]
 name = "ops_agent_cli"
 dynamic = ["version"]
+license = "Apache-2.0"
 requires-python = ">=3.12"
 dependencies = [
     "langchain[openai]>=1.0,<2",

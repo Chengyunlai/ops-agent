@@ -47,8 +47,15 @@
 
 ## 安装版快速开始
 
-普通用户不需要克隆仓库，也不需要安装 Python 或 uv。从 GitHub Releases
-下载与本机匹配的压缩包：
+普通用户不需要克隆仓库，也不需要安装 Python 或 uv。macOS 与 Linux
+优先通过 Homebrew 安装：
+
+```bash
+brew tap Chengyunlai/tap
+brew install ops-agent
+```
+
+也可以从 GitHub Releases 下载与本机匹配的压缩包：
 
 ```text
 ops-agent_<version>_darwin-arm64.tar.gz
@@ -97,14 +104,8 @@ Pod Artifact Download；如果配置显式启用了 Interactive Pod Session，�
 
 每个 Release 同时发布 `SHA256SUMS` 和 GitHub build provenance。当前支持
 macOS 与 Linux；终端 PTY 实现依赖 Unix `termios`/`fcntl`，暂不提供 Windows
-安装包。macOS 正式对外分发前还需要为 Release 配置 Developer ID 签名和
-notarization。
-
-> [!NOTE]
-> 当前仓库尚未选择公开许可证，本地 Git 也尚未配置 GitHub remote。
-> Release 的 publish job 会在缺少 `LICENSE` 时明确失败，避免发布法律状态
-> 不清晰的安装包。首次公开发布前需要选择许可证、创建 GitHub 仓库并配置
-> `origin`；这两项不会由构建脚本自行猜测。
+安装包。Homebrew 是 macOS 的主要安装入口，GitHub Release 独立程序作为
+回退方式；当前终端工具发布方式不要求 Apple Developer 签名。
 
 ## 源码开发
 
@@ -380,12 +381,21 @@ workspace 发行元数据并更新 lockfile，测试也会校验它们没有漂�
 1. 在 macOS arm64、macOS amd64 和 Linux amd64 原生 Runner 构建；
 2. 验证标签版本与 `ops-agent --version` 完全一致；
 3. 对独立程序执行配置初始化和 OpenAI-compatible Provider 加载冒烟测试；
-4. 生成包含程序、配置示例和 README 的 `tar.gz`；
+4. 生成包含程序、配置示例、README 和 Apache-2.0 LICENSE 的 `tar.gz`；
 5. 汇总 `SHA256SUMS`、生成 GitHub provenance 并创建 Release。
 
 本机可以使用 `make package` 构建 `dist/ops-agent`；使用
 `make release TARGET=<platform-arch>` 生成与 GitHub 相同结构的压缩包。
 发布目录、PyInstaller 构建目录和二进制均被 Git 忽略。
+
+公开发布采用两个仓库：`Chengyunlai/ops-agent` 保存源码和 Release，
+`Chengyunlai/homebrew-tap` 保存 Homebrew Formula。Release 发布完成后，
+Tap 仓库的更新工作流会读取最新版本与 `SHA256SUMS`，生成三个平台对应的
+Formula；不需要在主仓库存储跨仓库写权限令牌。
+
+## 许可证
+
+本项目采用 [Apache License 2.0](LICENSE)。
 
 ## 项目结构
 

@@ -29,6 +29,11 @@ def test_release_metadata_uses_application_version_and_installable_entry_points(
     assert root_project["project"]["version"] == __version__
     assert harness_project["project"]["version"] == __version__
     assert cli_project["project"]["dynamic"] == ["version"]
+    assert {
+        root_project["project"]["license"],
+        harness_project["project"]["license"],
+        cli_project["project"]["license"],
+    } == {"Apache-2.0"}
     assert cli_project["project"]["scripts"] == {
         "ops-agent": "ops_agent_cli.main:main",
         "ops_agent": "ops_agent_cli.main:main",
@@ -76,6 +81,7 @@ def test_release_scripts_create_installable_archive_and_checksums(
             f"{root}/ops_agent",
             f"{root}/config.example.toml",
             f"{root}/README.md",
+            f"{root}/LICENSE",
         ]
         executable = release.getmember(f"{root}/ops-agent")
         assert executable.mode == 0o755
@@ -85,6 +91,8 @@ def test_release_scripts_create_installable_archive_and_checksums(
         assert compatibility.linkname == f"{root}/ops-agent"
         config = release.extractfile(f"{root}/config.example.toml")
         assert b"[kubernetes]" in config.read()
+        license_text = release.extractfile(f"{root}/LICENSE")
+        assert b"Apache License" in license_text.read()
 
     subprocess.run(
         [
