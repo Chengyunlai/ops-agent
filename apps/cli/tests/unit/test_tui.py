@@ -583,6 +583,13 @@ def test_tui_settings_persist_project_and_apply_theme_immediately() -> None:
                 screen.query_one("#setting-download-directory", Input).value
                 == "~/Downloads/ops-agent"
             )
+            assert (
+                screen.query_one("#setting-pod-transfer-strategy", Select).value
+                == "auto"
+            )
+            assert (
+                screen.query_one("#setting-pod-transfer-max-size", Input).value == "512"
+            )
 
             screen.query_one("#setting-project-name", Input).value = "Sample Platform"
             screen.query_one("#setting-namespace", Input).value = "sample-next"
@@ -590,6 +597,14 @@ def test_tui_settings_persist_project_and_apply_theme_immediately() -> None:
             screen.query_one(
                 "#setting-download-directory", Input
             ).value = "/tmp/sample-downloads"
+            screen.query_one(
+                "#setting-pod-transfer-strategy",
+                Select,
+            ).value = "exec-dd"
+            screen.query_one(
+                "#setting-pod-transfer-max-size",
+                Input,
+            ).value = "64"
             screen.query_one("#setting-theme", Select).value = ThemeName.LIGHT.value
             await pilot.pause()
             assert app.current_theme.dark is False
@@ -604,6 +619,8 @@ def test_tui_settings_persist_project_and_apply_theme_immediately() -> None:
             assert saved[0].kubernetes.downloads.directory == Path(
                 "/tmp/sample-downloads"
             )
+            assert saved[0].kubernetes.pod_transfer.strategy.value == "exec-dd"
+            assert saved[0].kubernetes.pod_transfer.max_file_size_mb == 64
             assert saved[0].tui.theme is ThemeName.LIGHT
             assert "重启生效" in str(app.query_one("#status", Static).content)
 

@@ -1,4 +1,3 @@
-import base64
 import hashlib
 import io
 import shutil
@@ -10,12 +9,15 @@ from ops_agent.settings import (
     DownloadSettings,
     InteractiveExecSettings,
     KubernetesSettings,
+    PodTransferSettings,
+    PodTransferStrategy,
 )
 from ops_agent_cli.pod_access import (
     _DOWNLOAD_HELPER,
     _READ_POD_FILE,
     KubectlPodAccess,
     PodAccessError,
+    PodTransferBackend,
 )
 from ops_agent_cli.terminal_session import InteractiveTerminalError
 
@@ -32,14 +34,22 @@ class FakeProcess:
         self.returncode = returncode
         self._error = error
 
-    def wait(self) -> int:
+    def wait(self, timeout: float | None = None) -> int:
         return self.returncode
+
+    def terminate(self) -> None:
+        self.returncode = -15
+
+    def kill(self) -> None:
+        self.returncode = -9
 
 
 def create_settings(
     download_directory: Path,
     *,
     interactive_exec: bool = False,
+    transfer_strategy: PodTransferStrategy = PodTransferStrategy.AUTO,
+    max_file_size_mb: int = 512,
 ) -> KubernetesSettings:
     return KubernetesSettings(
         environment="test",
@@ -49,6 +59,26 @@ def create_settings(
         proxy_url="http://127.0.0.1:7897",
         interactive_exec=InteractiveExecSettings(enabled=interactive_exec),
         downloads=DownloadSettings(directory=download_directory),
+        pod_transfer=PodTransferSettings(
+            strategy=transfer_strategy,
+            max_file_size_mb=max_file_size_mb,
+        ),
+    )
+
+
+def stub_pod_transfer_tools(
+    monkeypatch: pytest.MonkeyPatch,
+    *tools: str,
+) -> None:
+    output = "".join(f"{tool}\n" for tool in tools).encode()
+    monkeypatch.setattr(
+        "ops_agent_cli.pod_access.subprocess.run",
+        lambda command, **kwargs: subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=output,
+            stderr=b"",
+        ),
     )
 
 
@@ -66,6 +96,7 @@ def test_download_pod_file_streams_to_scoped_destination(
         return FakeProcess(payload)
 
     monkeypatch.setattr("ops_agent_cli.pod_access.subprocess.Popen", fake_popen)
+    stub_pod_transfer_tools(monkeypatch, "cat", "dd")
     access = KubectlPodAccess(create_settings(tmp_path))
 
     result = access.download_pod_file(
@@ -89,6 +120,7 @@ def test_download_pod_file_streams_to_scoped_destination(
     assert result.path.read_bytes() == payload
     assert result.size_bytes == len(payload)
     assert result.sha256 == hashlib.sha256(payload).hexdigest()
+    assert result.transfer_backend is PodTransferBackend.EXEC_CAT
     assert not list(tmp_path.rglob("*.part"))
     assert commands[0][:7] == [
         "kubectl",
@@ -108,6 +140,83 @@ def test_download_pod_file_streams_to_scoped_destination(
     ]
     assert commands[0][-3] == _READ_POD_FILE
     assert commands[0][-1] == "/var/log/sample/app.log"
+
+
+def test_download_pod_file_auto_selects_dd_when_cat_is_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(command, **kwargs):
+        return subprocess.CompletedProcess(command, 0, stdout=b"dd\n", stderr=b"")
+
+    def fake_popen(command, **kwargs):
+        return FakeProcess(b"read with dd")
+
+    monkeypatch.setattr("ops_agent_cli.pod_access.subprocess.run", fake_run)
+    monkeypatch.setattr("ops_agent_cli.pod_access.subprocess.Popen", fake_popen)
+    access = KubectlPodAccess(create_settings(tmp_path))
+
+    result = access.download_pod_file(
+        pod_name="minimal-7f8",
+        container_name="app",
+        remote_path="/workspace/report.log",
+    )
+
+    assert result.transfer_backend is PodTransferBackend.EXEC_DD
+    assert result.path.read_bytes() == b"read with dd"
+
+
+def test_download_pod_file_stops_at_configured_size_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(command, **kwargs):
+        return subprocess.CompletedProcess(command, 0, stdout=b"cat\n", stderr=b"")
+
+    monkeypatch.setattr("ops_agent_cli.pod_access.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "ops_agent_cli.pod_access.subprocess.Popen",
+        lambda command, **kwargs: FakeProcess(b"x" * (1024 * 1024 + 1)),
+    )
+    access = KubectlPodAccess(
+        create_settings(
+            tmp_path,
+            max_file_size_mb=1,
+        )
+    )
+
+    with pytest.raises(PodAccessError, match="1 MiB"):
+        access.download_pod_file(
+            pod_name="large-file-7f8",
+            container_name="app",
+            remote_path="/workspace/report.log",
+        )
+
+    assert not list(tmp_path.rglob("*.part"))
+    assert not list(tmp_path.rglob("report.log"))
+
+
+def test_download_pod_file_reports_missing_tool_for_explicit_strategy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stub_pod_transfer_tools(monkeypatch, "dd")
+    access = KubectlPodAccess(
+        create_settings(
+            tmp_path,
+            transfer_strategy=PodTransferStrategy.EXEC_CAT,
+        )
+    )
+
+    with pytest.raises(
+        PodAccessError,
+        match=r"缺少 cat.*当前策略 exec-cat",
+    ):
+        access.download_pod_file(
+            pod_name="minimal-7f8",
+            container_name="app",
+            remote_path="/workspace/report.log",
+        )
 
 
 def test_download_pvc_file_uses_mount_scoped_remote_reader(
@@ -181,6 +290,7 @@ def test_failed_download_removes_partial_file(
         return FakeProcess(b"partial", returncode=1)
 
     monkeypatch.setattr("ops_agent_cli.pod_access.subprocess.Popen", fake_popen)
+    stub_pod_transfer_tools(monkeypatch, "cat")
     access = KubectlPodAccess(create_settings(tmp_path))
 
     with pytest.raises(PodAccessError, match="permission denied"):
@@ -202,6 +312,7 @@ def test_download_does_not_overwrite_existing_file(
         "ops_agent_cli.pod_access.subprocess.Popen",
         lambda command, **kwargs: FakeProcess(b"new"),
     )
+    stub_pod_transfer_tools(monkeypatch, "cat")
     destination = tmp_path / "test/sample/Pod/pod-1/main/tmp/report.txt"
     destination.parent.mkdir(parents=True)
     destination.write_bytes(b"old")
@@ -263,6 +374,7 @@ def test_download_keeps_directory_fd_when_path_is_replaced_mid_transfer(
         "ops_agent_cli.pod_access.subprocess.Popen",
         fake_popen,
     )
+    stub_pod_transfer_tools(monkeypatch, "cat")
     access = KubectlPodAccess(create_settings(download_root))
 
     access.download_pod_file(
@@ -322,6 +434,13 @@ def test_interactive_session_downloads_discovered_file_without_exiting_shell(
     )
 
     def fake_run(command, **kwargs):
+        if kwargs.get("capture_output"):
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=b"cat\ndd\n",
+                stderr=b"",
+            )
         cleanup_commands.append(command)
         assert kwargs["stdin"] is subprocess.DEVNULL
         return subprocess.CompletedProcess(command, 0)
@@ -358,6 +477,7 @@ def test_interactive_session_downloads_discovered_file_without_exiting_shell(
     )
     assert downloaded.read_bytes() == b"session artifact"
     assert "下载完成" in session_messages[0]
+    assert "传输 exec-cat" in session_messages[0]
     assert str(downloaded) in session_messages[0]
     banner = capsys.readouterr().out
     assert "INTERACTIVE POD SESSION · MANUAL WRITE ACCESS" in banner
@@ -390,18 +510,13 @@ def test_download_helper_resolves_relative_path_without_python(
     parent = tmp_path / "workspace"
     child = parent / "nested"
     child.mkdir(parents=True)
-    artifact = parent / "daily report.log"
+    artifact = parent / "每日 report.log"
     artifact.write_text("report")
-    tool_directory = tmp_path / "tools"
-    tool_directory.mkdir()
-    base64_path = shutil.which("base64")
-    assert base64_path is not None
-    (tool_directory / "base64").symlink_to(base64_path)
-    environment = {"PATH": str(tool_directory)}
+    environment = {"PATH": ""}
     environment["OPS_AGENT_DOWNLOAD_TOKEN"] = "session-token"
 
     completed = subprocess.run(
-        ["/bin/sh", "-c", _DOWNLOAD_HELPER, "download", "../daily report.log"],
+        ["/bin/sh", "-c", _DOWNLOAD_HELPER, "download", "../每日 report.log"],
         cwd=child,
         env=environment,
         check=True,
@@ -410,9 +525,9 @@ def test_download_helper_resolves_relative_path_without_python(
 
     prefix = b"\x1b]777;ops-agent-download;session-token;"
     assert completed.stdout.startswith(prefix)
-    assert completed.stdout.endswith(b"\x07")
-    encoded_path = completed.stdout[len(prefix) : -1]
-    assert base64.b64decode(encoded_path).decode() == str(artifact)
+    length_payload, remote_path = completed.stdout[len(prefix) :].split(b";", 1)
+    assert int(length_payload) == len(remote_path)
+    assert remote_path.decode() == str(artifact)
 
 
 def test_pod_file_reader_does_not_require_python(tmp_path: Path) -> None:

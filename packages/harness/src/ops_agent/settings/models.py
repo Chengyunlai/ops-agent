@@ -65,6 +65,23 @@ class DownloadSettings(_ConfigModel):
     )
 
 
+class PodTransferStrategy(StrEnum):
+    AUTO = "auto"
+    EXEC_CAT = "exec-cat"
+    EXEC_DD = "exec-dd"
+
+
+class PodTransferSettings(_ConfigModel):
+    strategy: PodTransferStrategy = Field(
+        default=PodTransferStrategy.AUTO,
+        description="Pod 文件传输后端选择策略",
+    )
+    max_file_size_mb: _PositiveInteger = Field(
+        default=512,
+        description="单个 Pod 文件允许下载的最大 MiB",
+    )
+
+
 class KubernetesSettings(_ConfigModel):
     environment: _NonEmptyString = Field(description="运行环境标识")
     namespace: _NonEmptyString = Field(description="固定 Kubernetes namespace")
@@ -83,6 +100,10 @@ class KubernetesSettings(_ConfigModel):
     downloads: DownloadSettings = Field(
         default_factory=DownloadSettings,
         description="Pod/PVC 文件下载配置",
+    )
+    pod_transfer: PodTransferSettings = Field(
+        default_factory=PodTransferSettings,
+        description="Pod 文件传输策略",
     )
 
 

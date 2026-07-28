@@ -93,6 +93,10 @@ enabled = false
 [kubernetes.downloads]
 directory = "~/Downloads/ops-agent"
 
+[kubernetes.pod_transfer]
+strategy = "auto"
+max_file_size_mb = 512
+
 [model]
 provider = "openai"
 model = "deepseek-v4-pro"
@@ -128,6 +132,8 @@ export DEEPSEEK_API_KEY="..."
 | `proxy_url` | HTTP(S) URL | 可选；访问 Kubernetes API 使用的代理，例如 `http://127.0.0.1:7897` |
 | `kubernetes.interactive_exec.enabled` | boolean | 是否允许左侧监盘启动人工 Pod Shell；默认 `false` |
 | `kubernetes.downloads.directory` | path | Pod/PVC 文件下载的本机根目录；默认 `~/Downloads/ops-agent` |
+| `kubernetes.pod_transfer.strategy` | enum | Pod 文件传输策略：`auto`、`exec-cat` 或 `exec-dd`；默认 `auto` |
+| `kubernetes.pod_transfer.max_file_size_mb` | integer | 单个 Pod 文件下载上限（MiB）；默认 `512` |
 | `model.provider` | string | LangChain 模型适配器；DeepSeek 兼容接口使用 `openai` |
 | `model.model` | string | 供应商提供的、支持工具调用的模型名称 |
 | `model.base_url` | string | 可选的模型接口地址 |
@@ -140,8 +146,8 @@ export DEEPSEEK_API_KEY="..."
 | `tui.colors.warning` | `#RRGGBB` | 可选的主题警告色覆盖 |
 
 当前加载器校验配置文件、TOML 格式、`[kubernetes]` / `[model]`
-区块、字段类型、正整数超时、可选代理 URL、人工终端开关、下载目录、主题名称
-和十六进制颜色；
+区块、字段类型、正整数超时、可选代理 URL、人工终端开关、下载目录、Pod
+传输策略、文件大小上限、主题名称和十六进制颜色；
 kubeconfig 是否存在由创建 Kubernetes Client 时检查。`proxy_url` 由配置
 模型校验并在 Kubernetes Client 创建前注入，因此不依赖启动 Shell 是否
 继承 macOS 系统代理。
@@ -226,8 +232,14 @@ Shell。主机显示解析后的绝对路径；按 `y` 确认后才开始传输�
 下载使用同目录 `.part` 临时文件和原子发布；已有同名文件不会被覆盖，而是
 增加时间戳。完成后当前界面显示最终路径、字节数和完整 SHA-256。传输通过
 固定读取脚本流式执行，不会把用户输入拼入 Shell 命令。Pod 文件读取只要求
-容器具备 POSIX `sh` 和 `cat`，不要求安装 Python；PVC 文件仍使用 Python
-读取器维持挂载根目录和符号链接边界。
+容器具备 POSIX `sh`，以及 `cat` 或 `dd`，不要求安装 Python；PVC 文件仍
+使用 Python 读取器维持挂载根目录和符号链接边界。
+
+`pod_transfer.strategy = "auto"` 会先探测目标容器，再优先选择
+`exec-cat`，缺少 `cat` 时回退到 `exec-dd`。下载完成信息会显示实际后端；
+两者都不可用时直接说明缺失工具和当前策略。主机在流式读取时执行
+`max_file_size_mb` 上限，超限会终止 kubectl 并删除 `.part` 文件。显式选择
+`exec-cat` 或 `exec-dd` 可用于固定环境和故障诊断。
 
 Pods 表格选中 Pod 后按 `x` 可启动 **Interactive Pod Session**。该功能默认
 关闭，必须在 `[kubernetes.interactive_exec]` 中显式启用并重启 TUI；进入前
@@ -239,9 +251,9 @@ Pods 表格选中 Pod 后按 `x` 可启动 **Interactive Pod Session**。该功�
 恢复，避免 Kubernetes TLS 警告污染终端。该入口只属于左侧人工操作，不注册
 为 LangChain Tool、不进入主图或子 Agent，也不会把 Shell 命令交给模型。
 
-Interactive Pod Session 及其下载命令要求目标容器包含 POSIX `sh`、
-`base64` 和 `cat`；不要求 Python。PVC 目录浏览和 PVC 文件下载还要求 PVC
-已挂载到 Running 容器并包含 Python 3。kubeconfig/RBAC 至少需要读取
+Interactive Pod Session 及其下载命令要求目标容器包含 POSIX `sh`，并包含
+`cat` 或 `dd`；不要求 Python 或 `base64`。PVC 目录浏览和 PVC 文件下载还
+要求 PVC 已挂载到 Running 容器并包含 Python 3。kubeconfig/RBAC 至少需要读取
 namespace 内 Pod/PVC、读取集群级 PV，并允许连接 `pods/exec` 子资源（不同
 集群可能要求 `get`/`create`）。PVC 未挂载、容器为 distroless、缺少对应
 读取工具或权限不足时，界面会显示明确错误，并尝试同一 PVC 的其他 Running

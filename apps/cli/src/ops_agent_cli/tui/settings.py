@@ -5,6 +5,8 @@ from ops_agent.settings import (
     DownloadSettings,
     InteractiveExecSettings,
     KubernetesSettings,
+    PodTransferSettings,
+    PodTransferStrategy,
     ProjectSettings,
     Settings,
     ThemeName,
@@ -181,6 +183,26 @@ class SettingsScreen(ModalScreen[Settings | None]):
                         id="setting-download-directory",
                     ),
                 )
+                yield from _field(
+                    "Pod 文件传输策略",
+                    Select(
+                        (
+                            ("自动探测（推荐）", PodTransferStrategy.AUTO.value),
+                            ("exec + cat", PodTransferStrategy.EXEC_CAT.value),
+                            ("exec + dd", PodTransferStrategy.EXEC_DD.value),
+                        ),
+                        value=kubernetes.pod_transfer.strategy.value,
+                        allow_blank=False,
+                        id="setting-pod-transfer-strategy",
+                    ),
+                )
+                yield from _field(
+                    "Pod 单文件下载上限（MiB）",
+                    Input(
+                        value=str(kubernetes.pod_transfer.max_file_size_mb),
+                        id="setting-pod-transfer-max-size",
+                    ),
+                )
                 yield Static(
                     "环境、集群连接与人工访问配置保存后，重启应用生效。"
                     " Interactive Pod Session 可修改容器，请谨慎启用。",
@@ -262,6 +284,22 @@ class SettingsScreen(ModalScreen[Settings | None]):
                     Input,
                 ).value,
             )
+            pod_transfer = PodTransferSettings(
+                strategy=PodTransferStrategy(
+                    str(
+                        self.query_one(
+                            "#setting-pod-transfer-strategy",
+                            Select,
+                        ).value
+                    )
+                ),
+                max_file_size_mb=int(
+                    self.query_one(
+                        "#setting-pod-transfer-max-size",
+                        Input,
+                    ).value
+                ),
+            )
             kubernetes = KubernetesSettings(
                 environment=self.query_one("#setting-environment", Input).value,
                 namespace=self.query_one("#setting-namespace", Input).value,
@@ -270,6 +308,7 @@ class SettingsScreen(ModalScreen[Settings | None]):
                 proxy_url=proxy_value or None,
                 interactive_exec=interactive_exec,
                 downloads=downloads,
+                pod_transfer=pod_transfer,
             )
             updated = Settings(
                 project=project,

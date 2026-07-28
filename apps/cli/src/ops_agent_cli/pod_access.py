@@ -9,10 +9,11 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO
 
-from ops_agent.settings import KubernetesSettings
+from ops_agent.settings import KubernetesSettings, PodTransferStrategy
 
 from ops_agent_cli.terminal_session import (
     InteractiveTerminalError,
@@ -48,6 +49,27 @@ if ! command -v cat >/dev/null 2>&1; then
     exit 127
 fi
 exec cat "$path"
+""".strip()
+
+_READ_POD_FILE_WITH_DD = r"""
+path=$1
+if [ ! -f "$path" ]; then
+    printf '目标不是普通文件: %s\n' "$path" >&2
+    exit 1
+fi
+if [ -L "$path" ]; then
+    printf '为避免下载目标在传输前改变，不下载符号链接: %s\n' "$path" >&2
+    exit 1
+fi
+exec dd if="$path" bs=1048576
+""".strip()
+
+_PROBE_POD_TRANSFER = r"""
+for tool in cat dd; do
+    if command -v "$tool" >/dev/null 2>&1; then
+        printf '%s\n' "$tool"
+    fi
+done
 """.strip()
 
 _READ_PVC_FILE = r"""
@@ -122,13 +144,10 @@ if [ ! -f "$remote_path" ]; then
     printf 'download: not a regular file: %s\n' "$remote_path" >&2
     exit 1
 fi
-if ! command -v base64 >/dev/null 2>&1; then
-    printf '%s\n' 'download: container is missing base64' >&2
-    exit 127
-fi
-encoded_path=$(printf '%s' "$remote_path" | base64)
-printf '\033]777;ops-agent-download;%s;%s\007' \
-    "$OPS_AGENT_DOWNLOAD_TOKEN" "$encoded_path"
+path_length=$(LC_ALL=C; printf '%s' "${#remote_path}")
+printf '\033]777;ops-agent-download;%s;%s;' \
+    "$OPS_AGENT_DOWNLOAD_TOKEN" "$path_length"
+printf '%s' "$remote_path"
 """.strip()
 
 _CLEANUP_INTERACTIVE_SESSION = r"""
@@ -222,6 +241,7 @@ class DownloadResult:
     path: Path
     size_bytes: int
     sha256: str
+    transfer_backend: PodTransferBackend | None = None
 
 
 @dataclass(frozen=True)
@@ -229,11 +249,37 @@ class InteractiveSessionResult:
     exit_code: int
 
 
+class PodTransferBackend(StrEnum):
+    EXEC_CAT = "exec-cat"
+    EXEC_DD = "exec-dd"
+
+
 @dataclass(frozen=True)
 class _DownloadTarget:
     root: Path
     directory_parts: tuple[str, ...]
     filename: str
+
+
+@dataclass(frozen=True)
+class _PodTransferAdapter:
+    backend: PodTransferBackend
+    required_tool: str
+    reader_script: str
+
+
+_POD_TRANSFER_ADAPTERS = (
+    _PodTransferAdapter(
+        backend=PodTransferBackend.EXEC_CAT,
+        required_tool="cat",
+        reader_script=_READ_POD_FILE,
+    ),
+    _PodTransferAdapter(
+        backend=PodTransferBackend.EXEC_DD,
+        required_tool="dd",
+        reader_script=_READ_POD_FILE_WITH_DD,
+    ),
+)
 
 
 class KubectlPodAccess:
@@ -256,18 +302,28 @@ class KubectlPodAccess:
             container_name,
             *remote_parts,
         )
+        self._validate_download_target(destination)
+        adapter = self._select_pod_transfer_adapter(
+            pod_name=pod_name,
+            container_name=container_name,
+        )
         command = self._exec_command(
             pod_name=pod_name,
             container_name=container_name,
             remote_command=[
                 "sh",
                 "-c",
-                _READ_POD_FILE,
+                adapter.reader_script,
                 "ops-agent",
                 remote_path,
             ],
         )
-        return self._download(command, destination)
+        return self._download(
+            command,
+            destination,
+            transfer_backend=adapter.backend,
+            max_bytes=(self._settings.pod_transfer.max_file_size_mb * 1024 * 1024),
+        )
 
     def download_pvc_file(
         self,
@@ -370,10 +426,89 @@ class KubectlPodAccess:
             container_name=container_name,
             remote_path=remote_path,
         )
+        transfer = (
+            f"传输 {result.transfer_backend.value} · "
+            if result.transfer_backend is not None
+            else ""
+        )
         return (
             f"下载完成 · {result.size_bytes} bytes · "
-            f"SHA-256 {result.sha256} · {result.path}"
+            f"SHA-256 {result.sha256} · {transfer}{result.path}"
         )
+
+    def _select_pod_transfer_adapter(
+        self,
+        *,
+        pod_name: str,
+        container_name: str,
+    ) -> _PodTransferAdapter:
+        available_tools = self._probe_pod_transfer_tools(
+            pod_name=pod_name,
+            container_name=container_name,
+        )
+        strategy = self._settings.pod_transfer.strategy
+        candidates = (
+            _POD_TRANSFER_ADAPTERS
+            if strategy is PodTransferStrategy.AUTO
+            else tuple(
+                adapter
+                for adapter in _POD_TRANSFER_ADAPTERS
+                if adapter.backend.value == strategy.value
+            )
+        )
+        for adapter in candidates:
+            if adapter.required_tool in available_tools:
+                return adapter
+        required = (
+            "cat 或 dd"
+            if strategy is PodTransferStrategy.AUTO
+            else candidates[0].required_tool
+        )
+        raise PodAccessError(
+            f"Pod 文件下载不可用：容器缺少 {required}；当前策略 {strategy.value}"
+        )
+
+    def _probe_pod_transfer_tools(
+        self,
+        *,
+        pod_name: str,
+        container_name: str,
+    ) -> frozenset[str]:
+        command = self._exec_command(
+            pod_name=pod_name,
+            container_name=container_name,
+            remote_command=["sh", "-c", _PROBE_POD_TRANSFER],
+        )
+        try:
+            completed = subprocess.run(
+                command,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                env=self._kubectl_environment(),
+                check=False,
+                timeout=self._settings.request_timeout_seconds,
+            )
+        except OSError as error:
+            raise PodAccessError(f"无法探测 Pod 文件传输能力: {error}") from error
+        except subprocess.TimeoutExpired as error:
+            raise PodAccessError("探测 Pod 文件传输能力超时") from error
+        if completed.returncode:
+            message = completed.stderr.decode(
+                "utf-8",
+                errors="replace",
+            ).strip()
+            raise PodAccessError(
+                "无法探测 Pod 文件传输能力" + (f": {message}" if message else "")
+            )
+        return frozenset(completed.stdout.decode().splitlines())
+
+    @staticmethod
+    def _validate_download_target(target: _DownloadTarget) -> None:
+        with _open_scoped_directory(
+            target.root,
+            target.directory_parts,
+        ):
+            return
 
     def _cleanup_interactive_session(
         self,
@@ -412,6 +547,9 @@ class KubectlPodAccess:
         self,
         command: list[str],
         target: _DownloadTarget,
+        *,
+        transfer_backend: PodTransferBackend | None = None,
+        max_bytes: int | None = None,
     ) -> DownloadResult:
         try:
             with _open_scoped_directory(
@@ -433,6 +571,7 @@ class KubectlPodAccess:
                             command,
                             output,
                             environment=self._kubectl_environment(),
+                            max_bytes=max_bytes,
                         )
                     destination_name = _publish_without_overwrite(
                         directory_fd,
@@ -455,6 +594,7 @@ class KubectlPodAccess:
             path=destination,
             size_bytes=size_bytes,
             sha256=digest,
+            transfer_backend=transfer_backend,
         )
 
     def _destination(self, *parts: str) -> _DownloadTarget:
@@ -514,6 +654,7 @@ def _stream_process(
     output: BinaryIO,
     *,
     environment: dict[str, str],
+    max_bytes: int | None = None,
 ) -> tuple[int, str]:
     digest = hashlib.sha256()
     size_bytes = 0
@@ -531,6 +672,11 @@ def _stream_process(
         if process.stdout is None:
             raise PodAccessError("kubectl 未提供下载数据流")
         while chunk := process.stdout.read(1024 * 1024):
+            if max_bytes is not None and size_bytes + len(chunk) > max_bytes:
+                _stop_download_process(process)
+                raise PodAccessError(
+                    f"Pod 文件超过配置的下载上限 {max_bytes // (1024 * 1024)} MiB"
+                )
             output.write(chunk)
             digest.update(chunk)
             size_bytes += len(chunk)
@@ -543,6 +689,20 @@ def _stream_process(
                 + (f": {message}" if message else "")
             )
     return size_bytes, digest.hexdigest()
+
+
+def _stop_download_process(process: subprocess.Popen[bytes]) -> None:
+    try:
+        process.terminate()
+        process.wait(timeout=2)
+    except OSError:
+        return
+    except subprocess.TimeoutExpired:
+        try:
+            process.kill()
+            process.wait(timeout=2)
+        except OSError, subprocess.TimeoutExpired:
+            return
 
 
 def _publish_without_overwrite(

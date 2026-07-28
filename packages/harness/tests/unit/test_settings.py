@@ -55,6 +55,8 @@ def test_load_settings_from_toml(tmp_path: Path):
     assert settings.model.api_key_env == "DEEPSEEK_API_KEY"
     assert not settings.kubernetes.interactive_exec.enabled
     assert settings.kubernetes.downloads.directory == Path("~/Downloads/ops-agent")
+    assert settings.kubernetes.pod_transfer.strategy.value == "auto"
+    assert settings.kubernetes.pod_transfer.max_file_size_mb == 512
 
 
 def test_load_settings_parses_manual_pod_access_configuration(
@@ -86,6 +88,70 @@ def test_load_settings_parses_manual_pod_access_configuration(
 
     assert settings.kubernetes.interactive_exec.enabled
     assert settings.kubernetes.downloads.directory == Path("/tmp/ops-agent-downloads")
+
+
+def test_load_settings_parses_pod_transfer_configuration(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "test.toml"
+    config_path.write_text(
+        """
+        [kubernetes]
+        environment = "test"
+        namespace = "sample"
+        kubeconfig_path = "/tmp/ops_agent-kubeconfig"
+        request_timeout_seconds = 10
+
+        [kubernetes.pod_transfer]
+        strategy = "exec-dd"
+        max_file_size_mb = 64
+
+        [model]
+        provider = "openai"
+        model = "test-model"
+        """,
+        encoding="utf-8",
+    )
+
+    settings = load_settings(config_path)
+
+    assert settings.kubernetes.pod_transfer.strategy.value == "exec-dd"
+    assert settings.kubernetes.pod_transfer.max_file_size_mb == 64
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("strategy", '"unknown"'),
+        ("max_file_size_mb", "0"),
+    ],
+)
+def test_load_settings_rejects_invalid_pod_transfer_configuration(
+    tmp_path: Path,
+    field: str,
+    value: str,
+) -> None:
+    config_path = tmp_path / "invalid-pod-transfer.toml"
+    config_path.write_text(
+        f"""
+        [kubernetes]
+        environment = "test"
+        namespace = "sample"
+        kubeconfig_path = "/tmp/ops_agent-kubeconfig"
+        request_timeout_seconds = 10
+
+        [kubernetes.pod_transfer]
+        {field} = {value}
+
+        [model]
+        provider = "openai"
+        model = "test-model"
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SettingsError, match=field):
+        load_settings(config_path)
 
 
 def test_load_settings_parses_project_and_tui_preferences(tmp_path: Path) -> None:

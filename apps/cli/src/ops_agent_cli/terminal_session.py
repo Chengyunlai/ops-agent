@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import base64
-import binascii
 import errno
 import fcntl
 import json
@@ -15,7 +13,8 @@ import tty
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 
-_MAX_DOWNLOAD_FRAME_BYTES = 16 * 1024
+_MAX_DOWNLOAD_PATH_BYTES = 16 * 1024
+_MAX_DOWNLOAD_LENGTH_DIGITS = len(str(_MAX_DOWNLOAD_PATH_BYTES))
 
 
 class InteractiveTerminalError(Exception):
@@ -31,10 +30,24 @@ class _DownloadProtocol:
     def __init__(self, token: str) -> None:
         self._prefix = b"\x1b]777;ops-agent-download;" + token.encode("ascii") + b";"
         self._buffer = bytearray()
+        self._discard_bytes_remaining = 0
+        self._drop_until_finish = False
 
     def feed(self, chunk: bytes) -> Iterator[bytes | _DownloadRequest]:
+        if self._drop_until_finish:
+            return
         self._buffer.extend(chunk)
         while self._buffer:
+            if self._discard_bytes_remaining:
+                discarded = min(
+                    len(self._buffer),
+                    self._discard_bytes_remaining,
+                )
+                del self._buffer[:discarded]
+                self._discard_bytes_remaining -= discarded
+                if self._discard_bytes_remaining:
+                    return
+                continue
             marker_start = self._buffer.find(self._prefix)
             if marker_start < 0:
                 pending_length = _matching_prefix_suffix_length(
@@ -49,33 +62,58 @@ class _DownloadProtocol:
             if marker_start:
                 yield bytes(self._buffer[:marker_start])
                 del self._buffer[:marker_start]
-            marker_end = self._buffer.find(b"\x07", len(self._prefix))
-            if marker_end < 0:
-                if len(self._buffer) > len(self._prefix) + _MAX_DOWNLOAD_FRAME_BYTES:
-                    yield bytes(self._buffer[:1])
-                    del self._buffer[:1]
-                    continue
+            length_end = self._buffer.find(b";", len(self._prefix))
+            if length_end < 0:
+                length_payload = bytes(self._buffer[len(self._prefix) :])
+                if not length_payload or (
+                    length_payload.isdigit()
+                    and len(length_payload) <= _MAX_DOWNLOAD_LENGTH_DIGITS
+                ):
+                    return
+                self._buffer.clear()
+                self._drop_until_finish = True
+                yield b"\r\n[OPS AGENT] download request is invalid\r\n"
                 return
-            encoded_path = bytes(self._buffer[len(self._prefix) : marker_end])
-            del self._buffer[: marker_end + 1]
-            if len(encoded_path) > _MAX_DOWNLOAD_FRAME_BYTES:
+            length_payload = bytes(self._buffer[len(self._prefix) : length_end])
+            if (
+                not length_payload
+                or not length_payload.isdigit()
+                or len(length_payload) > _MAX_DOWNLOAD_LENGTH_DIGITS
+            ):
+                self._buffer.clear()
+                self._drop_until_finish = True
+                yield b"\r\n[OPS AGENT] download request is invalid\r\n"
+                return
+            path_length = int(length_payload)
+            if path_length > _MAX_DOWNLOAD_PATH_BYTES:
+                del self._buffer[: length_end + 1]
+                self._discard_bytes_remaining = path_length
                 yield b"\r\n[OPS AGENT] download request is too large\r\n"
                 continue
+            path_end = length_end + 1 + path_length
+            if len(self._buffer) < path_end:
+                return
+            path_payload = bytes(self._buffer[length_end + 1 : path_end])
+            del self._buffer[:path_end]
             try:
-                normalized_path = encoded_path.replace(b"\r", b"").replace(
-                    b"\n",
-                    b"",
-                )
-                remote_path = base64.b64decode(
-                    normalized_path,
-                    validate=True,
-                ).decode("utf-8")
-            except binascii.Error, UnicodeDecodeError:
+                remote_path = path_payload.decode("utf-8")
+            except UnicodeDecodeError:
+                yield b"\r\n[OPS AGENT] download request is invalid\r\n"
+                continue
+            if not remote_path or not remote_path.isprintable():
                 yield b"\r\n[OPS AGENT] download request is invalid\r\n"
                 continue
             yield _DownloadRequest(remote_path=remote_path)
 
     def finish(self) -> bytes:
+        if self._drop_until_finish or self._discard_bytes_remaining:
+            self._buffer.clear()
+            self._discard_bytes_remaining = 0
+            self._drop_until_finish = False
+            return b""
+        if self._buffer.startswith(self._prefix):
+            self._buffer.clear()
+            return b"\r\n[OPS AGENT] incomplete download request discarded\r\n"
         remainder = bytes(self._buffer)
         self._buffer.clear()
         return remainder

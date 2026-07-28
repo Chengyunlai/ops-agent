@@ -1,4 +1,3 @@
-import base64
 import os
 
 from ops_agent_cli.terminal_session import (
@@ -17,8 +16,9 @@ def test_terminal_download_protocol_handles_chunked_marker_without_displaying_it
         b"\x1b]777;ops-agent-download;"
         + token.encode()
         + b";"
-        + base64.b64encode(remote_path.encode())
-        + b"\x07"
+        + str(len(remote_path.encode())).encode()
+        + b";"
+        + remote_path.encode()
     )
     protocol = _DownloadProtocol(token)
     events: list[bytes | _DownloadRequest] = []
@@ -35,15 +35,16 @@ def test_terminal_download_protocol_handles_chunked_marker_without_displaying_it
     assert requests == [remote_path]
 
 
-def test_terminal_download_protocol_accepts_wrapped_base64() -> None:
+def test_terminal_download_protocol_accepts_utf8_path() -> None:
     token = "abc123"
-    remote_path = "/workspace/" + "nested/" * 20 + "report.log"
-    encoded_path = base64.b64encode(remote_path.encode())
-    wrapped_path = b"\n".join(
-        encoded_path[index : index + 76] for index in range(0, len(encoded_path), 76)
-    )
+    remote_path = "/workspace/报告/每日结果.log"
     marker = (
-        b"\x1b]777;ops-agent-download;" + token.encode() + b";" + wrapped_path + b"\x07"
+        b"\x1b]777;ops-agent-download;"
+        + token.encode()
+        + b";"
+        + str(len(remote_path.encode())).encode()
+        + b";"
+        + remote_path.encode()
     )
 
     events = list(_DownloadProtocol(token).feed(marker))
@@ -53,11 +54,7 @@ def test_terminal_download_protocol_accepts_wrapped_base64() -> None:
 
 def test_terminal_download_protocol_requires_session_token() -> None:
     protocol = _DownloadProtocol("expected")
-    foreign_marker = (
-        b"\x1b]777;ops-agent-download;foreign;"
-        + base64.b64encode(b"/etc/passwd")
-        + b"\x07"
-    )
+    foreign_marker = b"\x1b]777;ops-agent-download;foreign;11;/etc/passwd"
 
     visible = b"".join(
         [
@@ -150,10 +147,73 @@ def test_terminal_download_confirmation_escapes_del_and_c1_controls() -> None:
         os.close(output_write)
 
 
-def test_terminal_download_protocol_bounds_unterminated_request() -> None:
+def test_terminal_download_protocol_rejects_invalid_utf8() -> None:
+    protocol = _DownloadProtocol("expected")
+    marker = b"\x1b]777;ops-agent-download;expected;2;\xff\xfeafter"
+
+    events = list(protocol.feed(marker))
+
+    assert events == [
+        b"\r\n[OPS AGENT] download request is invalid\r\n",
+        b"after",
+    ]
+
+
+def test_terminal_download_protocol_rejects_control_characters() -> None:
+    protocol = _DownloadProtocol("expected")
+    path = b"/workspace/real\x07fake.log"
+    marker = (
+        b"\x1b]777;ops-agent-download;expected;"
+        + str(len(path)).encode()
+        + b";"
+        + path
+        + b"after"
+    )
+
+    events = list(protocol.feed(marker))
+
+    assert events == [
+        b"\r\n[OPS AGENT] download request is invalid\r\n",
+        b"after",
+    ]
+
+
+def test_terminal_download_protocol_rejects_oversized_declared_path() -> None:
+    protocol = _DownloadProtocol("expected")
+    path = b"\x1b]52;c;forged\x07" + b"x" * (16385 - 14)
+    header = b"\x1b]777;ops-agent-download;expected;16385;"
+
+    events = [
+        *protocol.feed(header + path[:100]),
+        *protocol.feed(path[100:] + b"safe prompt"),
+    ]
+
+    assert events == [
+        b"\r\n[OPS AGENT] download request is too large\r\n",
+        b"safe prompt",
+    ]
+    assert protocol.finish() == b""
+
+
+def test_terminal_download_protocol_does_not_replay_truncated_frame() -> None:
+    protocol = _DownloadProtocol("expected")
+    truncated = (
+        b"\x1b]777;ops-agent-download;expected;100;"
+        b"/workspace/report\x1b]52;c;forged\x07"
+    )
+
+    events = list(protocol.feed(truncated))
+    remainder = protocol.finish()
+
+    assert events == []
+    assert remainder == (b"\r\n[OPS AGENT] incomplete download request discarded\r\n")
+    assert b"\x1b]52" not in remainder
+
+
+def test_terminal_download_protocol_bounds_unterminated_length_header() -> None:
     token = "expected"
     protocol = _DownloadProtocol(token)
-    forged = b"\x1b]777;ops-agent-download;expected;" + b"a" * (17 * 1024)
+    forged = b"\x1b]777;ops-agent-download;expected;" + b"1" * 32
 
     visible = b"".join(
         event
@@ -161,4 +221,4 @@ def test_terminal_download_protocol_bounds_unterminated_request() -> None:
         if isinstance(event, bytes)
     )
 
-    assert visible == forged
+    assert visible == b"\r\n[OPS AGENT] download request is invalid\r\n"

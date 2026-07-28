@@ -54,3 +54,10 @@ A user-initiated, read-only transfer from a Pod or mounted PVC into a configured
 local download root. It may be requested from an Interactive Pod Session, but
 the host performs the transfer outside the remote Shell command stream.
 _Avoid_: Shell download, Agent export, remote copy
+
+**Pod Transfer Strategy**:
+A validated host policy that probes a selected container and chooses a
+supported read-only transfer adapter. Runtime callers and the Agent do not
+probe container tools or depend on adapter details; Settings may expose the
+validated strategy names for operator diagnostics.
+_Avoid_: Shell fallback, model-selected transport

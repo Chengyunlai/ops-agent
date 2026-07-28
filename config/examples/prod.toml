@@ -13,6 +13,10 @@ enabled = false
 [kubernetes.downloads]
 directory = "~/Downloads/ops-agent"
 
+[kubernetes.pod_transfer]
+strategy = "auto"
+max_file_size_mb = 512
+
 [model]
 provider = "openai"
 model = "deepseek-v4-pro"
