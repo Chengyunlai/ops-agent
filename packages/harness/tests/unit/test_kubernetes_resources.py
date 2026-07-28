@@ -1,6 +1,9 @@
+import subprocess
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 
+from kubernetes.client.exceptions import ApiException
 from ops_agent.kubernetes import (
     ContainerSummary,
     CronJobSummary,
@@ -12,6 +15,7 @@ from ops_agent.kubernetes import (
     KubernetesReader,
     KubernetesResourceKind,
     PersistentVolumeClaimSummary,
+    PersistentVolumeMountSummary,
     PodDetails,
     ReplicaSetSummary,
     ServicePortSummary,
@@ -21,8 +25,9 @@ from ops_agent.kubernetes import (
 
 
 class FakeCoreV1Api:
-    def __init__(self) -> None:
+    def __init__(self, *, mount_path: str = "/var/lib/mysql") -> None:
         self.calls: list[tuple[str, dict[str, object]]] = []
+        self.mount_path = mount_path
 
     def read_namespaced_pod(self, **kwargs):
         self.calls.append(("read_namespaced_pod", kwargs))
@@ -141,6 +146,74 @@ class FakeCoreV1Api:
                     ),
                 )
             ]
+        )
+
+    def list_namespaced_pod(self, **kwargs):
+        self.calls.append(("list_namespaced_pod", kwargs))
+        return SimpleNamespace(
+            items=[
+                SimpleNamespace(
+                    metadata=SimpleNamespace(name="mysql-0"),
+                    spec=SimpleNamespace(
+                        volumes=[
+                            SimpleNamespace(
+                                name="data",
+                                persistent_volume_claim=SimpleNamespace(
+                                    claim_name="mysql-data"
+                                ),
+                            )
+                        ],
+                        containers=[
+                            SimpleNamespace(
+                                name="mysql",
+                                volume_mounts=[
+                                    SimpleNamespace(
+                                        name="data",
+                                        mount_path=self.mount_path,
+                                        read_only=False,
+                                    )
+                                ],
+                            )
+                        ],
+                        init_containers=[
+                            SimpleNamespace(
+                                name="ensure-dir-ownership",
+                                volume_mounts=[
+                                    SimpleNamespace(
+                                        name="data",
+                                        mount_path=self.mount_path,
+                                        read_only=False,
+                                    )
+                                ],
+                            )
+                        ],
+                    ),
+                    status=SimpleNamespace(
+                        phase="Running",
+                        container_statuses=[
+                            SimpleNamespace(
+                                name="mysql",
+                                state=SimpleNamespace(running=SimpleNamespace()),
+                            )
+                        ],
+                    ),
+                )
+            ]
+        )
+
+    def read_persistent_volume(self, **kwargs):
+        self.calls.append(("read_persistent_volume", kwargs))
+        return SimpleNamespace(
+            spec=SimpleNamespace(
+                csi=SimpleNamespace(
+                    driver="disk.csi.example.com",
+                    volume_handle="disk-123",
+                ),
+                nfs=None,
+                local=None,
+                host_path=None,
+                persistent_volume_reclaim_policy="Retain",
+            )
         )
 
 
@@ -532,5 +605,232 @@ def test_list_batch_network_and_storage_resources() -> None:
             capacity="10Gi",
             access_modes=("ReadWriteOnce",),
             storage_class="local-path",
+            backend="CSI/disk.csi.example.com",
+            reclaim_policy="Retain",
+            mounts=(
+                PersistentVolumeMountSummary(
+                    claim_name="mysql-data",
+                    pod_name="mysql-0",
+                    pod_phase="Running",
+                    container_name="mysql",
+                    mount_path="/var/lib/mysql",
+                    read_only=False,
+                    container_running=True,
+                ),
+            ),
         )
     ]
+
+
+def test_browse_pvc_uses_running_mount_and_parses_safe_records() -> None:
+    commands: list[dict[str, object]] = []
+
+    def execute(**kwargs) -> str:
+        commands.append(kwargs)
+        return "O\0d\0backups\0-\0f\0ibdata1\0 1024\0l\0latest\0-\0"
+
+    core_api = FakeCoreV1Api()
+    reader = KubernetesReader(
+        core_api=core_api,
+        apps_api=FakeAppsV1Api(),
+        request_timeout_seconds=7,
+        pod_executor=execute,
+    )
+
+    directory = reader.browse_persistent_volume_claim(
+        "sample",
+        "mysql-data",
+        path=".",
+    )
+
+    assert directory.claim_name == "mysql-data"
+    assert directory.path == "."
+    assert directory.target.pod_name == "mysql-0"
+    assert directory.target.container_name == "mysql"
+    assert directory.target.mount_path == "/var/lib/mysql"
+    assert [
+        (entry.name, entry.kind, entry.size_bytes) for entry in directory.entries
+    ] == [
+        ("backups", "directory", None),
+        ("ibdata1", "file", 1024),
+        ("latest", "symlink", None),
+    ]
+    assert commands[0]["name"] == "mysql-0"
+    assert commands[0]["container"] == "mysql"
+    assert commands[0]["command"][-2:] == ["/var/lib/mysql", "."]
+
+
+def test_browse_pvc_rejects_path_escape_before_exec() -> None:
+    executed = False
+
+    def execute(**kwargs) -> str:
+        nonlocal executed
+        executed = True
+        return ""
+
+    reader = KubernetesReader(
+        core_api=FakeCoreV1Api(),
+        apps_api=FakeAppsV1Api(),
+        request_timeout_seconds=7,
+        pod_executor=execute,
+    )
+
+    try:
+        reader.browse_persistent_volume_claim(
+            "sample",
+            "mysql-data",
+            path="../etc",
+        )
+    except Exception as error:  # noqa: BLE001 - assert public error message
+        assert "挂载根目录" in str(error)
+    else:
+        raise AssertionError("path escape should be rejected")
+    assert not executed
+
+
+def test_preview_pvc_file_is_bounded_and_reports_truncation() -> None:
+    def execute(**kwargs) -> str:
+        return "O\x001\x00hello from pvc"
+
+    reader = KubernetesReader(
+        core_api=FakeCoreV1Api(),
+        apps_api=FakeAppsV1Api(),
+        request_timeout_seconds=7,
+        pod_executor=execute,
+    )
+
+    preview = reader.preview_persistent_volume_claim_file(
+        "sample",
+        "mysql-data",
+        path="logs/app.log",
+        max_bytes=1024,
+    )
+
+    assert preview.path == "logs/app.log"
+    assert preview.content == "hello from pvc"
+    assert preview.truncated
+
+
+def test_storage_scripts_bound_reads_and_reject_symlink_paths(tmp_path: Path) -> None:
+    documents = tmp_path / "documents"
+    documents.mkdir()
+    text_file = documents / "readme.txt"
+    text_file.write_text("hello from pvc", encoding="utf-8")
+    (tmp_path / "escape").symlink_to(tmp_path.parent, target_is_directory=True)
+
+    def execute(**kwargs):
+        result = subprocess.run(
+            kwargs["command"],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        return result.stdout
+
+    reader = KubernetesReader(
+        core_api=FakeCoreV1Api(mount_path=str(tmp_path)),
+        apps_api=FakeAppsV1Api(),
+        request_timeout_seconds=7,
+        pod_executor=execute,
+    )
+
+    directory = reader.browse_persistent_volume_claim(
+        "sample",
+        "mysql-data",
+        path=".",
+    )
+    entries = {entry.name: entry for entry in directory.entries}
+    assert entries["documents"].kind == "directory"
+    assert entries["escape"].kind == "symlink"
+
+    preview = reader.preview_persistent_volume_claim_file(
+        "sample",
+        "mysql-data",
+        path="documents/readme.txt",
+        max_bytes=5,
+    )
+    assert preview.content == "hello"
+    assert preview.truncated
+
+    try:
+        reader.browse_persistent_volume_claim(
+            "sample",
+            "mysql-data",
+            path="escape",
+        )
+    except Exception as error:  # noqa: BLE001 - assert public error message
+        assert "符号链接" in str(error)
+    else:
+        raise AssertionError("symlink directory should be rejected")
+
+
+def test_storage_topology_preserves_pod_and_pv_permission_errors() -> None:
+    class ForbiddenCoreV1Api(FakeCoreV1Api):
+        def list_namespaced_pod(self, **kwargs):
+            raise ApiException(status=403, reason="pods is forbidden")
+
+        def read_persistent_volume(self, **kwargs):
+            raise ApiException(status=403, reason="persistentvolumes is forbidden")
+
+    reader = KubernetesReader(
+        core_api=ForbiddenCoreV1Api(),
+        apps_api=FakeAppsV1Api(),
+        request_timeout_seconds=7,
+    )
+
+    claim = reader.list_persistent_volume_claims("sample")[0]
+
+    assert "pods is forbidden" in claim.mounts_error
+    assert "persistentvolumes is forbidden" in claim.backend_error
+    assert claim.mounts == ()
+    assert claim.backend == "Unavailable"
+
+
+def test_browse_pvc_retries_another_running_container() -> None:
+    class MultipleTargetsCoreV1Api(FakeCoreV1Api):
+        def list_namespaced_pod(self, **kwargs):
+            response = super().list_namespaced_pod(**kwargs)
+            pod = response.items[0]
+            pod.spec.containers.append(
+                SimpleNamespace(
+                    name="aaa-broken",
+                    volume_mounts=[
+                        SimpleNamespace(
+                            name="data",
+                            mount_path=self.mount_path,
+                            read_only=True,
+                        )
+                    ],
+                )
+            )
+            pod.status.container_statuses.append(
+                SimpleNamespace(
+                    name="aaa-broken",
+                    state=SimpleNamespace(running=SimpleNamespace()),
+                )
+            )
+            return response
+
+    attempted: list[str] = []
+
+    def execute(**kwargs) -> str:
+        attempted.append(kwargs["container"])
+        if kwargs["container"] == "aaa-broken":
+            return "E\0container has no Python\0"
+        return "O\x00f\x00data.txt\x005\x00"
+
+    reader = KubernetesReader(
+        core_api=MultipleTargetsCoreV1Api(),
+        apps_api=FakeAppsV1Api(),
+        request_timeout_seconds=7,
+        pod_executor=execute,
+    )
+
+    directory = reader.browse_persistent_volume_claim(
+        "sample",
+        "mysql-data",
+        path=".",
+    )
+
+    assert attempted == ["aaa-broken", "mysql"]
+    assert directory.target.container_name == "mysql"

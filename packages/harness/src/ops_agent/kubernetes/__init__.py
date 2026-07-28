@@ -1,3 +1,4 @@
+from ops_agent.kubernetes.errors import KubernetesError
 from ops_agent.kubernetes.models import (
     ContainerSummary,
     CronJobSummary,
@@ -8,18 +9,19 @@ from ops_agent.kubernetes.models import (
     KubernetesEventSummary,
     KubernetesResourceKind,
     PersistentVolumeClaimSummary,
+    PersistentVolumeMountSummary,
     PodDetails,
     PodSummary,
     ReplicaSetSummary,
     ServicePortSummary,
     ServiceSummary,
     StatefulSetSummary,
+    VolumeDirectory,
+    VolumeEntry,
+    VolumeEntryKind,
+    VolumeFilePreview,
 )
-from ops_agent.kubernetes.reader import (
-    KubernetesError,
-    KubernetesReader,
-    create_kubernetes_reader,
-)
+from ops_agent.kubernetes.reader import KubernetesReader, create_kubernetes_reader
 
 __all__ = [
     "ContainerSummary",
@@ -33,11 +35,16 @@ __all__ = [
     "KubernetesReader",
     "KubernetesResourceKind",
     "PersistentVolumeClaimSummary",
+    "PersistentVolumeMountSummary",
     "PodDetails",
     "PodSummary",
     "ReplicaSetSummary",
     "ServicePortSummary",
     "ServiceSummary",
     "StatefulSetSummary",
+    "VolumeDirectory",
+    "VolumeEntry",
+    "VolumeEntryKind",
+    "VolumeFilePreview",
     "create_kubernetes_reader",
 ]

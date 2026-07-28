@@ -13,8 +13,10 @@ from kubernetes.client import (
 )
 from kubernetes.client.exceptions import ApiException
 from kubernetes.config.config_exception import ConfigException
+from kubernetes.stream import stream as kubernetes_stream
 from urllib3.exceptions import HTTPError
 
+from ops_agent.kubernetes.errors import KubernetesError
 from ops_agent.kubernetes.models import (
     ContainerSummary,
     CronJobSummary,
@@ -31,13 +33,11 @@ from ops_agent.kubernetes.models import (
     ServicePortSummary,
     ServiceSummary,
     StatefulSetSummary,
+    VolumeDirectory,
+    VolumeFilePreview,
 )
+from ops_agent.kubernetes.storage import KubernetesStorageReader
 from ops_agent.settings import KubernetesSettings
-
-
-class KubernetesError(Exception):
-    """Kubernetes 配置或查询失败。"""
-
 
 Result = TypeVar("Result")
 
@@ -50,12 +50,18 @@ class KubernetesReader:
         request_timeout_seconds: int,
         batch_api: BatchV1Api | None = None,
         networking_api: NetworkingV1Api | None = None,
+        pod_executor: Callable[..., str] | None = None,
     ) -> None:
         self._core_api = core_api
         self._apps_api = apps_api
         self._batch_api = batch_api
         self._networking_api = networking_api
         self._request_timeout_seconds = request_timeout_seconds
+        self._storage = KubernetesStorageReader(
+            core_api=core_api,
+            request_timeout_seconds=request_timeout_seconds,
+            pod_executor=pod_executor,
+        )
 
     def list_pods(self, namespace: str) -> list[PodSummary]:
         response = self._request(
@@ -285,14 +291,35 @@ class KubernetesReader:
         self,
         namespace: str,
     ) -> list[PersistentVolumeClaimSummary]:
-        response = self._request(
-            f"查询 namespace '{namespace}' 的 PersistentVolumeClaim 失败",
-            lambda: self._core_api.list_namespaced_persistent_volume_claim(
-                namespace=namespace,
-                _request_timeout=self._request_timeout_seconds,
-            ),
+        return self._storage.list_claims(namespace)
+
+    def browse_persistent_volume_claim(
+        self,
+        namespace: str,
+        claim_name: str,
+        *,
+        path: str,
+    ) -> VolumeDirectory:
+        return self._storage.browse(
+            namespace,
+            claim_name,
+            path=path,
         )
-        return [_to_pvc_summary(claim) for claim in response.items]
+
+    def preview_persistent_volume_claim_file(
+        self,
+        namespace: str,
+        claim_name: str,
+        *,
+        path: str,
+        max_bytes: int,
+    ) -> VolumeFilePreview:
+        return self._storage.preview(
+            namespace,
+            claim_name,
+            path=path,
+            max_bytes=max_bytes,
+        )
 
     def describe_resource(
         self,
@@ -403,12 +430,21 @@ def create_kubernetes_reader(
         raise KubernetesError(
             f"无法加载 kubeconfig: {settings.kubeconfig_path}"
         ) from error
+    core_api = CoreV1Api(api_client)
+
+    def execute_pod_command(**kwargs) -> str:
+        return kubernetes_stream(
+            core_api.connect_get_namespaced_pod_exec,
+            **kwargs,
+        )
+
     return KubernetesReader(
-        core_api=CoreV1Api(api_client),
+        core_api=core_api,
         apps_api=AppsV1Api(api_client),
         batch_api=BatchV1Api(api_client),
         networking_api=NetworkingV1Api(api_client),
         request_timeout_seconds=settings.request_timeout_seconds,
+        pod_executor=execute_pod_command,
     )
 
 
@@ -518,18 +554,6 @@ def _to_ingress_summary(ingress) -> IngressSummary:
             rule.host for rule in (ingress.spec.rules or []) if rule.host is not None
         ),
         addresses=addresses,
-    )
-
-
-def _to_pvc_summary(claim) -> PersistentVolumeClaimSummary:
-    capacity = claim.status.capacity or {}
-    return PersistentVolumeClaimSummary(
-        name=claim.metadata.name,
-        phase=claim.status.phase,
-        volume_name=claim.spec.volume_name,
-        capacity=capacity.get("storage"),
-        access_modes=tuple(claim.status.access_modes or claim.spec.access_modes or []),
-        storage_class=claim.spec.storage_class_name,
     )
 
 

@@ -10,13 +10,19 @@ from ops_agent.agent import (
     CapabilityScope,
     InteractionChannel,
 )
-from ops_agent.kubernetes import KubernetesResourceKind
+from ops_agent.kubernetes import (
+    KubernetesResourceKind,
+    PersistentVolumeMountSummary,
+)
 from ops_agent.monitoring import (
     KubernetesMonitorSnapshot,
     KubernetesResourceCollection,
     KubernetesResourceContent,
     KubernetesResourceRef,
     KubernetesResourceRow,
+    VolumeDirectory,
+    VolumeEntry,
+    VolumeEntryKind,
 )
 from ops_agent.settings import (
     KubernetesSettings,
@@ -95,6 +101,62 @@ class FakeMonitor:
         return KubernetesResourceContent(
             title=f"Logs · Pod/{resource.name} · last {tail_lines} lines",
             content="2026-07-27T10:30:00Z server started",
+        )
+
+    def browse_pvc(
+        self,
+        resource: KubernetesResourceRef,
+        *,
+        path: str = ".",
+    ) -> VolumeDirectory:
+        self.content_calls.append(("browse_pvc", (resource, path)))
+        entries = (
+            (
+                VolumeEntry(
+                    name="backups",
+                    kind=VolumeEntryKind.DIRECTORY,
+                    size_bytes=None,
+                ),
+                VolumeEntry(
+                    name="README.txt",
+                    kind=VolumeEntryKind.FILE,
+                    size_bytes=128,
+                ),
+            )
+            if path == "."
+            else (
+                VolumeEntry(
+                    name="daily.sql",
+                    kind=VolumeEntryKind.FILE,
+                    size_bytes=2048,
+                ),
+            )
+        )
+        return VolumeDirectory(
+            claim_name=resource.name,
+            path=path,
+            target=PersistentVolumeMountSummary(
+                claim_name=resource.name,
+                pod_name="mysql-0",
+                pod_phase="Running",
+                container_name="mysql",
+                mount_path="/var/lib/mysql",
+                read_only=False,
+            ),
+            entries=entries,
+        )
+
+    def preview_pvc_file(
+        self,
+        resource: KubernetesResourceRef,
+        *,
+        path: str,
+        max_bytes: int = 64 * 1024,
+    ) -> KubernetesResourceContent:
+        self.content_calls.append(("preview_pvc", (resource, path, max_bytes)))
+        return KubernetesResourceContent(
+            title=f"PVC/{resource.name} · {path}",
+            content="backup contents",
         )
 
 
@@ -192,9 +254,27 @@ def create_monitor_snapshot() -> KubernetesMonitorSnapshot:
             collection(
                 KubernetesResourceKind.PERSISTENT_VOLUME_CLAIM,
                 "PVCs",
-                None,
-                ("NAME",),
-                None,
+                "7",
+                (
+                    "NAME",
+                    "STATUS",
+                    "VOLUME",
+                    "CAPACITY",
+                    "STORAGECLASS",
+                    "BACKEND",
+                    "MOUNTED BY",
+                    "MOUNT PATHS",
+                ),
+                (
+                    "mysql-data",
+                    "Bound",
+                    "pvc-123",
+                    "10Gi",
+                    "fast",
+                    "CSI/disk.example.com",
+                    "mysql-0/mysql",
+                    "/var/lib/mysql (rw)",
+                ),
             ),
         ),
     )
@@ -563,7 +643,7 @@ def test_tui_overview_names_every_monitored_resource_type() -> None:
             ]
             assert [
                 table.get_cell_at(Coordinate(row, 1)) for row in range(table.row_count)
-            ] == ["1", "1", "1", "1", "1", "1", "0", "0", "0", "0"]
+            ] == ["1", "1", "1", "1", "1", "1", "0", "0", "0", "1"]
             title = str(app.query_one("#monitor-title", Static).content)
             assert "Namespace sample" in title
             assert "Overview" in title
@@ -619,6 +699,49 @@ def test_tui_opens_describe_and_pod_logs_for_selected_resource() -> None:
                     ),
                 ),
             ]
+
+    asyncio.run(exercise())
+
+
+def test_tui_browses_pvc_directories_and_previews_files() -> None:
+    async def exercise() -> None:
+        monitor = FakeMonitor()
+        app = create_tui(FakeAgent(answer="unused"), monitor=monitor)
+
+        async with app.run_test(size=(140, 34)) as pilot:
+            await app.workers.wait_for_complete()
+            await pilot.press("ctrl+k", "7", "enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            assert "PVC/mysql-data" in str(
+                app.screen.query_one("#volume-browser-title", Static).content
+            )
+            assert "mysql-0" in str(
+                app.screen.query_one("#volume-browser-target", Static).content
+            )
+            table = app.screen.query_one("#volume-browser-table", DataTable)
+            assert table.row_count == 2
+            assert str(table.get_cell_at(Coordinate(0, 0))) == "backups"
+
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            assert "backups" in str(
+                app.screen.query_one("#volume-browser-path", Static).content
+            )
+
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            assert "PVC/mysql-data · backups/daily.sql" in str(
+                app.screen.query_one("#resource-title", Static).content
+            )
+            assert "backup contents" in "\n".join(
+                line.text
+                for line in app.screen.query_one(
+                    "#resource-content",
+                    RichLog,
+                ).lines
+            )
 
     asyncio.run(exercise())
 
@@ -977,7 +1100,7 @@ def test_tui_monitor_failure_can_recover_with_manual_refresh() -> None:
             await app.workers.wait_for_complete()
 
             assert monitor.calls == 2
-            assert "Overview · 6 resources" in str(
+            assert "Overview · 7 resources" in str(
                 app.query_one("#monitor-title", Static).content
             )
             assert app.query_one("#monitor-table", DataTable).row_count == 10

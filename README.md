@@ -23,6 +23,7 @@
 | 配置错误处理 | 已完成 | 识别文件缺失、TOML 格式错误、区块、字段缺失或未知字段 |
 | 不可变配置模型 | 已完成 | 使用冻结的 Pydantic 模型声明类型、别名和字段约束 |
 | Kubernetes 只读查询 | 已完成 | 查询常用工作负载、网络入口、PVC、Pod 详情/日志和关联 Event |
+| PVC 存储浏览 | 已完成 | 展示 PVC/PV/StorageClass/后端/挂载关系，并经现有 Pod 只读浏览目录和预览文本文件 |
 | Kubernetes 基础诊断 | 已完成 | Agent 可调用确定性规则识别 Pod 阶段/就绪异常和 Deployment 副本不足 |
 | 告警接入与诊断 | 规划中 | 接入告警并生成带证据的诊断报告 |
 | 审批与处置执行 | 规划中 | 执行扩缩容、重启、回滚等受控动作 |
@@ -190,10 +191,26 @@ DaemonSet、Service、ReplicaSet、Job、CronJob、Ingress 和 PVC 的数量与
 上下布局。每类资源独立查询，单类 API 或 RBAC 失败会在该行显示
 `Unavailable`，不会让 Pod、Service 等其他目录一起消失。
 
-`Ctrl+K` 聚焦左侧监盘，`0` 返回 Overview，`1`～`6` 切换具体资源；
+`Ctrl+K` 聚焦左侧监盘，`0` 返回 Overview，`1`～`7` 切换具体资源；
 Overview 中可用方向键和 `Enter` 进入任意资源类型。选中资源后按
 `Enter`/`d` 读取对象详情与关联 Event；Pod 上按 `l` 读取每个容器最近
-200 行日志。TUI 启用鼠标以支持点击聚焦；复制终端内容时点击顶部“复制”
+200 行日志。
+
+`7` 进入 Storage/PVC 视图，表格展示 PVC、PV、容量、StorageClass、NFS/CSI
+等后端类型，以及实际挂载它的 Pod、容器和 `mountPath`。选中 PVC 后按
+`Enter` 或 `f` 打开只读目录浏览器；目录中 `Enter` 进入子目录或预览普通
+文本文件，`Backspace` 返回上级目录，`r` 刷新。文件预览最多读取 64 KiB，
+读取时使用逐级 `O_NOFOLLOW` 文件描述符约束，不跟随符号链接，也拒绝绝对
+路径和 `..` 路径；当前不会创建辅助 Pod，也不会新增、修改、移动或删除卷内
+文件。
+
+目录浏览要求 PVC 已挂载到 Running 容器，目标容器包含 POSIX `sh` 和
+Python 3。kubeconfig/RBAC 至少需要读取 namespace 内 Pod/PVC、读取集群级
+PV，并允许连接 `pods/exec` 子资源（不同集群可能要求 `get`/`create`）。
+PVC 未挂载、容器为 distroless、Python 缺失或权限不足时，界面会显示明确
+错误，并尝试同一 PVC 的其他 Running 挂载目标；不会创建临时工作负载。
+
+TUI 启用鼠标以支持点击聚焦；复制终端内容时点击顶部“复制”
 （`F2` 也可作为备用快捷键）进入复制模式，应用会释放终端鼠标，此时可以
 直接拖选任意内容并使用终端复制快捷键；复制完成后按 `Esc` 恢复仪表盘
 鼠标控制。

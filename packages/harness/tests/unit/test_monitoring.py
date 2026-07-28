@@ -6,11 +6,16 @@ from ops_agent.kubernetes import (
     IngressSummary,
     JobSummary,
     PersistentVolumeClaimSummary,
+    PersistentVolumeMountSummary,
     PodSummary,
     ReplicaSetSummary,
     ServicePortSummary,
     ServiceSummary,
     StatefulSetSummary,
+    VolumeDirectory,
+    VolumeEntry,
+    VolumeEntryKind,
+    VolumeFilePreview,
 )
 from ops_agent.monitoring import (
     KubernetesMonitor,
@@ -119,7 +124,28 @@ class FakeKubernetesSource:
         namespace: str,
     ) -> list[PersistentVolumeClaimSummary]:
         self.calls.append(("persistent_volume_claims", namespace))
-        return []
+        return [
+            PersistentVolumeClaimSummary(
+                name="mysql-data",
+                phase="Bound",
+                volume_name="pvc-123",
+                capacity="10Gi",
+                access_modes=("ReadWriteOnce",),
+                storage_class="fast",
+                backend="CSI/disk.example.com",
+                reclaim_policy="Retain",
+                mounts=(
+                    PersistentVolumeMountSummary(
+                        claim_name="mysql-data",
+                        pod_name="mysql-0",
+                        pod_phase="Running",
+                        container_name="mysql",
+                        mount_path="/var/lib/mysql",
+                        read_only=False,
+                    ),
+                ),
+            )
+        ]
 
     def describe_resource(
         self,
@@ -164,6 +190,46 @@ class FakeKubernetesSource:
             raise RuntimeError(f"{container} logs forbidden")
         return f"{container} server started"
 
+    def browse_persistent_volume_claim(
+        self,
+        namespace: str,
+        claim_name: str,
+        *,
+        path: str,
+    ) -> VolumeDirectory:
+        self.calls.append(("browse_pvc", f"{namespace}/{claim_name}/{path}"))
+        target = self.list_persistent_volume_claims(namespace)[0].mounts[0]
+        return VolumeDirectory(
+            claim_name=claim_name,
+            path=path,
+            target=target,
+            entries=(
+                VolumeEntry(
+                    name="backups",
+                    kind=VolumeEntryKind.DIRECTORY,
+                    size_bytes=None,
+                ),
+            ),
+        )
+
+    def preview_persistent_volume_claim_file(
+        self,
+        namespace: str,
+        claim_name: str,
+        *,
+        path: str,
+        max_bytes: int,
+    ) -> VolumeFilePreview:
+        self.calls.append(("preview_pvc", f"{namespace}/{claim_name}/{path}"))
+        target = self.list_persistent_volume_claims(namespace)[0].mounts[0]
+        return VolumeFilePreview(
+            claim_name=claim_name,
+            path=path,
+            target=target,
+            content="backup complete",
+            truncated=False,
+        )
+
 
 def test_monitor_captures_fixed_namespace_snapshot() -> None:
     source = FakeKubernetesSource()
@@ -191,6 +257,20 @@ def test_monitor_captures_fixed_namespace_snapshot() -> None:
     service_collection = snapshot.collection(KubernetesResourceKind.SERVICE)
     assert service_collection.rows[0].values[2] == "10.43.0.10"
     assert service_collection.rows[0].healthy is None
+    storage_collection = snapshot.collection(
+        KubernetesResourceKind.PERSISTENT_VOLUME_CLAIM
+    )
+    assert storage_collection.shortcut == "7"
+    assert storage_collection.rows[0].values == (
+        "mysql-data",
+        "Bound",
+        "pvc-123",
+        "10Gi",
+        "fast",
+        "CSI/disk.example.com",
+        "mysql-0/mysql",
+        "/var/lib/mysql (rw)",
+    )
     assert snapshot.observed_at.tzinfo is not None
     assert source.calls == [
         ("pods", "sample"),
@@ -204,6 +284,59 @@ def test_monitor_captures_fixed_namespace_snapshot() -> None:
         ("ingresses", "sample"),
         ("persistent_volume_claims", "sample"),
     ]
+
+
+def test_monitor_browses_and_previews_pvc_without_exposing_namespace() -> None:
+    source = FakeKubernetesSource()
+    monitor = KubernetesMonitor(source, namespace="sample")
+    resource = KubernetesResourceRef(
+        kind=KubernetesResourceKind.PERSISTENT_VOLUME_CLAIM,
+        name="mysql-data",
+    )
+
+    directory = monitor.browse_pvc(resource, path="backups")
+    preview = monitor.preview_pvc_file(
+        resource,
+        path="backups/latest.txt",
+    )
+
+    assert directory.entries[0].name == "backups"
+    assert preview.title == "PVC/mysql-data · backups/latest.txt"
+    assert "backup complete" in preview.content
+    assert ("browse_pvc", "sample/mysql-data/backups") in source.calls
+    assert ("preview_pvc", "sample/mysql-data/backups/latest.txt") in source.calls
+
+
+def test_monitor_exposes_storage_permission_errors_in_topology_rows() -> None:
+    class ForbiddenStorageSource(FakeKubernetesSource):
+        def list_persistent_volume_claims(
+            self,
+            namespace: str,
+        ) -> list[PersistentVolumeClaimSummary]:
+            self.calls.append(("persistent_volume_claims", namespace))
+            return [
+                PersistentVolumeClaimSummary(
+                    name="mysql-data",
+                    phase="Bound",
+                    volume_name="pvc-123",
+                    capacity="10Gi",
+                    access_modes=("ReadWriteOnce",),
+                    storage_class="fast",
+                    backend="Unavailable",
+                    backend_error="persistentvolumes is forbidden",
+                    mounts_error="pods is forbidden",
+                )
+            ]
+
+    snapshot = KubernetesMonitor(
+        ForbiddenStorageSource(),
+        namespace="sample",
+    ).snapshot()
+    row = snapshot.collection(KubernetesResourceKind.PERSISTENT_VOLUME_CLAIM).rows[0]
+
+    assert row.values[5] == "Unavailable: persistentvolumes is forbidden"
+    assert row.values[6] == "Unavailable: pods is forbidden"
+    assert row.values[7] == "-"
 
 
 def test_monitor_reads_selected_resource_without_exposing_namespace() -> None:

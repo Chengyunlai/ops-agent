@@ -115,6 +115,17 @@ class IngressSummary:
 
 
 @dataclass(frozen=True)
+class PersistentVolumeMountSummary:
+    claim_name: str
+    pod_name: str
+    pod_phase: str
+    container_name: str
+    mount_path: str
+    read_only: bool
+    container_running: bool = False
+
+
+@dataclass(frozen=True)
 class PersistentVolumeClaimSummary:
     name: str
     phase: str
@@ -122,6 +133,42 @@ class PersistentVolumeClaimSummary:
     capacity: str | None
     access_modes: tuple[str, ...]
     storage_class: str | None
+    backend: str | None = None
+    backend_error: str | None = None
+    reclaim_policy: str | None = None
+    mounts: tuple[PersistentVolumeMountSummary, ...] = ()
+    mounts_error: str | None = None
+
+
+class VolumeEntryKind(StrEnum):
+    DIRECTORY = "directory"
+    FILE = "file"
+    SYMLINK = "symlink"
+    OTHER = "other"
+
+
+@dataclass(frozen=True)
+class VolumeEntry:
+    name: str
+    kind: VolumeEntryKind
+    size_bytes: int | None
+
+
+@dataclass(frozen=True)
+class VolumeDirectory:
+    claim_name: str
+    path: str
+    target: PersistentVolumeMountSummary
+    entries: tuple[VolumeEntry, ...]
+
+
+@dataclass(frozen=True)
+class VolumeFilePreview:
+    claim_name: str
+    path: str
+    target: PersistentVolumeMountSummary
+    content: str
+    truncated: bool
 
 
 @dataclass(frozen=True)

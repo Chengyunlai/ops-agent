@@ -9,6 +9,7 @@ from ops_agent.monitoring import (
     KubernetesResourceContent,
     KubernetesResourceKind,
     KubernetesResourceRef,
+    VolumeDirectory,
 )
 from ops_agent.settings import Settings, TuiSettings
 from textual import events, on, work
@@ -18,7 +19,7 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, DataTable, Input, Static
 
 from ops_agent_cli.tui.chat import ChatTranscript
-from ops_agent_cli.tui.monitor import MonitorPane, ResourceViewer
+from ops_agent_cli.tui.monitor import MonitorPane, ResourceViewer, VolumeBrowser
 from ops_agent_cli.tui.settings import SettingsScreen
 from ops_agent_cli.tui.terminal import set_terminal_mouse_capture
 from ops_agent_cli.tui.themes import build_theme
@@ -41,6 +42,21 @@ class Monitor(Protocol):
         resource: KubernetesResourceRef,
         *,
         tail_lines: int = 200,
+    ) -> KubernetesResourceContent: ...
+
+    def browse_pvc(
+        self,
+        resource: KubernetesResourceRef,
+        *,
+        path: str = ".",
+    ) -> VolumeDirectory: ...
+
+    def preview_pvc_file(
+        self,
+        resource: KubernetesResourceRef,
+        *,
+        path: str,
+        max_bytes: int = 64 * 1024,
     ) -> KubernetesResourceContent: ...
 
 
@@ -264,6 +280,63 @@ class OpsAgentTui(App[None]):
         color: $background;
     }
 
+    VolumeBrowser {
+        align: center middle;
+        background: $background 70%;
+    }
+
+    #volume-browser {
+        width: 92%;
+        height: 88%;
+        background: $surface;
+        border: solid $primary;
+    }
+
+    #volume-browser-title {
+        height: 1;
+        padding: 0 1;
+        background: $panel;
+        color: $accent;
+        text-style: bold;
+    }
+
+    #volume-browser-target,
+    #volume-browser-path,
+    #volume-browser-status {
+        height: 1;
+        padding: 0 1;
+    }
+
+    #volume-browser-target {
+        color: $text-muted;
+    }
+
+    #volume-browser-path {
+        background: $panel;
+        color: $text;
+        text-style: bold;
+    }
+
+    #volume-browser-table {
+        height: 1fr;
+        background: $surface;
+        scrollbar-color: $primary;
+        scrollbar-color-hover: $secondary;
+        scrollbar-color-active: $accent;
+    }
+
+    #volume-browser-status {
+        color: $text-muted;
+    }
+
+    #volume-browser-footer {
+        height: 1;
+        padding: 0 1;
+        background: $primary;
+        color: $primary-background;
+        text-style: bold;
+    }
+
     #chat-pane {
         width: 2fr;
         height: 1fr;
@@ -379,8 +452,10 @@ class OpsAgentTui(App[None]):
         Binding("4", "show_daemon_sets", "DaemonSets", show=False),
         Binding("5", "show_services", "Services", show=False),
         Binding("6", "show_replica_sets", "ReplicaSets", show=False),
+        Binding("7", "show_storage", "Storage", show=False),
         Binding("d", "describe_resource", "Describe", show=False),
         Binding("l", "show_logs", "Logs", show=False),
+        Binding("f", "browse_storage", "Browse PVC", show=False),
         Binding("q", "quit", "退出"),
         Binding("i", "focus_question", "输入"),
         Binding(
@@ -427,7 +502,8 @@ class OpsAgentTui(App[None]):
             "全局：Ctrl+C 退出 · F1/? 帮助 · 顶部“复制”（F2 备用）· Ctrl+, 设置"
             " · Ctrl+R 刷新 · Ctrl+K 聚焦监盘\n"
             "聊天：Enter 提交 · i 返回输入 · Ctrl+L 清空右侧显示\n"
-            "监盘：0 总览 · 1~6 切换资源 · Enter/d 详情 · l Pod 日志 · q 退出",
+            "监盘：0 总览 · 1~7 切换资源 · Enter 打开 · d 详情"
+            " · l Pod 日志 · f PVC 目录 · q 退出",
             id="help",
         )
         yield Static(
@@ -446,12 +522,13 @@ class OpsAgentTui(App[None]):
                 )
         yield Static(
             " ^K 监盘  0 总览  1 Pods  2 Deploy  3 Stateful"
-            "  4 Daemon  5 Services  6 Replica"
-            "  │  d 详情  l 日志  i 聊天  顶部复制",
+            "  4 Daemon  5 Services  6 Replica  7 Storage"
+            "  │  d 详情  l 日志  f 目录  i 聊天  顶部复制",
             id="hotkeys",
         )
         yield Static(
-            " ^K 监盘 │ 0~6 资源 │ d 详情 │ l 日志 │ i 聊天 │ 顶部复制 │ F1 帮助",
+            " ^K 监盘 │ 0~7 资源 │ d 详情 │ l 日志 │ f 目录"
+            " │ i 聊天 │ 顶部复制 │ F1 帮助",
             id="hotkeys-compact",
         )
 
@@ -620,6 +697,9 @@ class OpsAgentTui(App[None]):
     def action_show_replica_sets(self) -> None:
         self._show_monitor_kind(KubernetesResourceKind.REPLICA_SET)
 
+    def action_show_storage(self) -> None:
+        self._show_monitor_kind(KubernetesResourceKind.PERSISTENT_VOLUME_CLAIM)
+
     def action_describe_resource(self) -> None:
         pane = self.query_one("#monitor-pane", MonitorPane)
         if pane.open_selected_overview_kind():
@@ -650,6 +730,26 @@ class OpsAgentTui(App[None]):
             resource=resource,
         )
 
+    def action_browse_storage(self) -> None:
+        resource = self.query_one(
+            "#monitor-pane",
+            MonitorPane,
+        ).selected_resource()
+        if (
+            resource is None
+            or resource.kind is not KubernetesResourceKind.PERSISTENT_VOLUME_CLAIM
+        ):
+            self.query_one("#status", Static).update(
+                "目录浏览仅适用于 PVC；请按 7 进入 Storage 并选择一行"
+            )
+            return
+        self.push_screen(
+            VolumeBrowser(
+                source=self._monitor,
+                resource=resource,
+            )
+        )
+
     def action_command_mode(self) -> None:
         if self.exit_copy_mode():
             return
@@ -662,6 +762,16 @@ class OpsAgentTui(App[None]):
 
     @on(DataTable.RowSelected, "#monitor-table")
     def open_selected_resource(self) -> None:
+        pane = self.query_one("#monitor-pane", MonitorPane)
+        if pane.open_selected_overview_kind():
+            return
+        resource = pane.selected_resource()
+        if (
+            resource is not None
+            and resource.kind is KubernetesResourceKind.PERSISTENT_VOLUME_CLAIM
+        ):
+            self.action_browse_storage()
+            return
         self.action_describe_resource()
 
     @on(Button.Pressed, "#settings-button")

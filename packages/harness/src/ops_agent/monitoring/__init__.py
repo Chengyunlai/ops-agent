@@ -1,4 +1,9 @@
-from ops_agent.kubernetes import KubernetesResourceKind
+from ops_agent.kubernetes import (
+    KubernetesResourceKind,
+    VolumeDirectory,
+    VolumeEntry,
+    VolumeEntryKind,
+)
 from ops_agent.monitoring.kubernetes import (
     KubernetesMonitor,
     KubernetesMonitorSnapshot,
@@ -16,4 +21,7 @@ __all__ = [
     "KubernetesResourceKind",
     "KubernetesResourceRef",
     "KubernetesResourceRow",
+    "VolumeDirectory",
+    "VolumeEntry",
+    "VolumeEntryKind",
 ]

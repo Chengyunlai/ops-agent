@@ -1,3 +1,5 @@
+import asyncio
+import posixpath
 from typing import ClassVar, Protocol, cast
 
 from ops_agent.monitoring import (
@@ -6,9 +8,11 @@ from ops_agent.monitoring import (
     KubernetesResourceContent,
     KubernetesResourceKind,
     KubernetesResourceRef,
+    VolumeDirectory,
+    VolumeEntryKind,
 )
 from rich.text import Text
-from textual import on
+from textual import on, work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
@@ -20,6 +24,23 @@ class CopyModeController(Protocol):
     def exit_copy_mode(self) -> bool: ...
 
     def action_toggle_copy_mode(self) -> None: ...
+
+
+class VolumeBrowserSource(Protocol):
+    def browse_pvc(
+        self,
+        resource: KubernetesResourceRef,
+        *,
+        path: str = ".",
+    ) -> VolumeDirectory: ...
+
+    def preview_pvc_file(
+        self,
+        resource: KubernetesResourceRef,
+        *,
+        path: str,
+        max_bytes: int = 64 * 1024,
+    ) -> KubernetesResourceContent: ...
 
 
 class ResourceViewer(ModalScreen[None]):
@@ -92,6 +113,192 @@ class ResourceViewer(ModalScreen[None]):
             if self._copy_mode
             else " Esc/q 返回 · ↑/↓/PgUp/PgDn 滚动 · F2 备用"
         )
+
+
+class VolumeBrowser(ModalScreen[None]):
+    """通过现有 Pod 以只读方式浏览 PVC 挂载目录。"""
+
+    BINDINGS: ClassVar[list[Binding]] = [
+        Binding("escape", "close", "返回", priority=True),
+        Binding("q", "close", "返回", priority=True),
+        Binding("backspace", "parent", "上级目录", priority=True),
+        Binding("r", "refresh", "刷新", priority=True),
+    ]
+
+    def __init__(
+        self,
+        *,
+        source: VolumeBrowserSource,
+        resource: KubernetesResourceRef,
+    ) -> None:
+        super().__init__()
+        self._source = source
+        self._resource = resource
+        self._directory: VolumeDirectory | None = None
+        self._loading = False
+        self._preview_loading = False
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="volume-browser"):
+            yield Static(
+                f" STORAGE · PVC/{self._resource.name} · READ-ONLY",
+                id="volume-browser-title",
+            )
+            yield Static("正在查找可用挂载…", id="volume-browser-target")
+            yield Static("/", id="volume-browser-path")
+            yield DataTable(
+                cursor_type="row",
+                zebra_stripes=True,
+                id="volume-browser-table",
+            )
+            yield Static("正在读取目录…", id="volume-browser-status")
+            yield Static(
+                " Enter 打开 · Backspace 上级 · r 刷新 · Esc/q 返回",
+                id="volume-browser-footer",
+            )
+
+    def on_mount(self) -> None:
+        self.query_one("#volume-browser-table", DataTable).add_columns(
+            "NAME",
+            "TYPE",
+            "SIZE",
+        )
+        self._load_directory(".")
+
+    def action_close(self) -> None:
+        self.dismiss()
+
+    def action_parent(self) -> None:
+        directory = self._directory
+        if directory is None or directory.path == ".":
+            return
+        parent = posixpath.dirname(directory.path)
+        self._load_directory(parent or ".")
+
+    def action_refresh(self) -> None:
+        path = self._directory.path if self._directory is not None else "."
+        self._load_directory(path)
+
+    @on(DataTable.RowSelected, "#volume-browser-table")
+    def open_selected_entry(self) -> None:
+        directory = self._directory
+        table = self.query_one("#volume-browser-table", DataTable)
+        if directory is None or not 0 <= table.cursor_row < len(directory.entries):
+            return
+        entry = directory.entries[table.cursor_row]
+        path = _child_volume_path(directory.path, entry.name)
+        if entry.kind is VolumeEntryKind.DIRECTORY:
+            self._load_directory(path)
+        elif entry.kind is VolumeEntryKind.FILE:
+            self._open_file_preview(path)
+        elif entry.kind is VolumeEntryKind.SYMLINK:
+            self.query_one("#volume-browser-status", Static).update(
+                "为避免越过 PVC 挂载根目录，不跟随符号链接"
+            )
+        else:
+            self.query_one("#volume-browser-status", Static).update(
+                "当前条目类型不支持预览"
+            )
+
+    @work(
+        group="volume-directory",
+        exit_on_error=False,
+    )
+    async def _load_directory(self, path: str) -> None:
+        if self._loading:
+            return
+        self._loading = True
+        self.query_one("#volume-browser-status", Static).update(
+            f"正在读取 /{path.removeprefix('.').lstrip('/')}…"
+        )
+        try:
+            directory = await asyncio.to_thread(
+                self._source.browse_pvc,
+                self._resource,
+                path=path,
+            )
+        except Exception as error:  # noqa: BLE001 - 浏览器必须显示适配器错误
+            if self.is_mounted:
+                self.query_one("#volume-browser-status", Static).update(
+                    f"读取失败：{error}"
+                )
+            return
+        finally:
+            self._loading = False
+        if not self.is_mounted:
+            return
+        self._directory = directory
+        target = directory.target
+        self.query_one("#volume-browser-target", Static).update(
+            f" Pod {target.pod_name} · Container {target.container_name}"
+            f" · Mount {target.mount_path}"
+        )
+        self.query_one("#volume-browser-path", Static).update(
+            f" /{directory.path.removeprefix('.').lstrip('/')}"
+        )
+        table = self.query_one("#volume-browser-table", DataTable)
+        table.clear()
+        for entry in directory.entries:
+            table.add_row(
+                entry.name,
+                _volume_entry_label(entry.kind),
+                _format_size(entry.size_bytes),
+                key=entry.name,
+            )
+        self.query_one("#volume-browser-status", Static).update(
+            f"{len(directory.entries)} 个条目 · 只读"
+        )
+        table.focus()
+
+    def _open_file_preview(self, path: str) -> None:
+        if self._preview_loading:
+            self.query_one("#volume-browser-status", Static).update(
+                "上一文件预览仍在结束，请稍候"
+            )
+            return
+        self._preview_loading = True
+        viewer = ResourceViewer(
+            loading_title=f"PVC/{self._resource.name} · {path}",
+        )
+        self.app.push_screen(viewer)
+        self.app.call_after_refresh(
+            self._start_file_preview,
+            viewer=viewer,
+            path=path,
+        )
+
+    def _start_file_preview(
+        self,
+        *,
+        viewer: ResourceViewer,
+        path: str,
+    ) -> None:
+        self.app.run_worker(
+            self._load_file_preview(viewer=viewer, path=path),
+            group="volume-preview",
+            exit_on_error=False,
+        )
+
+    async def _load_file_preview(
+        self,
+        *,
+        viewer: ResourceViewer,
+        path: str,
+    ) -> None:
+        try:
+            content = await asyncio.to_thread(
+                self._source.preview_pvc_file,
+                self._resource,
+                path=path,
+            )
+        except Exception as error:  # noqa: BLE001 - 文件预览必须恢复 exec 异常
+            if viewer.is_mounted:
+                viewer.display_error(str(error))
+        else:
+            if viewer.is_mounted:
+                viewer.display_content(content)
+        finally:
+            self._preview_loading = False
 
 
 class MonitorPane(Vertical):
@@ -212,7 +419,7 @@ class MonitorPane(Vertical):
             )
             for shortcut, label, selected in labels
         ]
-        tabs.append(f"[{idle_color}]↑/↓ Enter 浏览目录[/]")
+        tabs.append(f"[{idle_color}]↑/↓ Enter 打开[/]")
         self.query_one("#monitor-tabs", Static).update("  ".join(tabs))
 
     def _render_table(self) -> None:
@@ -315,3 +522,28 @@ def _health_text(
 ) -> Text:
     style = success if healthy is True else warning if healthy is False else neutral
     return Text(label, style=style)
+
+
+def _child_volume_path(parent: str, name: str) -> str:
+    return name if parent == "." else posixpath.join(parent, name)
+
+
+def _volume_entry_label(kind: VolumeEntryKind) -> str:
+    return {
+        VolumeEntryKind.DIRECTORY: "Directory",
+        VolumeEntryKind.FILE: "File",
+        VolumeEntryKind.SYMLINK: "Symlink",
+        VolumeEntryKind.OTHER: "Other",
+    }[kind]
+
+
+def _format_size(size_bytes: int | None) -> str:
+    if size_bytes is None:
+        return "-"
+    units = ("B", "KiB", "MiB", "GiB", "TiB")
+    size = float(size_bytes)
+    for unit in units:
+        if size < 1024 or unit == units[-1]:
+            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size_bytes} B"

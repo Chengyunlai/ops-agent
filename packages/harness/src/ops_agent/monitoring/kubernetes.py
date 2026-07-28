@@ -11,11 +11,14 @@ from ops_agent.kubernetes import (
     JobSummary,
     KubernetesResourceKind,
     PersistentVolumeClaimSummary,
+    PersistentVolumeMountSummary,
     PodDetails,
     PodSummary,
     ReplicaSetSummary,
     ServiceSummary,
     StatefulSetSummary,
+    VolumeDirectory,
+    VolumeFilePreview,
 )
 
 
@@ -79,6 +82,23 @@ class KubernetesMonitoringSource(Protocol):
         container: str | None,
         tail_lines: int,
     ) -> str: ...
+
+    def browse_persistent_volume_claim(
+        self,
+        namespace: str,
+        claim_name: str,
+        *,
+        path: str,
+    ) -> VolumeDirectory: ...
+
+    def preview_persistent_volume_claim_file(
+        self,
+        namespace: str,
+        claim_name: str,
+        *,
+        path: str,
+        max_bytes: int,
+    ) -> VolumeFilePreview: ...
 
 
 @dataclass(frozen=True)
@@ -221,8 +241,17 @@ class KubernetesMonitor:
                 self._capture(
                     kind=KubernetesResourceKind.PERSISTENT_VOLUME_CLAIM,
                     label="PVCs",
-                    shortcut=None,
-                    columns=("NAME", "STATUS", "VOLUME", "CAPACITY", "STORAGECLASS"),
+                    shortcut="7",
+                    columns=(
+                        "NAME",
+                        "STATUS",
+                        "VOLUME",
+                        "CAPACITY",
+                        "STORAGECLASS",
+                        "BACKEND",
+                        "MOUNTED BY",
+                        "MOUNT PATHS",
+                    ),
                     request=self._source.list_persistent_volume_claims,
                     to_row=_pvc_row,
                 ),
@@ -280,6 +309,46 @@ class KubernetesMonitor:
                 f" · last {tail_lines} lines/container"
             ),
             content=content,
+        )
+
+    def browse_pvc(
+        self,
+        resource: KubernetesResourceRef,
+        *,
+        path: str = ".",
+    ) -> VolumeDirectory:
+        _require_pvc(resource)
+        return self._source.browse_persistent_volume_claim(
+            self._namespace,
+            resource.name,
+            path=path,
+        )
+
+    def preview_pvc_file(
+        self,
+        resource: KubernetesResourceRef,
+        *,
+        path: str,
+        max_bytes: int = 64 * 1024,
+    ) -> KubernetesResourceContent:
+        _require_pvc(resource)
+        preview = self._source.preview_persistent_volume_claim_file(
+            self._namespace,
+            resource.name,
+            path=path,
+            max_bytes=max_bytes,
+        )
+        target = preview.target
+        truncation_note = (
+            f"\n\n[预览已截断：最多 {max_bytes} bytes]" if preview.truncated else ""
+        )
+        return KubernetesResourceContent(
+            title=f"PVC/{resource.name} · {preview.path}",
+            content=(
+                f"Pod: {target.pod_name} · Container: {target.container_name}"
+                f" · Mount: {target.mount_path}\n\n"
+                f"{preview.content}{truncation_note}"
+            ),
         )
 
     def _read_container_logs(
@@ -456,6 +525,17 @@ def _ingress_row(item: IngressSummary) -> KubernetesResourceRow:
 
 
 def _pvc_row(item: PersistentVolumeClaimSummary) -> KubernetesResourceRow:
+    mounted_by = (
+        _unavailable_cell(item.mounts_error)
+        if item.mounts_error is not None
+        else ", ".join(_mount_target_label(mount) for mount in item.mounts)
+    )
+    mount_paths = ", ".join(_mount_path_label(mount) for mount in item.mounts)
+    backend = (
+        _unavailable_cell(item.backend_error)
+        if item.backend_error is not None
+        else item.backend or "-"
+    )
     return KubernetesResourceRow(
         ref=_ref(KubernetesResourceKind.PERSISTENT_VOLUME_CLAIM, item.name),
         values=(
@@ -464,6 +544,28 @@ def _pvc_row(item: PersistentVolumeClaimSummary) -> KubernetesResourceRow:
             item.volume_name or "-",
             item.capacity or "-",
             item.storage_class or "-",
+            backend,
+            mounted_by or "-",
+            mount_paths or "-",
         ),
         healthy=item.phase == "Bound",
     )
+
+
+def _mount_target_label(mount: PersistentVolumeMountSummary) -> str:
+    return f"{mount.pod_name}/{mount.container_name}"
+
+
+def _mount_path_label(mount: PersistentVolumeMountSummary) -> str:
+    access = "ro" if mount.read_only else "rw"
+    return f"{mount.mount_path} ({access})"
+
+
+def _unavailable_cell(error: str) -> str:
+    message = " ".join(error.split())
+    return f"Unavailable: {message[:120]}"
+
+
+def _require_pvc(resource: KubernetesResourceRef) -> None:
+    if resource.kind is not KubernetesResourceKind.PERSISTENT_VOLUME_CLAIM:
+        raise ValueError("目录浏览仅支持 PersistentVolumeClaim")
