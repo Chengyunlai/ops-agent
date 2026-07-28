@@ -522,7 +522,7 @@ def _intent_proposal_from_response(
 def _validate_intent_proposal(value: object) -> IntentProposal | None:
     try:
         return IntentProposal.model_validate(value)
-    except TypeError, ValueError:
+    except (TypeError, ValueError):
         return None
 
 

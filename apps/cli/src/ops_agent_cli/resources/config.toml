@@ -1,0 +1,30 @@
+[project]
+name = "Operations"
+
+[kubernetes]
+environment = "local"
+namespace = "default"
+kubeconfig_path = "~/.kube/config"
+request_timeout_seconds = 10
+
+[kubernetes.interactive_exec]
+enabled = false
+
+[kubernetes.downloads]
+directory = "~/Downloads/ops-agent"
+
+[kubernetes.pod_transfer]
+strategy = "auto"
+max_file_size_mb = 512
+
+[model]
+provider = "openai"
+model = "gpt-4.1-mini"
+api_key_env = "OPENAI_API_KEY"
+
+[tui]
+theme = "ops-dark"
+
+[tui.colors]
+# primary = "#1FB5AD"
+# accent = "#FFCC66"

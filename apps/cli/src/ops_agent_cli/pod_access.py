@@ -540,7 +540,7 @@ class KubectlPodAccess:
                 check=False,
                 timeout=self._settings.request_timeout_seconds,
             )
-        except OSError, subprocess.TimeoutExpired:
+        except (OSError, subprocess.TimeoutExpired):
             return
 
     def _download(
@@ -701,7 +701,7 @@ def _stop_download_process(process: subprocess.Popen[bytes]) -> None:
         try:
             process.kill()
             process.wait(timeout=2)
-        except OSError, subprocess.TimeoutExpired:
+        except (OSError, subprocess.TimeoutExpired):
             return
 
 

@@ -3,8 +3,10 @@
 UV ?= uv
 CONFIG ?= config/local/test.toml
 ARGS ?=
+TARGET ?= local
+RELEASE_DIR ?= release
 
-.PHONY: help sync lint format format-check test test-cli test-harness check cli tui
+.PHONY: help sync lint format format-check test test-cli test-harness check cli tui bump-version package release
 
 help: ## 显示可用的开发命令
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z_-]+:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -34,7 +36,24 @@ test-harness: ## 运行 harness 测试
 check: lint format-check test ## 运行提交前完整检查
 
 cli: ## 运行 CLI；使用 ARGS='...' 传递参数
-	$(UV) run ops_agent $(ARGS)
+	$(UV) run ops-agent $(ARGS)
 
 tui: ## 启动交互式终端；使用 CONFIG='...' 指定配置
-	$(UV) run ops_agent --config "$(CONFIG)" tui
+	$(UV) run ops-agent --config "$(CONFIG)" tui
+
+bump-version: ## 同步发布版本；使用 VERSION=x.y.z
+	@test -n "$(VERSION)" || (echo "VERSION is required, for example VERSION=0.2.0" >&2; exit 2)
+	$(UV) run python scripts/bump_version.py "$(VERSION)"
+	$(UV) lock
+
+package: ## 构建当前平台的独立 ops-agent 可执行文件
+	$(UV) sync --locked --group build
+	$(UV) run pyinstaller --clean --noconfirm packaging/ops-agent.spec
+
+release: package ## 生成当前平台发布压缩包和 SHA-256；可设置 TARGET
+	$(UV) run python scripts/create_release_archive.py \
+		--binary dist/ops-agent \
+		--version "$$($(UV) run ops-agent --version | awk '{print $$2}')" \
+		--target "$(TARGET)" \
+		--output-directory "$(RELEASE_DIR)"
+	$(UV) run python scripts/write_release_checksums.py "$(RELEASE_DIR)"

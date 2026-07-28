@@ -243,7 +243,7 @@ class SettingsScreen(ModalScreen[Settings | None]):
     def preview_theme(self) -> None:
         try:
             self._preview_theme(self._read_tui_settings())
-        except ValidationError, ValueError:
+        except (ValidationError, ValueError):
             return
 
     @on(Button.Pressed)

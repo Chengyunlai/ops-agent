@@ -286,7 +286,7 @@ def _matching_prefix_suffix_length(
 def _attempt_cleanup(operation: Callable[[], object]) -> None:
     try:
         operation()
-    except OSError, ValueError:
+    except (OSError, ValueError):
         pass
 
 

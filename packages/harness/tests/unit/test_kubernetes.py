@@ -181,7 +181,7 @@ def test_create_kubernetes_reader_uses_settings(monkeypatch) -> None:
     settings = KubernetesSettings(
         environment="test",
         namespace="sample",
-        kubeconfig_path=Path("/tmp/ops_agent-kubeconfig"),
+        kubeconfig_path=Path("~/ops_agent-kubeconfig"),
         request_timeout_seconds=11,
         proxy_url="http://127.0.0.1:7897",
     )
@@ -192,7 +192,7 @@ def test_create_kubernetes_reader_uses_settings(monkeypatch) -> None:
     assert pods == []
     assert len(client_calls) == 1
     assert client_calls[0][:2] == (
-        "/tmp/ops_agent-kubeconfig",
+        str(Path("~/ops_agent-kubeconfig").expanduser()),
         False,
     )
     assert client_calls[0][2].proxy == "http://127.0.0.1:7897/"

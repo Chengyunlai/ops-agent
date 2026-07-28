@@ -30,13 +30,13 @@
 | 告警接入与诊断 | 规划中 | 接入告警并生成带证据的诊断报告 |
 | 审批与处置执行 | 规划中 | 执行扩缩容、重启、回滚等受控动作 |
 | LLM / Agent 编排 | 基础已完成 | 受控主图负责范围路由和诊断计划，Kubernetes 子图负责只读诊断 |
-| CLI 自然语言入口 | 已完成 | 使用 `ops_agent ask` 查询真实集群状态 |
+| CLI 自然语言入口 | 已完成 | 使用 `ops-agent ask` 查询真实集群状态 |
 | 交互式终端 | 基础已完成 | TUI 提供可信 Kubernetes 上下文、多轮会话和受控进度事件 |
 | 审计与可观测性 | 规划中 | 结构化日志、Tracing、指标和操作审计 |
 
 ## 技术栈
 
-- Python 3.14+
+- Python 3.12+（仅源码开发需要；GitHub Release 已内置运行时）
 - LangChain / LangGraph
 - Kubernetes Python Client
 - Pydantic
@@ -45,7 +45,68 @@
 - pytest
 - uv（推荐的依赖与虚拟环境管理工具）
 
-## 快速开始
+## 安装版快速开始
+
+普通用户不需要克隆仓库，也不需要安装 Python 或 uv。从 GitHub Releases
+下载与本机匹配的压缩包：
+
+```text
+ops-agent_<version>_darwin-arm64.tar.gz
+ops-agent_<version>_darwin-amd64.tar.gz
+ops-agent_<version>_linux-amd64.tar.gz
+```
+
+例如 macOS arm64 用户可以解压并安装到个人命令目录：
+
+```bash
+mkdir -p ~/.local/bin
+tar -xzf ops-agent_0.1.0_darwin-arm64.tar.gz
+install -m 0755 \
+  ops-agent_0.1.0_darwin-arm64/ops-agent \
+  ops-agent_0.1.0_darwin-arm64/ops_agent \
+  ~/.local/bin/
+```
+
+确保 `~/.local/bin` 已加入 `PATH`，然后创建初始 Project Profile：
+
+```bash
+ops-agent --version
+ops-agent init
+ops-agent config path
+```
+
+默认配置位于 `~/.config/ops-agent/config.toml`。路径解析优先级为：
+
+1. 命令行 `--config`；
+2. 环境变量 `OPS_AGENT_CONFIG`；
+3. `$XDG_CONFIG_HOME/ops-agent/config.toml`；
+4. `~/.config/ops-agent/config.toml`。
+
+编辑配置并设置模型密钥后，先运行安装诊断：
+
+```bash
+export OPENAI_API_KEY="..."
+ops-agent doctor
+ops-agent tui
+```
+
+`doctor` 会检查配置、kubeconfig、模型密钥环境变量、固定 namespace 的 Pod
+读取权限和 `kubectl`。未安装 `kubectl` 只影响 Interactive Pod Session 和
+Pod Artifact Download；如果配置显式启用了 Interactive Pod Session，则
+缺少 `kubectl` 会被视为失败。
+
+每个 Release 同时发布 `SHA256SUMS` 和 GitHub build provenance。当前支持
+macOS 与 Linux；终端 PTY 实现依赖 Unix `termios`/`fcntl`，暂不提供 Windows
+安装包。macOS 正式对外分发前还需要为 Release 配置 Developer ID 签名和
+notarization。
+
+> [!NOTE]
+> 当前仓库尚未选择公开许可证，本地 Git 也尚未配置 GitHub remote。
+> Release 的 publish job 会在缺少 `LICENSE` 时明确失败，避免发布法律状态
+> 不清晰的安装包。首次公开发布前需要选择许可证、创建 GitHub 仓库并配置
+> `origin`；这两项不会由构建脚本自行猜测。
+
+## 源码开发
 
 ### 1. 获取项目
 
@@ -169,7 +230,7 @@ print(
 ### 4. 查询真实集群
 
 ```bash
-uv run ops_agent \
+uv run ops-agent \
   --config config/local/test.toml \
   ask "检查所有 Pod，指出非 Running 或发生过重启的 Pod"
 ```
@@ -196,7 +257,7 @@ Shell 执行入口。这样可以把模型的活动范围限制在启动时选�
 ### 5. 启动交互式终端
 
 ```bash
-uv run ops_agent \
+uv run ops-agent \
   --config config/local/test.toml \
   tui
 ```
@@ -281,7 +342,7 @@ namespace、kubeconfig、代理和请求超时属于运行边界，保存后需�
 受控 `ConversationSession`，不是绕过 Policy 的裸模型入口。因此可以使用
 “现在几个服务”这类上下文简称，无需反复声明 Kubernetes 和 namespace；
 会话历史会传给 Planner 和专业 Agent，澄清确认与指代式追问不会在执行阶段
-丢失上下文。原有 `ops_agent ask` 非交互入口保持不变，并继续采用保守的
+丢失上下文。原有 `ops-agent ask` 非交互入口保持不变，并继续采用保守的
 自动 scope。
 
 ### 6. 开发命令
@@ -296,6 +357,8 @@ make check
 make test-cli
 make test-harness
 make tui CONFIG=config/local/test.toml
+make package
+make release TARGET=darwin-arm64
 ```
 
 `make format` 自动修复 Ruff 问题并格式化代码，`make check` 运行静态检查、
@@ -307,10 +370,33 @@ make tui CONFIG=config/local/test.toml
 uv run pytest
 ```
 
+### 7. 发布
+
+应用版本由 `ops_agent_cli.__version__` 提供，CLI wheel 通过 Hatch 从同一
+位置读取；`make bump-version VERSION=x.y.z` 是唯一版本升级入口，会同步
+workspace 发行元数据并更新 lockfile，测试也会校验它们没有漂移。推送
+`v<version>` 标签后，`.github/workflows/release.yml` 会：
+
+1. 在 macOS arm64、macOS amd64 和 Linux amd64 原生 Runner 构建；
+2. 验证标签版本与 `ops-agent --version` 完全一致；
+3. 对独立程序执行配置初始化和 OpenAI-compatible Provider 加载冒烟测试；
+4. 生成包含程序、配置示例和 README 的 `tar.gz`；
+5. 汇总 `SHA256SUMS`、生成 GitHub provenance 并创建 Release。
+
+本机可以使用 `make package` 构建 `dist/ops-agent`；使用
+`make release TARGET=<platform-arch>` 生成与 GitHub 相同结构的压缩包。
+发布目录、PyInstaller 构建目录和二进制均被 Git 忽略。
+
 ## 项目结构
 
 ```text
 ops_agent/
+├── .github/workflows/              # CI 与标签发布
+├── packaging/
+│   └── ops-agent.spec              # PyInstaller 独立程序描述
+├── scripts/
+│   ├── create_release_archive.py
+│   └── write_release_checksums.py
 ├── CONTEXT.md
 ├── Makefile
 ├── config/
@@ -327,8 +413,11 @@ ops_agent/
 │       │       ├── __init__.py
 │       │       ├── __main__.py
 │       │       ├── bootstrap.py
+│       │       ├── installation.py
 │       │       ├── main.py
 │       │       ├── pod_access.py
+│       │       ├── resources/
+│       │       │   └── config.toml
 │       │       ├── terminal_session.py
 │       │       └── tui/
 │       │           ├── __init__.py

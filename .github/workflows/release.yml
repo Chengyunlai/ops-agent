@@ -1,0 +1,127 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Verify release source
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Sync locked dependencies
+        run: uv sync --locked
+      - name: Run full checks
+        run: make check
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: darwin-arm64
+          - runner: macos-15-intel
+            target: darwin-amd64
+          - runner: ubuntu-24.04
+            target: linux-amd64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify public release prerequisites
+        run: |
+          if [ ! -f LICENSE ]; then
+            echo "Public release blocked: select and add a LICENSE first." >&2
+            exit 1
+          fi
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Sync locked build dependencies
+        run: uv sync --locked --no-default-groups --group build
+      - name: Verify tag version
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          test "$(uv run ops-agent --version)" = "ops-agent ${version}"
+      - name: Build standalone executable
+        run: uv run pyinstaller --clean --noconfirm packaging/ops-agent.spec
+      - name: Smoke test installed interfaces
+        shell: bash
+        run: |
+          ./dist/ops-agent --version
+          config_home="${RUNNER_TEMP}/ops-agent-config-${{ matrix.target }}"
+          XDG_CONFIG_HOME="${config_home}" ./dist/ops-agent init
+          XDG_CONFIG_HOME="${config_home}" ./dist/ops-agent config path
+          test -f "${config_home}/ops-agent/config.toml"
+          set +e
+          provider_smoke="$(
+            DEEPSEEK_API_KEY=dummy \
+              ./dist/ops-agent \
+              --config config/examples/test.toml \
+              ask "检查 Pod" 2>&1
+          )"
+          provider_status=$?
+          set -e
+          test "${provider_status}" -eq 1
+          grep -F "无法加载 kubeconfig" <<<"${provider_smoke}"
+      - name: Create release archive
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          uv run python scripts/create_release_archive.py \
+            --binary dist/ops-agent \
+            --version "${version}" \
+            --target "${{ matrix.target }}" \
+            --output-directory release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: release/*.tar.gz
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: release
+          merge-multiple: true
+      - name: Write checksums
+        run: uv run python scripts/write_release_checksums.py release
+      - name: Attest release artifacts
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            release/*.tar.gz
+            release/SHA256SUMS
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            release/*.tar.gz
+            release/SHA256SUMS

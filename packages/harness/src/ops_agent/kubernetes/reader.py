@@ -420,16 +420,15 @@ def create_kubernetes_reader(
     client_configuration = Configuration()
     if settings.proxy_url is not None:
         client_configuration.proxy = str(settings.proxy_url)
+    kubeconfig_path = settings.kubeconfig_path.expanduser()
     try:
         api_client = config.new_client_from_config(
-            config_file=str(settings.kubeconfig_path),
+            config_file=str(kubeconfig_path),
             persist_config=False,
             client_configuration=client_configuration,
         )
     except ConfigException as error:
-        raise KubernetesError(
-            f"无法加载 kubeconfig: {settings.kubeconfig_path}"
-        ) from error
+        raise KubernetesError(f"无法加载 kubeconfig: {kubeconfig_path}") from error
     core_api = CoreV1Api(api_client)
 
     def execute_pod_command(**kwargs) -> str:

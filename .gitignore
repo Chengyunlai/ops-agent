@@ -9,3 +9,8 @@ venv/
 
 # Local-only configuration
 config/local/
+
+# Local build and release artifacts
+build/
+dist/
+release/
