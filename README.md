@@ -193,8 +193,9 @@ DaemonSet、Service、ReplicaSet、Job、CronJob、Ingress 和 PVC 的数量与
 `Ctrl+K` 聚焦左侧监盘，`0` 返回 Overview，`1`～`6` 切换具体资源；
 Overview 中可用方向键和 `Enter` 进入任意资源类型。选中资源后按
 `Enter`/`d` 读取对象详情与关联 Event；Pod 上按 `l` 读取每个容器最近
-200 行日志。TUI 启用鼠标以支持点击聚焦；复制终端内容时按住
-`Shift`/`Option` 再拖选，不局限于整块内容。
+200 行日志。TUI 启用鼠标以支持点击聚焦；复制终端内容时按
+`F2` 进入复制模式，应用会释放终端鼠标，此时可以直接拖选任意内容并使用
+终端复制快捷键；复制完成后再按 `F2` 恢复仪表盘鼠标控制。
 
 顶部 `Settings`（或 `Ctrl+,`）编辑当前 Project Profile、主题和颜色。主题
 选择与有效颜色会即时预览；保存后写回启动时使用的 TOML。项目名称、环境、

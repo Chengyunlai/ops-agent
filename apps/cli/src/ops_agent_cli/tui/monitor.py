@@ -23,9 +23,10 @@ class ResourceViewer(ModalScreen[None]):
         Binding("q", "close", "返回", priority=True),
     ]
 
-    def __init__(self, *, loading_title: str) -> None:
+    def __init__(self, *, loading_title: str, copy_mode: bool = False) -> None:
         super().__init__()
         self._loading_title = loading_title
+        self._copy_mode = copy_mode
 
     def compose(self) -> ComposeResult:
         with Vertical(id="resource-viewer"):
@@ -37,7 +38,7 @@ class ResourceViewer(ModalScreen[None]):
                 id="resource-content",
             )
             yield Static(
-                " Esc/q 返回 · ↑/↓/PgUp/PgDn 滚动 · 按住 Shift/Option 后鼠标拖选复制",
+                self._footer_text(),
                 id="resource-footer",
             )
 
@@ -58,6 +59,17 @@ class ResourceViewer(ModalScreen[None]):
 
     def action_close(self) -> None:
         self.dismiss()
+
+    def set_copy_mode(self, enabled: bool) -> None:
+        self._copy_mode = enabled
+        self.query_one("#resource-footer", Static).update(self._footer_text())
+
+    def _footer_text(self) -> str:
+        return (
+            " COPY MODE · 直接用鼠标拖选复制 · F2 恢复鼠标控制"
+            if self._copy_mode
+            else " Esc/q 返回 · ↑/↓/PgUp/PgDn 滚动 · F2 进入复制模式"
+        )
 
 
 class MonitorPane(Vertical):

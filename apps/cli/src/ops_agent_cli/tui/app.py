@@ -20,6 +20,7 @@ from textual.widgets import Button, DataTable, Input, Static
 from ops_agent_cli.tui.chat import ChatTranscript
 from ops_agent_cli.tui.monitor import MonitorPane, ResourceViewer
 from ops_agent_cli.tui.settings import SettingsScreen
+from ops_agent_cli.tui.terminal import set_terminal_mouse_capture
 from ops_agent_cli.tui.themes import build_theme
 
 
@@ -116,6 +117,19 @@ class OpsAgentTui(App[None]):
     }
 
     #help.visible {
+        display: block;
+    }
+
+    #copy-mode-banner {
+        display: none;
+        height: 1;
+        padding: 0 1;
+        background: $warning;
+        color: $background;
+        text-style: bold;
+    }
+
+    #copy-mode-banner.visible {
         display: block;
     }
 
@@ -321,6 +335,7 @@ class OpsAgentTui(App[None]):
         Binding("ctrl+r", "refresh_monitor", "刷新监盘", priority=True),
         Binding("ctrl+k", "focus_monitor", "资源监盘", priority=True),
         Binding("ctrl+comma", "open_settings", "设置", priority=True),
+        Binding("f2", "toggle_copy_mode", "复制模式", priority=True),
         Binding("0", "show_overview", "Overview", show=False),
         Binding("1", "show_pods", "Pods", show=False),
         Binding("2", "show_deployments", "Deployments", show=False),
@@ -360,6 +375,7 @@ class OpsAgentTui(App[None]):
         self._busy = False
         self._monitor_refresh_in_progress = False
         self._monitor_refresh_pending = False
+        self._copy_mode = False
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="topbar"):
@@ -371,11 +387,15 @@ class OpsAgentTui(App[None]):
             )
             yield Button("⚙ Settings", id="settings-button", compact=True, flat=True)
         yield Static(
-            "全局：Ctrl+C 退出 · F1/? 帮助 · Ctrl+, 设置"
+            "全局：Ctrl+C 退出 · F1/? 帮助 · F2 复制模式 · Ctrl+, 设置"
             " · Ctrl+R 刷新 · Ctrl+K 聚焦监盘\n"
             "聊天：Enter 提交 · i 返回输入 · Ctrl+L 清空右侧显示\n"
             "监盘：0 总览 · 1~6 切换资源 · Enter/d 详情 · l Pod 日志 · q 退出",
             id="help",
+        )
+        yield Static(
+            " COPY MODE · 现在直接用鼠标拖选复制 · 按 F2 恢复仪表盘鼠标控制",
+            id="copy-mode-banner",
         )
         with Horizontal(id="workspace"):
             yield MonitorPane(id="monitor-pane")
@@ -389,11 +409,12 @@ class OpsAgentTui(App[None]):
                 )
         yield Static(
             " ^K 监盘  0 总览  1 Pods  2 Deploy  3 Stateful"
-            "  4 Daemon  5 Services  6 Replica  │  d 详情  l 日志  i 聊天",
+            "  4 Daemon  5 Services  6 Replica"
+            "  │  d 详情  l 日志  i 聊天  F2 复制",
             id="hotkeys",
         )
         yield Static(
-            " ^K 监盘 │ 0~6 资源 │ d 详情 │ l 日志 │ i 聊天 │ F1 帮助",
+            " ^K 监盘 │ 0~6 资源 │ d 详情 │ l 日志 │ i 聊天 │ F2 复制 │ F1 帮助",
             id="hotkeys-compact",
         )
 
@@ -509,6 +530,29 @@ class OpsAgentTui(App[None]):
             self._settings_closed,
         )
 
+    def action_toggle_copy_mode(self) -> None:
+        entering_copy_mode = not self._copy_mode
+        if not set_terminal_mouse_capture(
+            self._driver,
+            enabled=not entering_copy_mode,
+        ):
+            self.query_one("#status", Static).update(
+                "当前终端驱动不支持运行时切换复制模式"
+            )
+            return
+        self._copy_mode = entering_copy_mode
+        self.query_one("#copy-mode-banner", Static).set_class(
+            self._copy_mode,
+            "visible",
+        )
+        if isinstance(self.screen, ResourceViewer):
+            self.screen.set_copy_mode(self._copy_mode)
+        self.query_one("#status", Static).update(
+            "复制模式 · 现在直接鼠标拖选并复制 · F2 恢复鼠标控制"
+            if self._copy_mode
+            else "已退出复制模式 · 鼠标控制已恢复"
+        )
+
     def action_show_overview(self) -> None:
         self.query_one("#monitor-pane", MonitorPane).show_overview()
 
@@ -589,7 +633,10 @@ class OpsAgentTui(App[None]):
         operation: ResourceOperation,
         resource: KubernetesResourceRef,
     ) -> None:
-        viewer = ResourceViewer(loading_title=loading_title)
+        viewer = ResourceViewer(
+            loading_title=loading_title,
+            copy_mode=self._copy_mode,
+        )
         self.push_screen(viewer)
         self.call_after_refresh(
             self._load_resource_content,

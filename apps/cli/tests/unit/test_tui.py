@@ -345,6 +345,50 @@ def test_tui_monitor_accepts_mouse_focus_arrows_and_resource_shortcuts() -> None
     asyncio.run(exercise())
 
 
+def test_tui_copy_mode_releases_and_restores_terminal_mouse_capture() -> None:
+    async def exercise() -> None:
+        app = create_tui(FakeAgent(answer="unused"))
+        mouse_capture_calls: list[str] = []
+
+        async with app.run_test(size=(140, 34)) as pilot:
+            await app.workers.wait_for_complete()
+            app._driver._disable_mouse_support = (  # type: ignore[attr-defined]
+                lambda: mouse_capture_calls.append("disable")
+            )
+            app._driver._enable_mouse_support = (  # type: ignore[attr-defined]
+                lambda: mouse_capture_calls.append("enable")
+            )
+
+            await pilot.press("f2")
+            assert mouse_capture_calls == ["disable"]
+            assert "复制模式" in str(app.query_one("#status", Static).content)
+
+            await pilot.press("f2")
+            assert mouse_capture_calls == ["disable", "enable"]
+            assert "鼠标控制已恢复" in str(app.query_one("#status", Static).content)
+
+            await pilot.press("ctrl+k", "1", "l")
+            await app.workers.wait_for_complete()
+            await pilot.press("f2")
+            assert mouse_capture_calls == ["disable", "enable", "disable"]
+            assert "COPY MODE" in str(
+                app.screen.query_one("#resource-footer", Static).content
+            )
+
+            await pilot.press("f2")
+            assert mouse_capture_calls == [
+                "disable",
+                "enable",
+                "disable",
+                "enable",
+            ]
+            assert "F2 进入复制模式" in str(
+                app.screen.query_one("#resource-footer", Static).content
+            )
+
+    asyncio.run(exercise())
+
+
 def test_tui_settings_persist_project_and_apply_theme_immediately() -> None:
     async def exercise() -> None:
         saved: list[Settings] = []
