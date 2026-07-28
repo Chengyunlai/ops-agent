@@ -216,19 +216,26 @@ Overview 中可用方向键和 `Enter` 进入任意资源类型。选中资源�
 文件。
 
 PVC 浏览器选中普通文件后按 `s`，会将文件下载到配置根目录下的
-`environment/namespace/PVC/claim/...`。Pods 表格选中 Pod 后按 `g`，选择
-容器并输入绝对远端路径，文件保存到
-`environment/namespace/Pod/pod/container/...`。下载使用同目录 `.part`
-临时文件和原子发布；已有同名文件不会被覆盖，而是增加时间戳。完成后状态栏
-显示最终路径、字节数和 SHA-256。传输通过固定的 Python 读取脚本流式执行，
-不会把用户输入拼入 Shell 命令。
+`environment/namespace/PVC/claim/...`。Pod 文件不再要求进入会话前填写绝对
+路径；进入 Interactive Pod Session 后先使用 `cd`、`ls`、`find` 定位文件，
+再执行 `download <文件>`。相对路径基于当前容器工作目录解析，文件保存到
+`environment/namespace/Pod/pod/container/...`，下载完成后仍停留在同一个
+Shell。主机显示解析后的绝对路径；按 `y` 确认后才开始传输，防止容器输出
+伪造下载请求。
+
+下载使用同目录 `.part` 临时文件和原子发布；已有同名文件不会被覆盖，而是
+增加时间戳。完成后当前界面显示最终路径、字节数和完整 SHA-256。传输通过
+固定的 Python 读取脚本流式执行，不会把用户输入拼入 Shell 命令。
 
 Pods 表格选中 Pod 后按 `x` 可启动 **Interactive Pod Session**。该功能默认
 关闭，必须在 `[kubernetes.interactive_exec]` 中显式启用并重启 TUI；进入前
 还要选择容器并确认实际写入风险。会话期间 TUI 让出终端并明确显示人工写访问
 模式；kubectl 接管终端前还会打印包含环境、namespace、Pod、容器和写风险的
-横幅，退出 Shell 后恢复监盘。该入口只属于左侧人工操作，不注册为 LangChain
-Tool、不进入主图或子 Agent，也不会把 Shell 命令交给模型。
+横幅。会话会在容器 `/tmp` 创建仅本次有效的 `download` 辅助命令，退出时
+清理；异常断开时本机还会按随机会话标识执行兜底清理。该命令通过带随机令牌
+的终端协议请求本机执行只读传输。会话期间暂停后台监盘刷新，退出 Shell 后
+恢复，避免 Kubernetes TLS 警告污染终端。该入口只属于左侧人工操作，不注册
+为 LangChain Tool、不进入主图或子 Agent，也不会把 Shell 命令交给模型。
 
 目录浏览要求 PVC 已挂载到 Running 容器，目标容器包含 POSIX `sh` 和
 Python 3。kubeconfig/RBAC 至少需要读取 namespace 内 Pod/PVC、读取集群级
@@ -306,6 +313,7 @@ ops_agent/
 │       │       ├── bootstrap.py
 │       │       ├── main.py
 │       │       ├── pod_access.py
+│       │       ├── terminal_session.py
 │       │       └── tui/
 │       │           ├── __init__.py
 │       │           ├── app.py
@@ -319,6 +327,8 @@ ops_agent/
 │       │   └── unit/
 │       │       ├── test_bootstrap.py
 │       │       ├── test_main.py
+│       │       ├── test_pod_access.py
+│       │       ├── test_terminal_session.py
 │       │       └── test_tui.py
 │       └── pyproject.toml
 ├── docs/

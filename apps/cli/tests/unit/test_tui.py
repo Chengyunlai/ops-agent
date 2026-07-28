@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import nullcontext
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -830,54 +831,7 @@ def test_tui_browses_pvc_directories_and_previews_files() -> None:
     asyncio.run(exercise())
 
 
-def test_tui_downloads_arbitrary_file_from_selected_pod(
-    tmp_path: Path,
-) -> None:
-    async def exercise() -> None:
-        monitor = FakeMonitor()
-        pod_access = FakePodAccess(tmp_path)
-        app = create_tui(
-            FakeAgent(answer="unused"),
-            monitor=monitor,
-            pod_access=pod_access,
-        )
-
-        async with app.run_test(size=(140, 34)) as pilot:
-            await app.workers.wait_for_complete()
-            await pilot.press("ctrl+k", "1", "g")
-            await app.workers.wait_for_complete()
-            await pilot.pause()
-
-            assert "POD ARTIFACT DOWNLOAD" in str(
-                app.screen.query_one("#pod-access-title", Static).content
-            )
-            app.screen.query_one("#pod-access-container", Select).value = "sidecar"
-            app.screen.query_one(
-                "#pod-access-remote-path", Input
-            ).value = "/var/log/sample/app.log"
-            await pilot.click("#pod-access-confirm")
-            await app.workers.wait_for_complete()
-            await pilot.pause()
-
-            assert pod_access.calls == [
-                (
-                    "pod",
-                    (
-                        "sample-api-7f8",
-                        "sidecar",
-                        "/var/log/sample/app.log",
-                    ),
-                )
-            ]
-            status = str(app.query_one("#status", Static).content)
-            assert "下载完成" in status
-            assert str(tmp_path / "pod.log") in status
-            assert f"SHA-256 {'a' * 64}" in status
-
-    asyncio.run(exercise())
-
-
-def test_tui_interactive_pod_session_is_disabled_by_default_and_warns_when_enabled(
+def test_tui_unifies_interactive_pod_session_and_downloads(
     tmp_path: Path,
 ) -> None:
     async def exercise() -> None:
@@ -901,10 +855,20 @@ def test_tui_interactive_pod_session_is_disabled_by_default_and_warns_when_enabl
         enabled_app = create_tui(
             FakeAgent(answer="unused"),
             settings=enabled_settings,
-            pod_access=FakePodAccess(tmp_path),
+            pod_access=(pod_access := FakePodAccess(tmp_path)),
         )
         async with enabled_app.run_test(size=(140, 34)) as pilot:
             await enabled_app.workers.wait_for_complete()
+            timer_calls: list[str] = []
+            enabled_app._monitor_timer = type(
+                "FakeTimer",
+                (),
+                {
+                    "pause": lambda self: timer_calls.append("pause"),
+                    "resume": lambda self: timer_calls.append("resume"),
+                },
+            )()
+            enabled_app.suspend = lambda: nullcontext()  # type: ignore[method-assign]
             await pilot.press("ctrl+k", "1", "x")
             await enabled_app.workers.wait_for_complete()
             await pilot.pause()
@@ -923,6 +887,19 @@ def test_tui_interactive_pod_session_is_disabled_by_default_and_warns_when_enabl
             )
             assert "写能力" in warning
             assert "不会经过 AI" in warning
+            assert "download <文件>" in warning
+
+            enabled_app.screen.query_one(
+                "#pod-access-container",
+                Select,
+            ).value = "sidecar"
+            await pilot.click("#pod-access-confirm")
+            await enabled_app.workers.wait_for_complete()
+            await pilot.pause()
+
+            assert pod_access.calls == [("shell", ("sample-api-7f8", "sidecar"))]
+            assert timer_calls == ["pause", "resume"]
+            assert "已结束" in str(enabled_app.query_one("#status", Static).content)
 
     asyncio.run(exercise())
 

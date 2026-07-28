@@ -1,5 +1,8 @@
+import base64
 import hashlib
 import io
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -8,7 +11,12 @@ from ops_agent.settings import (
     InteractiveExecSettings,
     KubernetesSettings,
 )
-from ops_agent_cli.pod_access import KubectlPodAccess, PodAccessError
+from ops_agent_cli.pod_access import (
+    _DOWNLOAD_HELPER,
+    KubectlPodAccess,
+    PodAccessError,
+)
+from ops_agent_cli.terminal_session import InteractiveTerminalError
 
 
 class FakeProcess:
@@ -133,6 +141,7 @@ def test_download_pvc_file_uses_mount_scoped_remote_reader(
     [
         ("pod", "var/log/app.log"),
         ("pod", "/var/log/../secret"),
+        ("pod", "/var/log/report\r\x1b[2J.log"),
         ("pvc", "../secret"),
         ("pvc", "/absolute"),
     ],
@@ -275,20 +284,51 @@ def test_download_keeps_directory_fd_when_path_is_replaced_mid_transfer(
     assert not list(download_root.rglob("*.part"))
 
 
-def test_interactive_session_is_config_gated_and_inherits_terminal(
+def test_interactive_session_downloads_discovered_file_without_exiting_shell(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    commands: list[list[str]] = []
+    session_commands: list[list[str]] = []
+    download_commands: list[list[str]] = []
+    cleanup_commands: list[list[str]] = []
+    session_messages: list[str] = []
+    monkeypatch.setenv("DEBUG", "release")
+
+    def fake_terminal(
+        command,
+        *,
+        environment,
+        download_token,
+        download_file,
+    ):
+        session_commands.append(command)
+        assert environment["HTTP_PROXY"] == "http://127.0.0.1:7897/"
+        assert "DEBUG" not in environment
+        assert len(download_token) == 32
+        session_messages.append(download_file("/workspace/report.log"))
+        return 0
+
+    def fake_popen(command, **kwargs):
+        download_commands.append(command)
+        return FakeProcess(b"session artifact")
+
+    monkeypatch.setattr(
+        "ops_agent_cli.pod_access.run_interactive_terminal",
+        fake_terminal,
+        raising=False,
+    )
 
     def fake_run(command, **kwargs):
-        commands.append(command)
-        assert kwargs["check"] is False
-        assert kwargs["env"]["HTTP_PROXY"] == "http://127.0.0.1:7897/"
-        return type("Result", (), {"returncode": 0})()
+        cleanup_commands.append(command)
+        assert kwargs["stdin"] is subprocess.DEVNULL
+        return subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr("ops_agent_cli.pod_access.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "ops_agent_cli.pod_access.subprocess.Popen",
+        fake_popen,
+    )
 
     disabled = KubectlPodAccess(create_settings(tmp_path))
     with pytest.raises(PodAccessError, match="未启用"):
@@ -304,6 +344,19 @@ def test_interactive_session_is_config_gated_and_inherits_terminal(
     )
 
     assert result.exit_code == 0
+    downloaded = (
+        tmp_path
+        / "test"
+        / "sample"
+        / "Pod"
+        / "pod-1"
+        / "main"
+        / "workspace"
+        / "report.log"
+    )
+    assert downloaded.read_bytes() == b"session artifact"
+    assert "下载完成" in session_messages[0]
+    assert str(downloaded) in session_messages[0]
     banner = capsys.readouterr().out
     assert "INTERACTIVE POD SESSION · MANUAL WRITE ACCESS" in banner
     assert "Environment: test" in banner
@@ -311,7 +364,8 @@ def test_interactive_session_is_config_gated_and_inherits_terminal(
     assert "Pod: pod-1" in banner
     assert "Container: main" in banner
     assert "AI只读保护已暂停" in banner
-    assert commands[0][6:12] == [
+    assert "download <文件>" in banner
+    assert session_commands[0][6:12] == [
         "exec",
         "-it",
         "pod-1",
@@ -319,3 +373,66 @@ def test_interactive_session_is_config_gated_and_inherits_terminal(
         "main",
         "--",
     ]
+    assert download_commands[0][-1] == "/workspace/report.log"
+    assert cleanup_commands[0][6:10] == [
+        "exec",
+        "pod-1",
+        "-c",
+        "main",
+    ]
+
+
+def test_download_helper_resolves_relative_path_with_python(
+    tmp_path: Path,
+) -> None:
+    parent = tmp_path / "workspace"
+    child = parent / "nested"
+    child.mkdir(parents=True)
+    artifact = parent / "daily report.log"
+    artifact.write_text("report")
+    environment = os.environ.copy()
+    environment["OPS_AGENT_DOWNLOAD_TOKEN"] = "session-token"
+
+    completed = subprocess.run(
+        ["sh", "-c", _DOWNLOAD_HELPER, "download", "../daily report.log"],
+        cwd=child,
+        env=environment,
+        check=True,
+        capture_output=True,
+    )
+
+    prefix = b"\x1b]777;ops-agent-download;session-token;"
+    assert completed.stdout.startswith(prefix)
+    assert completed.stdout.endswith(b"\x07")
+    encoded_path = completed.stdout[len(prefix) : -1]
+    assert base64.b64decode(encoded_path).decode() == str(artifact)
+
+
+def test_interactive_session_runs_remote_cleanup_after_terminal_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cleanup_commands: list[list[str]] = []
+
+    def fail_terminal(*args, **kwargs):
+        raise InteractiveTerminalError("terminal disconnected")
+
+    def fake_run(command, **kwargs):
+        cleanup_commands.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(
+        "ops_agent_cli.pod_access.run_interactive_terminal",
+        fail_terminal,
+    )
+    monkeypatch.setattr("ops_agent_cli.pod_access.subprocess.run", fake_run)
+    access = KubectlPodAccess(create_settings(tmp_path, interactive_exec=True))
+
+    with pytest.raises(PodAccessError, match="terminal disconnected"):
+        access.interactive_session(
+            pod_name="pod-1",
+            container_name="main",
+        )
+
+    assert len(cleanup_commands) == 1
+    assert ".ops-agent-session-" in cleanup_commands[0][-2]

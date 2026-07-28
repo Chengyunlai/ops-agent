@@ -14,6 +14,11 @@ from typing import BinaryIO
 
 from ops_agent.settings import KubernetesSettings
 
+from ops_agent_cli.terminal_session import (
+    InteractiveTerminalError,
+    run_interactive_terminal,
+)
+
 _PYTHON_RUNNER = r"""
 if command -v python3 >/dev/null 2>&1; then
     interpreter=python3
@@ -91,15 +96,127 @@ finally:
         os.close(directory)
 """.strip()
 
+_DOWNLOAD_HELPER = r"""#!/bin/sh
+if [ "$1" = "--" ]; then
+    shift
+fi
+if [ "$#" -ne 1 ]; then
+    printf '%s\n' 'usage: download <file>' >&2
+    exit 2
+fi
+case "$1" in
+    /*) candidate=$1 ;;
+    *) candidate=$PWD/$1 ;;
+esac
+if command -v python3 >/dev/null 2>&1; then
+    interpreter=python3
+elif command -v python >/dev/null 2>&1; then
+    interpreter=python
+else
+    printf '%s\n' 'download: container is missing Python' >&2
+    exit 127
+fi
+encoded_path=$(
+    "$interpreter" - "$candidate" <<'OPS_AGENT_PYTHON'
+import base64
+import os
+import sys
+
+remote_path = os.path.realpath(sys.argv[1])
+if not os.path.isfile(remote_path):
+    print(f"download: not a regular file: {remote_path}", file=sys.stderr)
+    raise SystemExit(1)
+print(base64.b64encode(remote_path.encode()).decode())
+OPS_AGENT_PYTHON
+) || exit
+printf '\033]777;ops-agent-download;%s;%s\007' \
+    "$OPS_AGENT_DOWNLOAD_TOKEN" "$encoded_path"
+""".strip()
+
+_CLEANUP_INTERACTIVE_SESSION = r"""
+import os
+import shutil
+import signal
+import sys
+import time
+
+session_dir, session_id = sys.argv[1:3]
+
+
+def is_matching_session_process(pid):
+    with open(f"/proc/{pid}/cmdline", "rb") as command_line:
+        arguments = command_line.read().split(b"\0")
+    with open(f"/proc/{pid}/stat", encoding="utf-8") as process_stat:
+        stat_fields = process_stat.read().rsplit(")", 1)[1].split()
+    process_group = int(stat_fields[2])
+    return session_id.encode() in arguments and process_group == pid
+
+
+def read_session_process():
+    descriptor = os.open(
+        os.path.join(session_dir, "pid"),
+        os.O_RDONLY | os.O_NOFOLLOW,
+    )
+    try:
+        pid = int(os.read(descriptor, 32))
+    finally:
+        os.close(descriptor)
+    if not is_matching_session_process(pid):
+        return None
+    return pid
+
+
+try:
+    process_group = read_session_process()
+    if process_group is not None:
+        os.killpg(process_group, signal.SIGHUP)
+        time.sleep(0.2)
+        if is_matching_session_process(process_group):
+            os.killpg(process_group, signal.SIGKILL)
+except (OSError, ValueError):
+    pass
+finally:
+    shutil.rmtree(session_dir, ignore_errors=True)
+""".strip()
+
 _INTERACTIVE_SHELL = r"""
+download_token=$1
+download_helper=$2
+session_id=$3
+case "$session_id" in
+    ""|*[!0-9a-f]*) exit 2 ;;
+esac
+session_dir="/tmp/.ops-agent-session-$session_id"
+
+cleanup() {
+    rm -rf "$session_dir"
+}
+
+trap cleanup EXIT
+trap 'cleanup; exit 129' HUP
+trap 'cleanup; exit 143' TERM
+umask 077
+mkdir "$session_dir" || exit 1
+printf '%s\n' "$$" >"$session_dir/pid" || exit 1
+printf '%s\n' "$download_helper" >"$session_dir/download" || exit 1
+chmod 700 "$session_dir/download" || exit 1
+export OPS_AGENT_DOWNLOAD_TOKEN="$download_token"
+export PATH="$session_dir:$PATH"
+
+printf '%s\n' \
+    '[OPS AGENT] 使用 download <文件> 下载当前容器中的文件到本机。'
 if command -v bash >/dev/null 2>&1; then
-    exec bash
+    bash -i
 elif command -v sh >/dev/null 2>&1; then
-    exec sh
+    sh -i
 else
     printf '%s\n' '容器中没有可用的 bash 或 sh' >&2
     exit 127
 fi
+session_status=$?
+cleanup
+trap - EXIT
+exit "$session_status"
 """.strip()
 
 
@@ -200,6 +317,8 @@ class KubectlPodAccess:
             raise PodAccessError(
                 "Interactive Pod Session 未启用；请先在 Settings 中启用"
             )
+        download_token = secrets.token_hex(16)
+        session_id = secrets.token_hex(16)
         command = [
             *self._kubectl_base(),
             "exec",
@@ -211,6 +330,10 @@ class KubectlPodAccess:
             "sh",
             "-c",
             _INTERACTIVE_SHELL,
+            "ops-agent",
+            download_token,
+            _DOWNLOAD_HELPER,
+            session_id,
         ]
         print(
             _interactive_session_banner(
@@ -222,14 +345,77 @@ class KubectlPodAccess:
             flush=True,
         )
         try:
-            completed = subprocess.run(
-                command,
-                check=False,
-                env=self._kubectl_environment(),
+            try:
+                exit_code = run_interactive_terminal(
+                    command,
+                    environment=self._kubectl_environment(),
+                    download_token=download_token,
+                    download_file=lambda remote_path: self._session_download(
+                        pod_name=pod_name,
+                        container_name=container_name,
+                        remote_path=remote_path,
+                    ),
+                )
+            except InteractiveTerminalError as error:
+                raise PodAccessError(str(error)) from error
+        finally:
+            self._cleanup_interactive_session(
+                pod_name=pod_name,
+                container_name=container_name,
+                session_id=session_id,
             )
-        except OSError as error:
-            raise PodAccessError(f"无法启动 kubectl: {error}") from error
-        return InteractiveSessionResult(exit_code=completed.returncode)
+        return InteractiveSessionResult(exit_code=exit_code)
+
+    def _session_download(
+        self,
+        *,
+        pod_name: str,
+        container_name: str,
+        remote_path: str,
+    ) -> str:
+        result = self.download_pod_file(
+            pod_name=pod_name,
+            container_name=container_name,
+            remote_path=remote_path,
+        )
+        return (
+            f"下载完成 · {result.size_bytes} bytes · "
+            f"SHA-256 {result.sha256} · {result.path}"
+        )
+
+    def _cleanup_interactive_session(
+        self,
+        *,
+        pod_name: str,
+        container_name: str,
+        session_id: str,
+    ) -> None:
+        session_dir = f"/tmp/.ops-agent-session-{session_id}"
+        command = self._exec_command(
+            pod_name=pod_name,
+            container_name=container_name,
+            remote_command=[
+                "sh",
+                "-c",
+                _PYTHON_RUNNER,
+                "ops-agent-cleanup",
+                _CLEANUP_INTERACTIVE_SESSION,
+                session_dir,
+                session_id,
+            ],
+        )
+        try:
+            subprocess.run(
+                command,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env=self._kubectl_environment(),
+                check=False,
+                timeout=self._settings.request_timeout_seconds,
+            )
+        except OSError, subprocess.TimeoutExpired:
+            return
 
     def _download(
         self,
@@ -324,6 +510,7 @@ class KubectlPodAccess:
 
     def _kubectl_environment(self) -> dict[str, str]:
         environment = os.environ.copy()
+        environment.pop("DEBUG", None)
         if self._settings.proxy_url is not None:
             proxy_url = str(self._settings.proxy_url)
             environment["HTTP_PROXY"] = proxy_url
@@ -471,11 +658,14 @@ def _interactive_session_banner(
         f"Pod: {pod_name}\n"
         f"Container: {container_name}\n"
         "AI只读保护已暂停；以下命令由用户直接执行，不经过 AI。\n"
+        "在容器中执行 download <文件> 可下载相对或绝对路径文件。\n"
         "输入 exit 或按 Ctrl+D 返回 Ops Agent TUI。\n"
     )
 
 
 def _validate_absolute_pod_path(path: str) -> tuple[str, ...]:
+    if _contains_control_character(path):
+        raise PodAccessError("Pod 下载路径不能包含终端控制字符")
     candidate = PurePosixPath(path)
     if not candidate.is_absolute() or ".." in candidate.parts:
         raise PodAccessError("Pod 下载路径必须是容器内不含 '..' 的绝对路径")
@@ -502,6 +692,11 @@ def _local_component(value: str, label: str) -> str:
         or "/" in value
         or "\\" in value
         or "\0" in value
+        or _contains_control_character(value)
     ):
         raise PodAccessError(f"{label} 名称不能用于本机下载路径")
     return value
+
+
+def _contains_control_character(value: str) -> bool:
+    return any(not character.isprintable() for character in value)

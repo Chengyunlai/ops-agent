@@ -51,5 +51,6 @@ _Avoid_: Agent exec, AI shell, diagnostic tool
 
 **Artifact Download**:
 A user-initiated, read-only transfer from a Pod or mounted PVC into a configured
-local download root, independent of an Interactive Pod Session.
+local download root. It may be requested from an Interactive Pod Session, but
+the host performs the transfer outside the remote Shell command stream.
 _Avoid_: Shell download, Agent export, remote copy
