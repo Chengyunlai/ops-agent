@@ -53,6 +53,39 @@ def test_load_settings_from_toml(tmp_path: Path):
     assert settings.model.name == "test-model"
     assert settings.model.base_url == "https://api.deepseek.com"
     assert settings.model.api_key_env == "DEEPSEEK_API_KEY"
+    assert not settings.kubernetes.interactive_exec.enabled
+    assert settings.kubernetes.downloads.directory == Path("~/Downloads/ops-agent")
+
+
+def test_load_settings_parses_manual_pod_access_configuration(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "test.toml"
+    config_path.write_text(
+        """
+        [kubernetes]
+        environment = "test"
+        namespace = "sample"
+        kubeconfig_path = "/tmp/ops_agent-kubeconfig"
+        request_timeout_seconds = 10
+
+        [kubernetes.interactive_exec]
+        enabled = true
+
+        [kubernetes.downloads]
+        directory = "/tmp/ops-agent-downloads"
+
+        [model]
+        provider = "openai"
+        model = "test-model"
+        """,
+        encoding="utf-8",
+    )
+
+    settings = load_settings(config_path)
+
+    assert settings.kubernetes.interactive_exec.enabled
+    assert settings.kubernetes.downloads.directory == Path("/tmp/ops-agent-downloads")
 
 
 def test_load_settings_parses_project_and_tui_preferences(tmp_path: Path) -> None:

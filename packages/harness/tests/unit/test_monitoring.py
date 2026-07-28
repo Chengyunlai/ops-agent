@@ -286,6 +286,22 @@ def test_monitor_captures_fixed_namespace_snapshot() -> None:
     ]
 
 
+def test_monitor_lists_selected_pod_containers_for_manual_actions() -> None:
+    source = FakeKubernetesSource()
+    source.containers = ["api", "sidecar"]
+    monitor = KubernetesMonitor(source, namespace="sample")
+
+    containers = monitor.pod_containers(
+        KubernetesResourceRef(
+            kind=KubernetesResourceKind.POD,
+            name="sample-api",
+        )
+    )
+
+    assert containers == ("api", "sidecar")
+    assert source.calls == [("pod_details", "sample/sample-api")]
+
+
 def test_monitor_browses_and_previews_pvc_without_exposing_namespace() -> None:
     source = FakeKubernetesSource()
     monitor = KubernetesMonitor(source, namespace="sample")

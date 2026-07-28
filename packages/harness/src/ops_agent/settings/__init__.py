@@ -1,5 +1,7 @@
 from ops_agent.settings.loader import SettingsError, load_settings, save_settings
 from ops_agent.settings.models import (
+    DownloadSettings,
+    InteractiveExecSettings,
     KubernetesSettings,
     ModelSettings,
     ProjectSettings,
@@ -10,6 +12,8 @@ from ops_agent.settings.models import (
 )
 
 __all__ = [
+    "DownloadSettings",
+    "InteractiveExecSettings",
     "KubernetesSettings",
     "ModelSettings",
     "ProjectSettings",

@@ -2,6 +2,8 @@ from collections.abc import Callable
 from typing import ClassVar
 
 from ops_agent.settings import (
+    DownloadSettings,
+    InteractiveExecSettings,
     KubernetesSettings,
     ProjectSettings,
     Settings,
@@ -155,8 +157,33 @@ class SettingsScreen(ModalScreen[Settings | None]):
                         id="setting-timeout",
                     ),
                 )
+                yield Static("人工 Pod 访问", classes="settings-section")
+                yield from _field(
+                    "Interactive Pod Session",
+                    Select(
+                        (
+                            ("禁用（默认）", "disabled"),
+                            ("启用", "enabled"),
+                        ),
+                        value=(
+                            "enabled"
+                            if kubernetes.interactive_exec.enabled
+                            else "disabled"
+                        ),
+                        allow_blank=False,
+                        id="setting-interactive-exec",
+                    ),
+                )
+                yield from _field(
+                    "Artifact Download 本机目录",
+                    Input(
+                        value=str(kubernetes.downloads.directory),
+                        id="setting-download-directory",
+                    ),
+                )
                 yield Static(
-                    "Project Profile 修改会保存到配置文件，重启应用后生效。",
+                    "环境、集群连接与人工访问配置保存后，重启应用生效。"
+                    " Interactive Pod Session 可修改容器，请谨慎启用。",
                     id="settings-note",
                 )
 
@@ -220,12 +247,29 @@ class SettingsScreen(ModalScreen[Settings | None]):
                 name=self.query_one("#setting-project-name", Input).value,
             )
             proxy_value = self.query_one("#setting-proxy", Input).value.strip()
+            interactive_exec = InteractiveExecSettings(
+                enabled=(
+                    self.query_one(
+                        "#setting-interactive-exec",
+                        Select,
+                    ).value
+                    == "enabled"
+                ),
+            )
+            downloads = DownloadSettings(
+                directory=self.query_one(
+                    "#setting-download-directory",
+                    Input,
+                ).value,
+            )
             kubernetes = KubernetesSettings(
                 environment=self.query_one("#setting-environment", Input).value,
                 namespace=self.query_one("#setting-namespace", Input).value,
                 kubeconfig_path=self.query_one("#setting-kubeconfig", Input).value,
                 request_timeout_seconds=timeout,
                 proxy_url=proxy_value or None,
+                interactive_exec=interactive_exec,
+                downloads=downloads,
             )
             updated = Settings(
                 project=project,

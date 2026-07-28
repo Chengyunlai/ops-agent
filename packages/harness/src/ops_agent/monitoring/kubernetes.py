@@ -311,6 +311,18 @@ class KubernetesMonitor:
             content=content,
         )
 
+    def pod_containers(
+        self,
+        resource: KubernetesResourceRef,
+    ) -> tuple[str, ...]:
+        if resource.kind is not KubernetesResourceKind.POD:
+            raise ValueError("容器选择仅支持 Pod")
+        details = self._source.get_pod_details(
+            self._namespace,
+            resource.name,
+        )
+        return tuple(container.name for container in details.containers)
+
     def browse_pvc(
         self,
         resource: KubernetesResourceRef,

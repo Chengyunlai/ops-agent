@@ -8,6 +8,7 @@ from pydantic import (
     ConfigDict,
     Field,
     HttpUrl,
+    StrictBool,
     StrictInt,
     StrictStr,
 )
@@ -50,6 +51,20 @@ class _ConfigModel(BaseModel):
     )
 
 
+class InteractiveExecSettings(_ConfigModel):
+    enabled: StrictBool = Field(
+        default=False,
+        description="是否允许用户从资源监盘启动交互式 Pod Shell",
+    )
+
+
+class DownloadSettings(_ConfigModel):
+    directory: _ConfigPath = Field(
+        default=Path("~/Downloads/ops-agent"),
+        description="Artifact Download 本机保存根目录",
+    )
+
+
 class KubernetesSettings(_ConfigModel):
     environment: _NonEmptyString = Field(description="运行环境标识")
     namespace: _NonEmptyString = Field(description="固定 Kubernetes namespace")
@@ -60,6 +75,14 @@ class KubernetesSettings(_ConfigModel):
     proxy_url: HttpUrl | None = Field(
         default=None,
         description="可选的 Kubernetes API HTTP(S) 代理地址",
+    )
+    interactive_exec: InteractiveExecSettings = Field(
+        default_factory=InteractiveExecSettings,
+        description="人工 Pod 交互式终端配置",
+    )
+    downloads: DownloadSettings = Field(
+        default_factory=DownloadSettings,
+        description="Pod/PVC 文件下载配置",
     )
 
 

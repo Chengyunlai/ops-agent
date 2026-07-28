@@ -43,3 +43,13 @@ _Avoid_: Project, cluster config, runtime context
 A question that resolves missing or ambiguous intent before a Capability is
 selected.
 _Avoid_: Rejection, retry
+
+**Interactive Pod Session**:
+A user-initiated terminal session attached to one container from the resource
+monitor, outside Agent capabilities and unavailable to AI tool selection.
+_Avoid_: Agent exec, AI shell, diagnostic tool
+
+**Artifact Download**:
+A user-initiated, read-only transfer from a Pod or mounted PVC into a configured
+local download root, independent of an Interactive Pod Session.
+_Avoid_: Shell download, Agent export, remote copy

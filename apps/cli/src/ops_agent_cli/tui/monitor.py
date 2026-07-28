@@ -9,6 +9,7 @@ from ops_agent.monitoring import (
     KubernetesResourceKind,
     KubernetesResourceRef,
     VolumeDirectory,
+    VolumeEntry,
     VolumeEntryKind,
 )
 from rich.text import Text
@@ -18,6 +19,8 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, RichLog, Static
+
+from ops_agent_cli.pod_access import DownloadResult
 
 
 class CopyModeController(Protocol):
@@ -41,6 +44,18 @@ class VolumeBrowserSource(Protocol):
         path: str,
         max_bytes: int = 64 * 1024,
     ) -> KubernetesResourceContent: ...
+
+
+class PvcDownloader(Protocol):
+    def download_pvc_file(
+        self,
+        *,
+        claim_name: str,
+        pod_name: str,
+        container_name: str,
+        mount_path: str,
+        relative_path: str,
+    ) -> DownloadResult: ...
 
 
 class ResourceViewer(ModalScreen[None]):
@@ -123,20 +138,24 @@ class VolumeBrowser(ModalScreen[None]):
         Binding("q", "close", "返回", priority=True),
         Binding("backspace", "parent", "上级目录", priority=True),
         Binding("r", "refresh", "刷新", priority=True),
+        Binding("s", "download", "下载文件", priority=True),
     ]
 
     def __init__(
         self,
         *,
         source: VolumeBrowserSource,
+        downloader: PvcDownloader,
         resource: KubernetesResourceRef,
     ) -> None:
         super().__init__()
         self._source = source
+        self._downloader = downloader
         self._resource = resource
         self._directory: VolumeDirectory | None = None
         self._loading = False
         self._preview_loading = False
+        self._download_loading = False
 
     def compose(self) -> ComposeResult:
         with Vertical(id="volume-browser"):
@@ -153,7 +172,7 @@ class VolumeBrowser(ModalScreen[None]):
             )
             yield Static("正在读取目录…", id="volume-browser-status")
             yield Static(
-                " Enter 打开 · Backspace 上级 · r 刷新 · Esc/q 返回",
+                " Enter 打开/预览 · s 下载文件 · Backspace 上级 · r 刷新 · Esc/q 返回",
                 id="volume-browser-footer",
             )
 
@@ -179,14 +198,33 @@ class VolumeBrowser(ModalScreen[None]):
         path = self._directory.path if self._directory is not None else "."
         self._load_directory(path)
 
+    def action_download(self) -> None:
+        selected = self._selected_entry()
+        directory = self._directory
+        if selected is None or directory is None:
+            self.query_one("#volume-browser-status", Static).update("请先选择一个文件")
+            return
+        entry, path = selected
+        if entry.kind is not VolumeEntryKind.FILE:
+            self.query_one("#volume-browser-status", Static).update(
+                "Artifact Download 仅支持普通文件"
+            )
+            return
+        if self._download_loading:
+            self.query_one("#volume-browser-status", Static).update(
+                "上一文件仍在下载，请稍候"
+            )
+            return
+        self._download_loading = True
+        self.query_one("#volume-browser-status", Static).update(f"正在下载 {path}…")
+        self._download_file(path)
+
     @on(DataTable.RowSelected, "#volume-browser-table")
     def open_selected_entry(self) -> None:
-        directory = self._directory
-        table = self.query_one("#volume-browser-table", DataTable)
-        if directory is None or not 0 <= table.cursor_row < len(directory.entries):
+        selected = self._selected_entry()
+        if selected is None:
             return
-        entry = directory.entries[table.cursor_row]
-        path = _child_volume_path(directory.path, entry.name)
+        entry, path = selected
         if entry.kind is VolumeEntryKind.DIRECTORY:
             self._load_directory(path)
         elif entry.kind is VolumeEntryKind.FILE:
@@ -199,6 +237,39 @@ class VolumeBrowser(ModalScreen[None]):
             self.query_one("#volume-browser-status", Static).update(
                 "当前条目类型不支持预览"
             )
+
+    @work(
+        group="volume-download",
+        exclusive=True,
+        exit_on_error=False,
+    )
+    async def _download_file(self, path: str) -> None:
+        directory = self._directory
+        if directory is None:
+            self._download_loading = False
+            return
+        target = directory.target
+        try:
+            result = await asyncio.to_thread(
+                self._downloader.download_pvc_file,
+                claim_name=self._resource.name,
+                pod_name=target.pod_name,
+                container_name=target.container_name,
+                mount_path=target.mount_path,
+                relative_path=path,
+            )
+        except Exception as error:  # noqa: BLE001 - 下载错误必须回显到浏览器
+            if self.is_mounted:
+                self.query_one("#volume-browser-status", Static).update(
+                    f"下载失败：{error}"
+                )
+        else:
+            if self.is_mounted:
+                self.query_one("#volume-browser-status", Static).update(
+                    _download_result_status(result)
+                )
+        finally:
+            self._download_loading = False
 
     @work(
         group="volume-directory",
@@ -299,6 +370,14 @@ class VolumeBrowser(ModalScreen[None]):
                 viewer.display_content(content)
         finally:
             self._preview_loading = False
+
+    def _selected_entry(self) -> tuple[VolumeEntry, str] | None:
+        directory = self._directory
+        table = self.query_one("#volume-browser-table", DataTable)
+        if directory is None or not 0 <= table.cursor_row < len(directory.entries):
+            return None
+        entry = directory.entries[table.cursor_row]
+        return entry, _child_volume_path(directory.path, entry.name)
 
 
 class MonitorPane(Vertical):
@@ -547,3 +626,10 @@ def _format_size(size_bytes: int | None) -> str:
             return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
         size /= 1024
     return f"{size_bytes} B"
+
+
+def _download_result_status(result: DownloadResult) -> str:
+    return (
+        f"下载完成 · {_format_size(result.size_bytes)} · "
+        f"SHA-256 {result.sha256} · {result.path}"
+    )

@@ -24,6 +24,8 @@
 | 不可变配置模型 | 已完成 | 使用冻结的 Pydantic 模型声明类型、别名和字段约束 |
 | Kubernetes 只读查询 | 已完成 | 查询常用工作负载、网络入口、PVC、Pod 详情/日志和关联 Event |
 | PVC 存储浏览 | 已完成 | 展示 PVC/PV/StorageClass/后端/挂载关系，并经现有 Pod 只读浏览目录和预览文本文件 |
+| Artifact Download | 已完成 | 从选定 Pod 或 PVC 流式下载普通文件，显示大小与 SHA-256，失败自动清理 |
+| Interactive Pod Session | 已完成 | 左侧监盘人工进入选定 Pod/容器；默认禁用且不向 Agent 暴露 |
 | Kubernetes 基础诊断 | 已完成 | Agent 可调用确定性规则识别 Pod 阶段/就绪异常和 Deployment 副本不足 |
 | 告警接入与诊断 | 规划中 | 接入告警并生成带证据的诊断报告 |
 | 审批与处置执行 | 规划中 | 执行扩缩容、重启、回滚等受控动作 |
@@ -85,6 +87,12 @@ namespace = "operations"
 kubeconfig_path = "/absolute/path/to/.kube/config"
 request_timeout_seconds = 10
 
+[kubernetes.interactive_exec]
+enabled = false
+
+[kubernetes.downloads]
+directory = "~/Downloads/ops-agent"
+
 [model]
 provider = "openai"
 model = "deepseek-v4-pro"
@@ -118,6 +126,8 @@ export DEEPSEEK_API_KEY="..."
 | `kubeconfig_path` | string | kubeconfig 路径，推荐使用绝对路径 |
 | `request_timeout_seconds` | integer | Kubernetes API 请求超时时间（秒） |
 | `proxy_url` | HTTP(S) URL | 可选；访问 Kubernetes API 使用的代理，例如 `http://127.0.0.1:7897` |
+| `kubernetes.interactive_exec.enabled` | boolean | 是否允许左侧监盘启动人工 Pod Shell；默认 `false` |
+| `kubernetes.downloads.directory` | path | Pod/PVC 文件下载的本机根目录；默认 `~/Downloads/ops-agent` |
 | `model.provider` | string | LangChain 模型适配器；DeepSeek 兼容接口使用 `openai` |
 | `model.model` | string | 供应商提供的、支持工具调用的模型名称 |
 | `model.base_url` | string | 可选的模型接口地址 |
@@ -130,7 +140,8 @@ export DEEPSEEK_API_KEY="..."
 | `tui.colors.warning` | `#RRGGBB` | 可选的主题警告色覆盖 |
 
 当前加载器校验配置文件、TOML 格式、`[kubernetes]` / `[model]`
-区块、字段类型、正整数超时、可选代理 URL、主题名称和十六进制颜色；
+区块、字段类型、正整数超时、可选代理 URL、人工终端开关、下载目录、主题名称
+和十六进制颜色；
 kubeconfig 是否存在由创建 Kubernetes Client 时检查。`proxy_url` 由配置
 模型校验并在 Kubernetes Client 创建前注入，因此不依赖启动 Shell 是否
 继承 macOS 系统代理。
@@ -184,7 +195,7 @@ uv run ops_agent \
   tui
 ```
 
-TUI 显示当前环境、固定 namespace 和只读标识。宽终端采用左右布局：左侧每
+TUI 显示当前环境、固定 namespace 和 AI 只读标识。宽终端采用左右布局：左侧每
 5 秒刷新资源目录，默认 Overview 明确列出 Pod、Deployment、StatefulSet、
 DaemonSet、Service、ReplicaSet、Job、CronJob、Ingress 和 PVC 的数量与
 状态；右侧保留本次运行中的用户消息和 Agent Markdown 回复。窄终端自动改为
@@ -204,6 +215,21 @@ Overview 中可用方向键和 `Enter` 进入任意资源类型。选中资源�
 路径和 `..` 路径；当前不会创建辅助 Pod，也不会新增、修改、移动或删除卷内
 文件。
 
+PVC 浏览器选中普通文件后按 `s`，会将文件下载到配置根目录下的
+`environment/namespace/PVC/claim/...`。Pods 表格选中 Pod 后按 `g`，选择
+容器并输入绝对远端路径，文件保存到
+`environment/namespace/Pod/pod/container/...`。下载使用同目录 `.part`
+临时文件和原子发布；已有同名文件不会被覆盖，而是增加时间戳。完成后状态栏
+显示最终路径、字节数和 SHA-256。传输通过固定的 Python 读取脚本流式执行，
+不会把用户输入拼入 Shell 命令。
+
+Pods 表格选中 Pod 后按 `x` 可启动 **Interactive Pod Session**。该功能默认
+关闭，必须在 `[kubernetes.interactive_exec]` 中显式启用并重启 TUI；进入前
+还要选择容器并确认实际写入风险。会话期间 TUI 让出终端并明确显示人工写访问
+模式；kubectl 接管终端前还会打印包含环境、namespace、Pod、容器和写风险的
+横幅，退出 Shell 后恢复监盘。该入口只属于左侧人工操作，不注册为 LangChain
+Tool、不进入主图或子 Agent，也不会把 Shell 命令交给模型。
+
 目录浏览要求 PVC 已挂载到 Running 容器，目标容器包含 POSIX `sh` 和
 Python 3。kubeconfig/RBAC 至少需要读取 namespace 内 Pod/PVC、读取集群级
 PV，并允许连接 `pods/exec` 子资源（不同集群可能要求 `get`/`create`）。
@@ -215,10 +241,12 @@ TUI 启用鼠标以支持点击聚焦；复制终端内容时点击顶部“复�
 直接拖选任意内容并使用终端复制快捷键；复制完成后按 `Esc` 恢复仪表盘
 鼠标控制。
 
-顶部 `Settings`（或 `Ctrl+,`）编辑当前 Project Profile、主题和颜色。主题
+顶部 `Settings`（或 `Ctrl+,`）编辑当前 Project Profile、集群连接、人工
+Pod 访问、下载目录、主题和颜色。主题
 选择与有效颜色会即时预览；保存后写回启动时使用的 TOML。项目名称、环境、
 namespace、kubeconfig、代理和请求超时属于运行边界，保存后需要重启应用才会
-生效；主题与颜色无需重启。内置 `ops-dark`、`light`、`high-contrast`
+生效；人工终端开关与下载目录也在重启后生效；主题与颜色无需重启。内置
+`ops-dark`、`light`、`high-contrast`
 三个主题，也可恢复预设默认颜色。
 
 这些固定操作直接使用绑定 namespace 的 Monitor/Reader，不经过 Agent，也不
@@ -277,11 +305,16 @@ ops_agent/
 │       │       ├── __main__.py
 │       │       ├── bootstrap.py
 │       │       ├── main.py
+│       │       ├── pod_access.py
 │       │       └── tui/
 │       │           ├── __init__.py
 │       │           ├── app.py
 │       │           ├── chat.py
-│       │           └── monitor.py
+│       │           ├── monitor.py
+│       │           ├── pod_access.py
+│       │           ├── settings.py
+│       │           ├── terminal.py
+│       │           └── themes.py
 │       ├── tests/
 │       │   └── unit/
 │       │       ├── test_bootstrap.py
@@ -355,13 +388,16 @@ Kubernetes 相关代码采用三层边界：
 - `tools/` 是 Agent 适配层。它把 Kubernetes 能力转换成模型可调用的
   LangChain Tool，并在这里固定 namespace、限制日志行数和 Event 数量。
 - `monitoring/` 用无参数 `snapshot()` 以及固定 namespace 的 `describe()` /
-  `pod_logs()` 接口封装资源浏览能力。TUI 只消费这些稳定接口，不导入
+  `pod_logs()` / `pod_containers()` 接口封装资源浏览能力。TUI 只消费这些
+  稳定接口，不导入
   Kubernetes SDK，也不解析 Agent 文本；以后将轮询替换为 watch 时无需改动
   聊天与布局。
 
 `apps/cli/bootstrap.py` 是终端应用的组合根，负责读取进程环境并选择具体的
 模型、Reader、Monitor、Tool 和 Agent 适配器。`main.py` 保留脚本化命令，
-`tui/` 只管理 Textual 的界面状态、键盘交互和后台任务。TUI 打开带固定
+`pod_access.py` 把 kubectl 命令构造、流式传输、原子落盘和人工终端收敛在
+CLI 侧深模块；它不属于 Agent capability。`tui/` 只管理 Textual 的界面
+状态、键盘交互和后台任务。TUI 打开带固定
 `InteractionContext` 的 `ConversationSession`，并消费稳定的 `AgentEvent`，
 不依赖 LangGraph 节点名。以后增加 API 或其他应用入口时，各应用拥有自己的
 组合根，harness 不依赖任何具体入口。
@@ -469,6 +505,8 @@ Agent 编排层 ──► 上下文与运维知识
 - 使用 Kubernetes RBAC 和独立 ServiceAccount，默认只读、最小权限。
 - 不在代码、配置文件、日志或模型上下文中保存 Token、证书等密钥。
 - 生产环境的写操作默认关闭；开启后必须经过策略校验和明确审批。
+- Interactive Pod Session 是独立的人工 break-glass 入口，默认关闭；它不
+  代表 Agent 获得写能力，进入前必须核对环境、namespace、Pod 与容器。
 - 对删除、驱逐、扩缩容、重启和回滚等操作设置资源范围与速率限制。
 - 执行前展示目标、影响范围和操作计划，执行后验证系统是否恢复。
 - 为每次模型决策和工具调用生成可检索的审计记录。

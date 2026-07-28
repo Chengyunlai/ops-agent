@@ -1,6 +1,7 @@
 import asyncio
 from dataclasses import replace
 from datetime import UTC, datetime
+from pathlib import Path
 from threading import Event, Lock
 from types import SimpleNamespace
 
@@ -25,6 +26,7 @@ from ops_agent.monitoring import (
     VolumeEntryKind,
 )
 from ops_agent.settings import (
+    InteractiveExecSettings,
     KubernetesSettings,
     ModelSettings,
     ProjectSettings,
@@ -34,6 +36,7 @@ from ops_agent.settings import (
     TuiSettings,
 )
 from ops_agent_cli import tui as tui_module
+from ops_agent_cli.pod_access import DownloadResult, InteractiveSessionResult
 from ops_agent_cli.tui import run_tui
 from ops_agent_cli.tui.app import OpsAgentTui
 from textual.coordinate import Coordinate
@@ -103,6 +106,13 @@ class FakeMonitor:
             content="2026-07-27T10:30:00Z server started",
         )
 
+    def pod_containers(
+        self,
+        resource: KubernetesResourceRef,
+    ) -> tuple[str, ...]:
+        self.content_calls.append(("pod_containers", resource))
+        return ("api", "sidecar")
+
     def browse_pvc(
         self,
         resource: KubernetesResourceRef,
@@ -158,6 +168,62 @@ class FakeMonitor:
             title=f"PVC/{resource.name} · {path}",
             content="backup contents",
         )
+
+
+class FakePodAccess:
+    def __init__(self, download_root: Path) -> None:
+        self.download_root = download_root
+        self.calls: list[tuple[str, object]] = []
+
+    def download_pod_file(
+        self,
+        *,
+        pod_name: str,
+        container_name: str,
+        remote_path: str,
+    ) -> DownloadResult:
+        self.calls.append(("pod", (pod_name, container_name, remote_path)))
+        return DownloadResult(
+            path=self.download_root / "pod.log",
+            size_bytes=321,
+            sha256="a" * 64,
+        )
+
+    def download_pvc_file(
+        self,
+        *,
+        claim_name: str,
+        pod_name: str,
+        container_name: str,
+        mount_path: str,
+        relative_path: str,
+    ) -> DownloadResult:
+        self.calls.append(
+            (
+                "pvc",
+                (
+                    claim_name,
+                    pod_name,
+                    container_name,
+                    mount_path,
+                    relative_path,
+                ),
+            )
+        )
+        return DownloadResult(
+            path=self.download_root / "daily.sql",
+            size_bytes=2048,
+            sha256="b" * 64,
+        )
+
+    def interactive_session(
+        self,
+        *,
+        pod_name: str,
+        container_name: str,
+    ) -> InteractiveSessionResult:
+        self.calls.append(("shell", (pod_name, container_name)))
+        return InteractiveSessionResult(exit_code=0)
 
 
 def create_monitor_snapshot() -> KubernetesMonitorSnapshot:
@@ -303,6 +369,7 @@ def create_tui(
     monitor=None,
     settings: Settings | None = None,
     save_settings=None,
+    pod_access=None,
 ) -> OpsAgentTui:
     return OpsAgentTui(
         conversation=conversation,
@@ -311,6 +378,7 @@ def create_tui(
         namespace="sample",
         settings=settings or create_app_settings(),
         save_settings=save_settings or (lambda _: None),
+        pod_access=pod_access,
     )
 
 
@@ -506,9 +574,21 @@ def test_tui_settings_persist_project_and_apply_theme_immediately() -> None:
             screen = app.screen
             assert screen.query_one("#setting-project-name", Input).value == "Testing"
             assert screen.query_one("#setting-namespace", Input).value == "sample"
+            assert (
+                screen.query_one("#setting-interactive-exec", Select).value
+                == "disabled"
+            )
+            assert (
+                screen.query_one("#setting-download-directory", Input).value
+                == "~/Downloads/ops-agent"
+            )
 
             screen.query_one("#setting-project-name", Input).value = "Sample Platform"
             screen.query_one("#setting-namespace", Input).value = "sample-next"
+            screen.query_one("#setting-interactive-exec", Select).value = "enabled"
+            screen.query_one(
+                "#setting-download-directory", Input
+            ).value = "/tmp/sample-downloads"
             screen.query_one("#setting-theme", Select).value = ThemeName.LIGHT.value
             await pilot.pause()
             assert app.current_theme.dark is False
@@ -519,6 +599,10 @@ def test_tui_settings_persist_project_and_apply_theme_immediately() -> None:
             assert len(saved) == 1
             assert saved[0].project.name == "Sample Platform"
             assert saved[0].kubernetes.namespace == "sample-next"
+            assert saved[0].kubernetes.interactive_exec.enabled
+            assert saved[0].kubernetes.downloads.directory == Path(
+                "/tmp/sample-downloads"
+            )
             assert saved[0].tui.theme is ThemeName.LIGHT
             assert "重启生效" in str(app.query_one("#status", Static).content)
 
@@ -742,6 +826,149 @@ def test_tui_browses_pvc_directories_and_previews_files() -> None:
                     RichLog,
                 ).lines
             )
+
+    asyncio.run(exercise())
+
+
+def test_tui_downloads_arbitrary_file_from_selected_pod(
+    tmp_path: Path,
+) -> None:
+    async def exercise() -> None:
+        monitor = FakeMonitor()
+        pod_access = FakePodAccess(tmp_path)
+        app = create_tui(
+            FakeAgent(answer="unused"),
+            monitor=monitor,
+            pod_access=pod_access,
+        )
+
+        async with app.run_test(size=(140, 34)) as pilot:
+            await app.workers.wait_for_complete()
+            await pilot.press("ctrl+k", "1", "g")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            assert "POD ARTIFACT DOWNLOAD" in str(
+                app.screen.query_one("#pod-access-title", Static).content
+            )
+            app.screen.query_one("#pod-access-container", Select).value = "sidecar"
+            app.screen.query_one(
+                "#pod-access-remote-path", Input
+            ).value = "/var/log/sample/app.log"
+            await pilot.click("#pod-access-confirm")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            assert pod_access.calls == [
+                (
+                    "pod",
+                    (
+                        "sample-api-7f8",
+                        "sidecar",
+                        "/var/log/sample/app.log",
+                    ),
+                )
+            ]
+            status = str(app.query_one("#status", Static).content)
+            assert "下载完成" in status
+            assert str(tmp_path / "pod.log") in status
+            assert f"SHA-256 {'a' * 64}" in status
+
+    asyncio.run(exercise())
+
+
+def test_tui_interactive_pod_session_is_disabled_by_default_and_warns_when_enabled(
+    tmp_path: Path,
+) -> None:
+    async def exercise() -> None:
+        disabled_app = create_tui(
+            FakeAgent(answer="unused"),
+            pod_access=FakePodAccess(tmp_path),
+        )
+        async with disabled_app.run_test(size=(140, 34)) as pilot:
+            await disabled_app.workers.wait_for_complete()
+            await pilot.press("ctrl+k", "1", "x")
+            assert "未启用" in str(disabled_app.query_one("#status", Static).content)
+
+        base_settings = create_app_settings()
+        enabled_settings = base_settings.model_copy(
+            update={
+                "kubernetes": base_settings.kubernetes.model_copy(
+                    update={"interactive_exec": InteractiveExecSettings(enabled=True)}
+                )
+            }
+        )
+        enabled_app = create_tui(
+            FakeAgent(answer="unused"),
+            settings=enabled_settings,
+            pod_access=FakePodAccess(tmp_path),
+        )
+        async with enabled_app.run_test(size=(140, 34)) as pilot:
+            await enabled_app.workers.wait_for_complete()
+            await pilot.press("ctrl+k", "1", "x")
+            await enabled_app.workers.wait_for_complete()
+            await pilot.pause()
+
+            assert "INTERACTIVE POD SESSION" in str(
+                enabled_app.screen.query_one(
+                    "#pod-access-title",
+                    Static,
+                ).content
+            )
+            warning = str(
+                enabled_app.screen.query_one(
+                    "#pod-access-warning",
+                    Static,
+                ).content
+            )
+            assert "写能力" in warning
+            assert "不会经过 AI" in warning
+
+    asyncio.run(exercise())
+
+
+def test_tui_downloads_selected_pvc_file_with_s(
+    tmp_path: Path,
+) -> None:
+    async def exercise() -> None:
+        pod_access = FakePodAccess(tmp_path)
+        app = create_tui(
+            FakeAgent(answer="unused"),
+            monitor=FakeMonitor(),
+            pod_access=pod_access,
+        )
+
+        async with app.run_test(size=(140, 34)) as pilot:
+            await app.workers.wait_for_complete()
+            await pilot.press("ctrl+k", "7", "enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            await pilot.press("down", "s")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            assert pod_access.calls == [
+                (
+                    "pvc",
+                    (
+                        "mysql-data",
+                        "mysql-0",
+                        "mysql",
+                        "/var/lib/mysql",
+                        "README.txt",
+                    ),
+                )
+            ]
+            status = str(
+                app.screen.query_one(
+                    "#volume-browser-status",
+                    Static,
+                ).content
+            )
+            assert "下载完成" in status
+            assert str(tmp_path / "daily.sql") in status
+            assert f"SHA-256 {'b' * 64}" in status
 
     asyncio.run(exercise())
 

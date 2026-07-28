@@ -18,8 +18,18 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, DataTable, Input, Static
 
+from ops_agent_cli.pod_access import (
+    DownloadResult,
+    InteractiveSessionResult,
+    KubectlPodAccess,
+)
 from ops_agent_cli.tui.chat import ChatTranscript
 from ops_agent_cli.tui.monitor import MonitorPane, ResourceViewer, VolumeBrowser
+from ops_agent_cli.tui.pod_access import (
+    PodAccessDialog,
+    PodAccessRequest,
+    PodAction,
+)
 from ops_agent_cli.tui.settings import SettingsScreen
 from ops_agent_cli.tui.terminal import set_terminal_mouse_capture
 from ops_agent_cli.tui.themes import build_theme
@@ -44,6 +54,11 @@ class Monitor(Protocol):
         tail_lines: int = 200,
     ) -> KubernetesResourceContent: ...
 
+    def pod_containers(
+        self,
+        resource: KubernetesResourceRef,
+    ) -> tuple[str, ...]: ...
+
     def browse_pvc(
         self,
         resource: KubernetesResourceRef,
@@ -58,6 +73,33 @@ class Monitor(Protocol):
         path: str,
         max_bytes: int = 64 * 1024,
     ) -> KubernetesResourceContent: ...
+
+
+class PodAccess(Protocol):
+    def download_pod_file(
+        self,
+        *,
+        pod_name: str,
+        container_name: str,
+        remote_path: str,
+    ) -> DownloadResult: ...
+
+    def download_pvc_file(
+        self,
+        *,
+        claim_name: str,
+        pod_name: str,
+        container_name: str,
+        mount_path: str,
+        relative_path: str,
+    ) -> DownloadResult: ...
+
+    def interactive_session(
+        self,
+        *,
+        pod_name: str,
+        container_name: str,
+    ) -> InteractiveSessionResult: ...
 
 
 class ResourceOperation(StrEnum):
@@ -75,10 +117,10 @@ class QuestionInput(Input):
 
 
 class OpsAgentTui(App[None]):
-    """左侧实时监盘、右侧受控对话的只读运维终端。"""
+    """左侧实时监盘与人工操作、右侧受控对话的运维终端。"""
 
     TITLE = "Ops Agent"
-    SUB_TITLE = "Kubernetes 只读诊断"
+    SUB_TITLE = "Kubernetes 监盘与受控诊断"
     MONITOR_REFRESH_SECONDS = 5.0
     NARROW_WIDTH = 100
 
@@ -456,6 +498,8 @@ class OpsAgentTui(App[None]):
         Binding("d", "describe_resource", "Describe", show=False),
         Binding("l", "show_logs", "Logs", show=False),
         Binding("f", "browse_storage", "Browse PVC", show=False),
+        Binding("g", "download_pod_file", "Pod Download", show=False),
+        Binding("x", "interactive_pod_session", "Pod Shell", show=False),
         Binding("q", "quit", "退出"),
         Binding("i", "focus_question", "输入"),
         Binding(
@@ -475,6 +519,7 @@ class OpsAgentTui(App[None]):
         namespace: str,
         settings: Settings,
         save_settings: Callable[[Settings], None],
+        pod_access: PodAccess | None = None,
     ) -> None:
         super().__init__()
         self._conversation = conversation
@@ -483,6 +528,7 @@ class OpsAgentTui(App[None]):
         self._namespace = namespace
         self._settings = settings
         self._save_settings = save_settings
+        self._pod_access = pod_access or KubectlPodAccess(settings.kubernetes)
         self._busy = False
         self._monitor_refresh_in_progress = False
         self._monitor_refresh_pending = False
@@ -491,9 +537,7 @@ class OpsAgentTui(App[None]):
     def compose(self) -> ComposeResult:
         with Horizontal(id="topbar"):
             yield Static(
-                f" OPS AGENT  Project: {self._settings.project.name}"
-                f"  Context: {self._environment}"
-                f"  Namespace: {self._namespace}  Mode: READ-ONLY / 只读",
+                self._context_text(),
                 id="context",
             )
             yield Button("复制", id="copy-button", compact=True, flat=True)
@@ -503,7 +547,8 @@ class OpsAgentTui(App[None]):
             " · Ctrl+R 刷新 · Ctrl+K 聚焦监盘\n"
             "聊天：Enter 提交 · i 返回输入 · Ctrl+L 清空右侧显示\n"
             "监盘：0 总览 · 1~7 切换资源 · Enter 打开 · d 详情"
-            " · l Pod 日志 · f PVC 目录 · q 退出",
+            " · l Pod 日志 · f PVC 目录 · g Pod 文件下载"
+            " · x 人工 Pod Shell · PVC 浏览器内 s 下载 · q 退出",
             id="help",
         )
         yield Static(
@@ -523,11 +568,11 @@ class OpsAgentTui(App[None]):
         yield Static(
             " ^K 监盘  0 总览  1 Pods  2 Deploy  3 Stateful"
             "  4 Daemon  5 Services  6 Replica  7 Storage"
-            "  │  d 详情  l 日志  f 目录  i 聊天  顶部复制",
+            "  │ d 详情  l 日志  f 目录  g 下载  x Shell  i 聊天",
             id="hotkeys",
         )
         yield Static(
-            " ^K 监盘 │ 0~7 资源 │ d 详情 │ l 日志 │ f 目录"
+            " ^K 监盘 │ 0~7 资源 │ d 详情 │ l 日志 │ f 目录 │ g 下载 │ x Shell"
             " │ i 聊天 │ 顶部复制 │ F1 帮助",
             id="hotkeys-compact",
         )
@@ -746,9 +791,21 @@ class OpsAgentTui(App[None]):
         self.push_screen(
             VolumeBrowser(
                 source=self._monitor,
+                downloader=self._pod_access,
                 resource=resource,
             )
         )
+
+    def action_download_pod_file(self) -> None:
+        self._prepare_pod_action(PodAction.DOWNLOAD)
+
+    def action_interactive_pod_session(self) -> None:
+        if not self._settings.kubernetes.interactive_exec.enabled:
+            self.query_one("#status", Static).update(
+                "Interactive Pod Session 未启用 · 可在 Settings 中配置后重启"
+            )
+            return
+        self._prepare_pod_action(PodAction.INTERACTIVE_SESSION)
 
     def action_command_mode(self) -> None:
         if self.exit_copy_mode():
@@ -808,6 +865,102 @@ class OpsAgentTui(App[None]):
         )
 
     @work(
+        group="pod-action",
+        exclusive=True,
+        exit_on_error=False,
+    )
+    async def _prepare_pod_action(self, action: PodAction) -> None:
+        resource = self.query_one(
+            "#monitor-pane",
+            MonitorPane,
+        ).selected_resource()
+        if resource is None or resource.kind is not KubernetesResourceKind.POD:
+            self.query_one("#status", Static).update(
+                "该操作仅适用于 Pod；请按 1 进入 Pods 并选择一行"
+            )
+            return
+        self.query_one("#status", Static).update(
+            f"正在读取 Pod/{resource.name} 的容器列表…"
+        )
+        try:
+            containers = await asyncio.to_thread(
+                self._monitor.pod_containers,
+                resource,
+            )
+        except Exception as error:  # noqa: BLE001 - 人工操作必须恢复查询异常
+            self.query_one("#status", Static).update(f"容器列表读取失败：{error}")
+            return
+        if not containers:
+            self.query_one("#status", Static).update(
+                f"Pod/{resource.name} 没有可选择的容器"
+            )
+            return
+        self.push_screen(
+            PodAccessDialog(
+                action=action,
+                environment=self._environment,
+                namespace=self._namespace,
+                pod_name=resource.name,
+                containers=containers,
+            ),
+            self._pod_access_requested,
+        )
+
+    def _pod_access_requested(self, request: PodAccessRequest | None) -> None:
+        if request is None:
+            self.query_one("#status", Static).update("已取消人工 Pod 操作")
+            return
+        if request.action is PodAction.DOWNLOAD:
+            if request.remote_path is None:
+                self.query_one("#status", Static).update("Pod 下载路径缺失")
+                return
+            self.query_one("#status", Static).update(
+                f"正在从 Pod/{request.pod_name} 下载 {request.remote_path}…"
+            )
+            self._download_pod_file(request)
+            return
+        self.call_after_refresh(self._run_interactive_session, request)
+
+    @work(
+        group="pod-download",
+        exclusive=True,
+        exit_on_error=False,
+    )
+    async def _download_pod_file(self, request: PodAccessRequest) -> None:
+        try:
+            result = await asyncio.to_thread(
+                self._pod_access.download_pod_file,
+                pod_name=request.pod_name,
+                container_name=request.container_name,
+                remote_path=request.remote_path,
+            )
+        except Exception as error:  # noqa: BLE001 - 下载错误必须回显
+            self.query_one("#status", Static).update(f"下载失败：{error}")
+        else:
+            self.query_one("#status", Static).update(_download_completion(result))
+
+    def _run_interactive_session(self, request: PodAccessRequest) -> None:
+        self.exit_copy_mode()
+        self._render_context(mode="INTERACTIVE POD SESSION · MANUAL WRITE ACCESS")
+        self.query_one("#status", Static).update(
+            f"人工终端已接管 · {request.pod_name}/{request.container_name}"
+        )
+        self.refresh()
+        try:
+            with self.suspend():
+                result = self._pod_access.interactive_session(
+                    pod_name=request.pod_name,
+                    container_name=request.container_name,
+                )
+        except Exception as error:  # noqa: BLE001 - 终端恢复后必须显示错误
+            message = f"Interactive Pod Session 启动失败：{error}"
+        else:
+            message = f"Interactive Pod Session 已结束 · exit {result.exit_code}"
+        finally:
+            self._render_context()
+        self.query_one("#status", Static).update(message)
+
+    @work(
         group="resource-content",
         exclusive=True,
         exit_on_error=False,
@@ -852,6 +1005,24 @@ class OpsAgentTui(App[None]):
         if self.is_mounted:
             self.query_one("#monitor-pane", MonitorPane).refresh_theme()
 
+    def _context_text(
+        self,
+        *,
+        mode: str = "MONITOR / AI READ-ONLY / AI只读",
+    ) -> str:
+        return (
+            f" OPS AGENT  Project: {self._settings.project.name}"
+            f"  Context: {self._environment}"
+            f"  Namespace: {self._namespace}  Mode: {mode}"
+        )
+
+    def _render_context(
+        self,
+        *,
+        mode: str = "MONITOR / AI READ-ONLY / AI只读",
+    ) -> None:
+        self.query_one("#context", Static).update(self._context_text(mode=mode))
+
     def _settings_closed(self, updated: Settings | None) -> None:
         if updated is None:
             return
@@ -880,3 +1051,10 @@ def _next_event(events: Iterator[AgentEvent]) -> AgentEvent | None:
         return next(events)
     except StopIteration:
         return None
+
+
+def _download_completion(result: DownloadResult) -> str:
+    return (
+        f"下载完成 · {result.size_bytes} bytes · "
+        f"SHA-256 {result.sha256} · {result.path}"
+    )

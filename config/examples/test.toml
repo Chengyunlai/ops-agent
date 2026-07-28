@@ -7,6 +7,12 @@ namespace = "YOUR_NAMESPACE"
 kubeconfig_path = "/absolute/path/to/test-kubeconfig"
 request_timeout_seconds = 10
 
+[kubernetes.interactive_exec]
+enabled = false
+
+[kubernetes.downloads]
+directory = "~/Downloads/ops-agent"
+
 [model]
 provider = "openai"
 model = "deepseek-v4-pro"
