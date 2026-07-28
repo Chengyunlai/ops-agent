@@ -90,7 +90,7 @@ class KubernetesReader:
         container: str | None,
         tail_lines: int,
     ) -> str:
-        return self._request(
+        response = self._request(
             f"查询 Pod '{pod_name}' 日志失败",
             lambda: self._core_api.read_namespaced_pod_log(
                 name=pod_name,
@@ -99,8 +99,13 @@ class KubernetesReader:
                 tail_lines=tail_lines,
                 timestamps=True,
                 _request_timeout=self._request_timeout_seconds,
+                _preload_content=False,
             ),
         )
+        payload = getattr(response, "data", response)
+        if isinstance(payload, bytes | bytearray):
+            return bytes(payload).decode("utf-8", errors="replace")
+        return str(payload)
 
     def list_events(
         self,

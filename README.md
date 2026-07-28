@@ -175,7 +175,8 @@ DaemonSet、Service、ReplicaSet、Job、CronJob、Ingress 和 PVC 的数量与
 `Ctrl+K` 聚焦左侧监盘，`0` 返回 Overview，`1`～`6` 切换具体资源；
 Overview 中可用方向键和 `Enter` 进入任意资源类型。选中资源后按
 `Enter`/`d` 读取对象详情与关联 Event；Pod 上按 `l` 读取每个容器最近
-200 行日志。
+200 行日志。TUI 不接管鼠标事件，可以像普通终端文本一样拖选任意区域并使用
+终端复制快捷键复制，不局限于整块内容。
 这些固定操作直接使用绑定 namespace 的 Monitor/Reader，不经过 Agent，也不
 读取或改变右侧 Conversation Session。`i` 返回聊天输入，`Ctrl+R` 立即刷新
 监盘，`Ctrl+L` 清空右侧显示但保留会话上下文，`F1`/`?` 显示帮助，

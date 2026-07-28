@@ -57,7 +57,12 @@ class FakeCoreV1Api:
 
     def read_namespaced_pod_log(self, **kwargs):
         self.calls.append(("read_namespaced_pod_log", kwargs))
-        return "2026-07-26T10:00:00Z server started"
+        return SimpleNamespace(
+            data=(
+                b"2026-07-26T10:00:00Z server started\n"
+                b"2026-07-26T10:00:01Z request completed\n"
+            )
+        )
 
     def list_namespaced_event(self, **kwargs):
         self.calls.append(("list_namespaced_event", kwargs))
@@ -332,7 +337,9 @@ def test_get_pod_logs_applies_container_and_tail_limit() -> None:
         tail_lines=200,
     )
 
-    assert logs == "2026-07-26T10:00:00Z server started"
+    assert logs == (
+        "2026-07-26T10:00:00Z server started\n2026-07-26T10:00:01Z request completed\n"
+    )
     assert core_api.calls == [
         (
             "read_namespaced_pod_log",
@@ -343,6 +350,7 @@ def test_get_pod_logs_applies_container_and_tail_limit() -> None:
                 "tail_lines": 200,
                 "timestamps": True,
                 "_request_timeout": 7,
+                "_preload_content": False,
             },
         )
     ]

@@ -25,7 +25,7 @@ def run_tui(config_path: Path) -> None:
         monitor=runtime.monitor,
         environment=runtime.environment,
         namespace=runtime.namespace,
-    ).run()
+    ).run(mouse=False)
 
 
 __all__ = ["OpsAgentTui", "run_tui"]

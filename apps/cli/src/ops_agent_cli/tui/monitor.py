@@ -36,7 +36,10 @@ class ResourceViewer(ModalScreen[None]):
                 wrap=False,
                 id="resource-content",
             )
-            yield Static(" Esc/q 返回 · ↑/↓/PgUp/PgDn 滚动", id="resource-footer")
+            yield Static(
+                " Esc/q 返回 · ↑/↓/PgUp/PgDn 滚动 · 鼠标拖选复制",
+                id="resource-footer",
+            )
 
     def on_mount(self) -> None:
         self.query_one("#resource-content", RichLog).write("正在读取 Kubernetes API…")
@@ -45,7 +48,7 @@ class ResourceViewer(ModalScreen[None]):
         self.query_one("#resource-title", Static).update(content.title)
         viewer = self.query_one("#resource-content", RichLog)
         viewer.clear()
-        viewer.write(content.content or "（没有返回内容）")
+        viewer.write((content.content or "（没有返回内容）").rstrip("\r\n"))
 
     def display_error(self, message: str) -> None:
         self.query_one("#resource-title", Static).update("读取失败")

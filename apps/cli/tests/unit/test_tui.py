@@ -230,8 +230,9 @@ def test_run_tui_opens_kubernetes_scoped_conversation(
                 namespace=namespace,
             )
 
-        def run(self) -> None:
+        def run(self, **kwargs) -> None:
             received["ran"] = True
+            received["run_options"] = kwargs
 
     monkeypatch.setattr(
         tui_module,
@@ -258,6 +259,7 @@ def test_run_tui_opens_kubernetes_scoped_conversation(
         "environment": "test",
         "namespace": "sample",
         "ran": True,
+        "run_options": {"mouse": False},
     }
 
 
@@ -390,6 +392,41 @@ def test_tui_opens_describe_and_pod_logs_for_selected_resource() -> None:
                         200,
                     ),
                 ),
+            ]
+
+    asyncio.run(exercise())
+
+
+def test_tui_renders_each_log_record_on_its_own_line() -> None:
+    class MultilineLogMonitor(FakeMonitor):
+        def pod_logs(
+            self,
+            resource: KubernetesResourceRef,
+            *,
+            tail_lines: int = 200,
+        ) -> KubernetesResourceContent:
+            return KubernetesResourceContent(
+                title=f"Logs · Pod/{resource.name}",
+                content="first record\nsecond record\nthird record\n",
+            )
+
+    async def exercise() -> None:
+        app = create_tui(
+            FakeAgent(answer="unused"),
+            monitor=MultilineLogMonitor(),
+        )
+
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete()
+            await pilot.press("ctrl+k", "1", "l")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            viewer = app.screen.query_one("#resource-content", RichLog)
+            assert [line.text for line in viewer.lines] == [
+                "first record",
+                "second record",
+                "third record",
             ]
 
     asyncio.run(exercise())
