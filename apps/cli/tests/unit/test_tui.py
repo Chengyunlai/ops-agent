@@ -259,8 +259,38 @@ def test_run_tui_opens_kubernetes_scoped_conversation(
         "environment": "test",
         "namespace": "sample",
         "ran": True,
-        "run_options": {"mouse": False},
+        "run_options": {"mouse": True},
     }
+
+
+def test_tui_monitor_accepts_mouse_focus_arrows_and_resource_shortcuts() -> None:
+    async def exercise() -> None:
+        app = create_tui(FakeAgent(answer="unused"))
+
+        async with app.run_test(size=(140, 34)) as pilot:
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            question = app.query_one("#question", Input)
+            table = app.query_one("#monitor-table", DataTable)
+            assert question.has_focus
+
+            await pilot.click("#monitor-table", offset=(2, 2))
+            assert table.has_focus
+
+            initial_row = table.cursor_row
+            await pilot.press("down")
+            assert table.cursor_row == initial_row + 1
+
+            await pilot.press("2")
+            assert "Deployments" in str(app.query_one("#monitor-title", Static).content)
+            assert table.has_focus
+
+            await pilot.press("i", "0", "1", "2", "3")
+            assert question.has_focus
+            assert question.value == "0123"
+
+    asyncio.run(exercise())
 
 
 def test_tui_displays_context_and_agent_answer() -> None:

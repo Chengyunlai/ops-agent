@@ -37,7 +37,7 @@ class ResourceViewer(ModalScreen[None]):
                 id="resource-content",
             )
             yield Static(
-                " Esc/q 返回 · ↑/↓/PgUp/PgDn 滚动 · 鼠标拖选复制",
+                " Esc/q 返回 · ↑/↓/PgUp/PgDn 滚动 · 按住 Shift/Option 后鼠标拖选复制",
                 id="resource-footer",
             )
 
