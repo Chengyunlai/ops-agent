@@ -1,4 +1,4 @@
-from typing import ClassVar
+from typing import ClassVar, Protocol, cast
 
 from ops_agent.monitoring import (
     KubernetesMonitorSnapshot,
@@ -8,18 +8,25 @@ from ops_agent.monitoring import (
     KubernetesResourceRef,
 )
 from rich.text import Text
+from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical
+from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import DataTable, RichLog, Static
+from textual.widgets import Button, DataTable, RichLog, Static
+
+
+class CopyModeController(Protocol):
+    def exit_copy_mode(self) -> bool: ...
+
+    def action_toggle_copy_mode(self) -> None: ...
 
 
 class ResourceViewer(ModalScreen[None]):
     """只读显示一次固定 Kubernetes API 查询的结果。"""
 
     BINDINGS: ClassVar[list[Binding]] = [
-        Binding("escape", "close", "返回", priority=True),
+        Binding("escape", "escape", "返回", priority=True),
         Binding("q", "close", "返回", priority=True),
     ]
 
@@ -37,10 +44,14 @@ class ResourceViewer(ModalScreen[None]):
                 wrap=False,
                 id="resource-content",
             )
-            yield Static(
-                self._footer_text(),
-                id="resource-footer",
-            )
+            with Horizontal(id="resource-footer"):
+                yield Static(self._footer_text(), id="resource-footer-text")
+                yield Button(
+                    "复制",
+                    id="resource-copy-button",
+                    compact=True,
+                    flat=True,
+                )
 
     def on_mount(self) -> None:
         self.query_one("#resource-content", RichLog).write("正在读取 Kubernetes API…")
@@ -60,15 +71,26 @@ class ResourceViewer(ModalScreen[None]):
     def action_close(self) -> None:
         self.dismiss()
 
+    def action_escape(self) -> None:
+        controller = cast(CopyModeController, self.app)
+        if self._copy_mode and controller.exit_copy_mode():
+            return
+        self.dismiss()
+
     def set_copy_mode(self, enabled: bool) -> None:
         self._copy_mode = enabled
-        self.query_one("#resource-footer", Static).update(self._footer_text())
+        self.query_one("#resource-footer-text", Static).update(self._footer_text())
+
+    @on(Button.Pressed, "#resource-copy-button")
+    def toggle_copy_mode(self) -> None:
+        controller = cast(CopyModeController, self.app)
+        controller.action_toggle_copy_mode()
 
     def _footer_text(self) -> str:
         return (
-            " COPY MODE · 直接用鼠标拖选复制 · F2 恢复鼠标控制"
+            " COPY MODE · 直接用鼠标拖选复制 · Esc 恢复鼠标控制"
             if self._copy_mode
-            else " Esc/q 返回 · ↑/↓/PgUp/PgDn 滚动 · F2 进入复制模式"
+            else " Esc/q 返回 · ↑/↓/PgUp/PgDn 滚动 · F2 备用"
         )
 
 

@@ -359,32 +359,54 @@ def test_tui_copy_mode_releases_and_restores_terminal_mouse_capture() -> None:
                 lambda: mouse_capture_calls.append("enable")
             )
 
-            await pilot.press("f2")
+            await pilot.click("#copy-button")
             assert mouse_capture_calls == ["disable"]
             assert "复制模式" in str(app.query_one("#status", Static).content)
 
-            await pilot.press("f2")
+            await pilot.press("escape")
             assert mouse_capture_calls == ["disable", "enable"]
             assert "鼠标控制已恢复" in str(app.query_one("#status", Static).content)
 
-            await pilot.press("ctrl+k", "1", "l")
-            await app.workers.wait_for_complete()
-            await pilot.press("f2")
-            assert mouse_capture_calls == ["disable", "enable", "disable"]
-            assert "COPY MODE" in str(
-                app.screen.query_one("#resource-footer", Static).content
-            )
-
-            await pilot.press("f2")
+            # F2 remains available as a fallback shortcut.
+            await pilot.press("f2", "f2")
             assert mouse_capture_calls == [
                 "disable",
                 "enable",
                 "disable",
                 "enable",
             ]
-            assert "F2 进入复制模式" in str(
-                app.screen.query_one("#resource-footer", Static).content
+
+            await pilot.press("ctrl+k", "1", "l")
+            await app.workers.wait_for_complete()
+            await pilot.click("#resource-copy-button")
+            assert mouse_capture_calls == [
+                "disable",
+                "enable",
+                "disable",
+                "enable",
+                "disable",
+            ]
+            assert "COPY MODE" in str(
+                app.screen.query_one("#resource-footer-text", Static).content
             )
+
+            viewer = app.screen
+            await pilot.press("escape")
+            assert mouse_capture_calls == [
+                "disable",
+                "enable",
+                "disable",
+                "enable",
+                "disable",
+                "enable",
+            ]
+            assert app.screen is viewer
+            assert "F2 备用" in str(
+                app.screen.query_one("#resource-footer-text", Static).content
+            )
+
+            await pilot.press("escape")
+            assert app.screen is not viewer
 
     asyncio.run(exercise())
 

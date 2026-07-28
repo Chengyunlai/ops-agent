@@ -87,9 +87,8 @@ class OpsAgentTui(App[None]):
         text-style: bold;
     }
 
+    #copy-button,
     #settings-button {
-        width: 14;
-        min-width: 14;
         height: 1;
         min-height: 1;
         padding: 0 1;
@@ -99,6 +98,18 @@ class OpsAgentTui(App[None]):
         text-style: bold;
     }
 
+    #copy-button {
+        width: 9;
+        min-width: 9;
+    }
+
+    #settings-button {
+        width: 12;
+        min-width: 12;
+    }
+
+    #copy-button:hover,
+    #copy-button:focus,
     #settings-button:hover,
     #settings-button:focus {
         background: $accent;
@@ -222,10 +233,35 @@ class OpsAgentTui(App[None]):
 
     #resource-footer {
         height: 1;
+        background: $primary;
+        color: $primary-background;
+    }
+
+    #resource-footer-text {
+        width: 1fr;
+        height: 1;
         padding: 0 1;
         background: $primary;
         color: $primary-background;
         text-style: bold;
+    }
+
+    #resource-copy-button {
+        width: 9;
+        min-width: 9;
+        height: 1;
+        min-height: 1;
+        padding: 0 1;
+        border: none;
+        background: $primary;
+        color: $primary-background;
+        text-style: bold;
+    }
+
+    #resource-copy-button:hover,
+    #resource-copy-button:focus {
+        background: $accent;
+        color: $background;
     }
 
     #chat-pane {
@@ -385,16 +421,17 @@ class OpsAgentTui(App[None]):
                 f"  Namespace: {self._namespace}  Mode: READ-ONLY / 只读",
                 id="context",
             )
+            yield Button("复制", id="copy-button", compact=True, flat=True)
             yield Button("⚙ Settings", id="settings-button", compact=True, flat=True)
         yield Static(
-            "全局：Ctrl+C 退出 · F1/? 帮助 · F2 复制模式 · Ctrl+, 设置"
+            "全局：Ctrl+C 退出 · F1/? 帮助 · 顶部“复制”（F2 备用）· Ctrl+, 设置"
             " · Ctrl+R 刷新 · Ctrl+K 聚焦监盘\n"
             "聊天：Enter 提交 · i 返回输入 · Ctrl+L 清空右侧显示\n"
             "监盘：0 总览 · 1~6 切换资源 · Enter/d 详情 · l Pod 日志 · q 退出",
             id="help",
         )
         yield Static(
-            " COPY MODE · 现在直接用鼠标拖选复制 · 按 F2 恢复仪表盘鼠标控制",
+            " COPY MODE · 现在直接用鼠标拖选复制 · 按 Esc 恢复仪表盘鼠标控制",
             id="copy-mode-banner",
         )
         with Horizontal(id="workspace"):
@@ -410,11 +447,11 @@ class OpsAgentTui(App[None]):
         yield Static(
             " ^K 监盘  0 总览  1 Pods  2 Deploy  3 Stateful"
             "  4 Daemon  5 Services  6 Replica"
-            "  │  d 详情  l 日志  i 聊天  F2 复制",
+            "  │  d 详情  l 日志  i 聊天  顶部复制",
             id="hotkeys",
         )
         yield Static(
-            " ^K 监盘 │ 0~6 资源 │ d 详情 │ l 日志 │ i 聊天 │ F2 复制 │ F1 帮助",
+            " ^K 监盘 │ 0~6 资源 │ d 详情 │ l 日志 │ i 聊天 │ 顶部复制 │ F1 帮助",
             id="hotkeys-compact",
         )
 
@@ -531,16 +568,24 @@ class OpsAgentTui(App[None]):
         )
 
     def action_toggle_copy_mode(self) -> None:
-        entering_copy_mode = not self._copy_mode
+        self._set_copy_mode(not self._copy_mode)
+
+    def exit_copy_mode(self) -> bool:
+        """恢复终端鼠标，并报告是否消费了本次退出操作。"""
+        if not self._copy_mode:
+            return False
+        return self._set_copy_mode(False)
+
+    def _set_copy_mode(self, enabled: bool) -> bool:
         if not set_terminal_mouse_capture(
             self._driver,
-            enabled=not entering_copy_mode,
+            enabled=not enabled,
         ):
             self.query_one("#status", Static).update(
                 "当前终端驱动不支持运行时切换复制模式"
             )
-            return
-        self._copy_mode = entering_copy_mode
+            return False
+        self._copy_mode = enabled
         self.query_one("#copy-mode-banner", Static).set_class(
             self._copy_mode,
             "visible",
@@ -548,10 +593,11 @@ class OpsAgentTui(App[None]):
         if isinstance(self.screen, ResourceViewer):
             self.screen.set_copy_mode(self._copy_mode)
         self.query_one("#status", Static).update(
-            "复制模式 · 现在直接鼠标拖选并复制 · F2 恢复鼠标控制"
+            "复制模式 · 现在直接鼠标拖选并复制 · Esc 恢复鼠标控制"
             if self._copy_mode
             else "已退出复制模式 · 鼠标控制已恢复"
         )
+        return True
 
     def action_show_overview(self) -> None:
         self.query_one("#monitor-pane", MonitorPane).show_overview()
@@ -605,6 +651,8 @@ class OpsAgentTui(App[None]):
         )
 
     def action_command_mode(self) -> None:
+        if self.exit_copy_mode():
+            return
         self.action_focus_monitor()
 
     def action_focus_question(self) -> None:
@@ -619,6 +667,10 @@ class OpsAgentTui(App[None]):
     @on(Button.Pressed, "#settings-button")
     def open_settings(self) -> None:
         self.action_open_settings()
+
+    @on(Button.Pressed, "#copy-button")
+    def toggle_copy_mode(self) -> None:
+        self.action_toggle_copy_mode()
 
     def _show_monitor_kind(self, kind: KubernetesResourceKind) -> None:
         pane = self.query_one("#monitor-pane", MonitorPane)
