@@ -112,7 +112,7 @@ macOS 与 Linux；终端 PTY 实现依赖 Unix `termios`/`fcntl`，暂不提供 
 ### 1. 获取项目
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/Chengyunlai/ops-agent.git
 cd ops_agent
 ```
 
