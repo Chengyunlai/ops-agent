@@ -1,7 +1,13 @@
 from pathlib import Path
 
 import pytest
-from ops_agent.settings import KubernetesSettings, SettingsError, load_settings
+from ops_agent.settings import (
+    KubernetesSettings,
+    SettingsError,
+    ThemeName,
+    load_settings,
+    save_settings,
+)
 from pydantic import ValidationError
 
 
@@ -47,6 +53,130 @@ def test_load_settings_from_toml(tmp_path: Path):
     assert settings.model.name == "test-model"
     assert settings.model.base_url == "https://api.deepseek.com"
     assert settings.model.api_key_env == "DEEPSEEK_API_KEY"
+
+
+def test_load_settings_parses_project_and_tui_preferences(tmp_path: Path) -> None:
+    config_path = tmp_path / "test.toml"
+    config_path.write_text(
+        """
+        [project]
+        name = "Testing"
+
+        [kubernetes]
+        environment = "test"
+        namespace = "sample"
+        kubeconfig_path = "/tmp/ops_agent-kubeconfig"
+        request_timeout_seconds = 10
+
+        [model]
+        provider = "openai"
+        model = "test-model"
+
+        [tui]
+        theme = "light"
+
+        [tui.colors]
+        primary = "#005FB8"
+        warning = "#A15C00"
+        """,
+        encoding="utf-8",
+    )
+
+    settings = load_settings(config_path)
+
+    assert settings.project.name == "Testing"
+    assert settings.tui.theme == "light"
+    assert settings.tui.colors.primary == "#005FB8"
+    assert settings.tui.colors.warning == "#A15C00"
+    assert settings.tui.colors.accent is None
+
+
+def test_save_settings_persists_validated_preferences_and_runtime_config(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "test.toml"
+    config_path.write_text(
+        """
+        [kubernetes]
+        environment = "test"
+        namespace = "sample"
+        kubeconfig_path = "/tmp/ops_agent-kubeconfig"
+        request_timeout_seconds = 10
+
+        [model]
+        provider = "openai"
+        model = "test-model"
+        """,
+        encoding="utf-8",
+    )
+    settings = load_settings(config_path)
+    updated = settings.model_copy(
+        update={
+            "project": settings.project.model_copy(update={"name": "Sample Platform"}),
+            "kubernetes": settings.kubernetes.model_copy(
+                update={"namespace": "sample-next"}
+            ),
+            "tui": settings.tui.model_copy(
+                update={
+                    "theme": ThemeName.HIGH_CONTRAST,
+                    "colors": settings.tui.colors.model_copy(
+                        update={"accent": "#FFFF00"}
+                    ),
+                }
+            ),
+        }
+    )
+
+    save_settings(config_path, updated)
+    reloaded = load_settings(config_path)
+
+    assert reloaded.project.name == "Sample Platform"
+    assert reloaded.kubernetes.namespace == "sample-next"
+    assert reloaded.model.name == "test-model"
+    assert reloaded.tui.theme is ThemeName.HIGH_CONTRAST
+    assert reloaded.tui.colors.accent == "#FFFF00"
+    assert 'model = "test-model"' in config_path.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("theme", '"unknown"'),
+        ("colors.primary", '"red"'),
+        ("colors.accent", '"#12345G"'),
+    ],
+)
+def test_load_settings_rejects_unknown_theme_and_invalid_colors(
+    tmp_path: Path,
+    field: str,
+    value: str,
+) -> None:
+    config_path = tmp_path / "invalid-tui.toml"
+    tui_lines = (
+        f"theme = {value}\n"
+        if field == "theme"
+        else f'theme = "ops-dark"\n\n[tui.colors]\n{field.removeprefix("colors.")} = {value}\n'
+    )
+    config_path.write_text(
+        f"""
+        [kubernetes]
+        environment = "test"
+        namespace = "sample"
+        kubeconfig_path = "/tmp/ops_agent-kubeconfig"
+        request_timeout_seconds = 10
+
+        [model]
+        provider = "openai"
+        model = "test-model"
+
+        [tui]
+        {tui_lines}
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SettingsError, match=field.split(".")[-1]):
+        load_settings(config_path)
 
 
 def test_load_settings_rejects_missing_file(tmp_path: Path):

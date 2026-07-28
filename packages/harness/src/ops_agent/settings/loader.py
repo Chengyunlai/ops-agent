@@ -1,6 +1,9 @@
+import os
+import tempfile
 import tomllib
 from pathlib import Path
 
+import tomli_w
 from pydantic import ValidationError
 
 from ops_agent.settings.models import Settings
@@ -17,6 +20,30 @@ def load_settings(config_path: Path) -> Settings:
     except ValidationError as error:
         validation_message = _format_validation_error(error)
     raise SettingsError(validation_message)
+
+
+def save_settings(config_path: Path, settings: Settings) -> None:
+    data = settings.model_dump(
+        mode="json",
+        by_alias=True,
+        exclude_none=True,
+    )
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=config_path.parent,
+            prefix=f".{config_path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary_file:
+            temporary_path = Path(temporary_file.name)
+            tomli_w.dump(data, temporary_file)
+        os.replace(temporary_path, config_path)
+    except (OSError, TypeError) as error:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+        raise SettingsError(f"配置文件无法写入: {config_path}") from error
 
 
 def _read_toml(config_path: Path) -> dict[str, object]:

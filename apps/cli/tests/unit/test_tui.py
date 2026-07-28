@@ -18,11 +18,20 @@ from ops_agent.monitoring import (
     KubernetesResourceRef,
     KubernetesResourceRow,
 )
+from ops_agent.settings import (
+    KubernetesSettings,
+    ModelSettings,
+    ProjectSettings,
+    Settings,
+    ThemeName,
+    TuiColorSettings,
+    TuiSettings,
+)
 from ops_agent_cli import tui as tui_module
 from ops_agent_cli.tui import run_tui
 from ops_agent_cli.tui.app import OpsAgentTui
 from textual.coordinate import Coordinate
-from textual.widgets import DataTable, Input, Markdown, RichLog, Static
+from textual.widgets import DataTable, Input, Markdown, RichLog, Select, Static
 
 
 class FakeAgent:
@@ -191,12 +200,37 @@ def create_monitor_snapshot() -> KubernetesMonitorSnapshot:
     )
 
 
-def create_tui(conversation, *, monitor=None) -> OpsAgentTui:
+def create_app_settings() -> Settings:
+    return Settings(
+        project=ProjectSettings(name="Testing"),
+        kubernetes=KubernetesSettings(
+            environment="test",
+            namespace="sample",
+            kubeconfig_path="/tmp/ops-agent-kubeconfig",
+            request_timeout_seconds=10,
+        ),
+        model=ModelSettings(
+            provider="openai",
+            model="test-model",
+        ),
+        tui=TuiSettings(),
+    )
+
+
+def create_tui(
+    conversation,
+    *,
+    monitor=None,
+    settings: Settings | None = None,
+    save_settings=None,
+) -> OpsAgentTui:
     return OpsAgentTui(
         conversation=conversation,
         monitor=monitor or FakeMonitor(),
         environment="test",
         namespace="sample",
+        settings=settings or create_app_settings(),
+        save_settings=save_settings or (lambda _: None),
     )
 
 
@@ -207,6 +241,8 @@ def test_run_tui_opens_kubernetes_scoped_conversation(
     contexts = []
     session = object()
     monitor = object()
+    settings = create_app_settings()
+    saved: list[tuple[object, Settings]] = []
     received: dict[str, object] = {}
 
     class FakeOpsAgent:
@@ -222,12 +258,16 @@ def test_run_tui_opens_kubernetes_scoped_conversation(
             monitor,
             environment,
             namespace,
+            settings,
+            save_settings,
         ) -> None:
             received.update(
                 conversation=conversation,
                 monitor=monitor,
                 environment=environment,
                 namespace=namespace,
+                settings=settings,
+                save_settings=save_settings,
             )
 
         def run(self, **kwargs) -> None:
@@ -240,13 +280,23 @@ def test_run_tui_opens_kubernetes_scoped_conversation(
         lambda _: SimpleNamespace(
             agent=FakeOpsAgent(),
             monitor=monitor,
+            settings=settings,
             environment="test",
             namespace="sample",
         ),
     )
     monkeypatch.setattr(tui_module, "OpsAgentTui", FakeTui)
+    monkeypatch.setattr(
+        tui_module,
+        "save_settings",
+        lambda path, updated: saved.append((path, updated)),
+    )
 
-    run_tui(tmp_path / "test.toml")
+    config_path = tmp_path / "test.toml"
+    run_tui(config_path)
+    save_callback = received.pop("save_settings")
+    assert callable(save_callback)
+    save_callback(settings)
 
     assert len(contexts) == 1
     assert contexts[0].channel is InteractionChannel.TUI
@@ -258,9 +308,11 @@ def test_run_tui_opens_kubernetes_scoped_conversation(
         "monitor": monitor,
         "environment": "test",
         "namespace": "sample",
+        "settings": settings,
         "ran": True,
         "run_options": {"mouse": True},
     }
+    assert saved == [(config_path, settings)]
 
 
 def test_tui_monitor_accepts_mouse_focus_arrows_and_resource_shortcuts() -> None:
@@ -289,6 +341,84 @@ def test_tui_monitor_accepts_mouse_focus_arrows_and_resource_shortcuts() -> None
             await pilot.press("i", "0", "1", "2", "3")
             assert question.has_focus
             assert question.value == "0123"
+
+    asyncio.run(exercise())
+
+
+def test_tui_settings_persist_project_and_apply_theme_immediately() -> None:
+    async def exercise() -> None:
+        saved: list[Settings] = []
+        app = create_tui(
+            FakeAgent(answer="unused"),
+            save_settings=saved.append,
+        )
+
+        async with app.run_test(size=(140, 36)) as pilot:
+            await app.workers.wait_for_complete()
+            await pilot.click("#settings-button")
+
+            screen = app.screen
+            assert screen.query_one("#setting-project-name", Input).value == "Testing"
+            assert screen.query_one("#setting-namespace", Input).value == "sample"
+
+            screen.query_one("#setting-project-name", Input).value = "Sample Platform"
+            screen.query_one("#setting-namespace", Input).value = "sample-next"
+            screen.query_one("#setting-theme", Select).value = ThemeName.LIGHT.value
+            await pilot.pause()
+            assert app.current_theme.dark is False
+
+            await pilot.click("#settings-save")
+            await pilot.pause()
+
+            assert len(saved) == 1
+            assert saved[0].project.name == "Sample Platform"
+            assert saved[0].kubernetes.namespace == "sample-next"
+            assert saved[0].tui.theme is ThemeName.LIGHT
+            assert "重启生效" in str(app.query_one("#status", Static).content)
+
+    asyncio.run(exercise())
+
+
+def test_tui_settings_can_restore_theme_default_colors() -> None:
+    async def exercise() -> None:
+        saved: list[Settings] = []
+        settings = create_app_settings().model_copy(
+            update={
+                "tui": TuiSettings(
+                    theme=ThemeName.OPS_DARK,
+                    colors=TuiColorSettings(
+                        primary="#AA00AA",
+                        background="#101010",
+                    ),
+                )
+            }
+        )
+        app = create_tui(
+            FakeAgent(answer="unused"),
+            settings=settings,
+            save_settings=saved.append,
+        )
+
+        async with app.run_test(size=(140, 36)) as pilot:
+            await app.workers.wait_for_complete()
+            await pilot.click("#settings-button")
+
+            assert (
+                app.screen.query_one("#setting-color-primary", Input).value == "#AA00AA"
+            )
+            app.screen.query_one("#settings-scroll").scroll_end(
+                animate=False,
+                force=True,
+            )
+            await pilot.pause()
+            await pilot.click("#settings-reset-theme")
+            assert app.screen.query_one("#setting-color-primary", Input).value == ""
+            assert app.screen.query_one("#setting-color-background", Input).value == ""
+
+            await pilot.click("#settings-save")
+
+            assert len(saved) == 1
+            assert saved[0].tui.colors == TuiColorSettings()
 
     asyncio.run(exercise())
 

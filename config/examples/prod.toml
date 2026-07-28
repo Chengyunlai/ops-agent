@@ -1,3 +1,6 @@
+[project]
+name = "Production"
+
 [kubernetes]
 environment = "prod"
 namespace = "YOUR_NAMESPACE"
@@ -9,3 +12,13 @@ provider = "openai"
 model = "deepseek-v4-pro"
 base_url = "https://api.deepseek.com"
 api_key_env = "DEEPSEEK_API_KEY"
+
+[tui]
+theme = "high-contrast"
+
+[tui.colors]
+# primary = "#00FFFF"
+# accent = "#FFFF00"
+# background = "#000000"
+# foreground = "#FFFFFF"
+# warning = "#FFFF00"

@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from enum import StrEnum
 from typing import ClassVar, Protocol
 
@@ -10,14 +10,17 @@ from ops_agent.monitoring import (
     KubernetesResourceKind,
     KubernetesResourceRef,
 )
+from ops_agent.settings import Settings, TuiSettings
 from textual import events, on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.widgets import DataTable, Input, Static
+from textual.widgets import Button, DataTable, Input, Static
 
 from ops_agent_cli.tui.chat import ChatTranscript
 from ops_agent_cli.tui.monitor import MonitorPane, ResourceViewer
+from ops_agent_cli.tui.settings import SettingsScreen
+from ops_agent_cli.tui.themes import build_theme
 
 
 class Conversation(Protocol):
@@ -65,16 +68,40 @@ class OpsAgentTui(App[None]):
     CSS = """
     Screen {
         layout: vertical;
-        background: #070a0d;
-        color: #d7dee7;
+        background: $background;
+        color: $text;
+    }
+
+    #topbar {
+        height: 1;
+        background: $primary;
     }
 
     #context {
         height: 1;
+        width: 1fr;
         padding: 0 1;
-        background: #1fb5ad;
-        color: #001c1a;
+        background: $primary;
+        color: $primary-background;
         text-style: bold;
+    }
+
+    #settings-button {
+        width: 14;
+        min-width: 14;
+        height: 1;
+        min-height: 1;
+        padding: 0 1;
+        border: none;
+        background: $primary;
+        color: $primary-background;
+        text-style: bold;
+    }
+
+    #settings-button:hover,
+    #settings-button:focus {
+        background: $accent;
+        color: $background;
     }
 
     #help {
@@ -82,10 +109,10 @@ class OpsAgentTui(App[None]):
         height: auto;
         max-height: 7;
         padding: 0 1;
-        background: #21182a;
-        color: #f0d7ff;
-        border-top: solid #cf79ff;
-        border-bottom: solid #cf79ff;
+        background: $panel;
+        color: $text;
+        border-top: solid $accent;
+        border-bottom: solid $accent;
     }
 
     #help.visible {
@@ -100,155 +127,155 @@ class OpsAgentTui(App[None]):
     #monitor-pane {
         width: 3fr;
         height: 1fr;
-        background: #090e13;
-        border-right: solid #2a3440;
+        background: $surface;
+        border-right: solid $panel-lighten-1;
     }
 
     #monitor-title,
     #chat-title {
         height: 1;
         padding: 0 1;
-        background: #172029;
-        color: #ffcc66;
+        background: $panel;
+        color: $accent;
         text-style: bold;
     }
 
     #monitor-tabs {
         height: 1;
         padding: 0 1;
-        background: #0d1319;
+        background: $surface-darken-1;
     }
 
     #monitor-table {
         height: 1fr;
-        background: #090e13;
-        color: #d7dee7;
-        scrollbar-color: #1fb5ad;
-        scrollbar-color-hover: #51d8d0;
-        scrollbar-color-active: #ffcc66;
+        background: $surface;
+        color: $text;
+        scrollbar-color: $primary;
+        scrollbar-color-hover: $secondary;
+        scrollbar-color-active: $accent;
     }
 
     #monitor-table > .datatable--header {
-        background: #111a22;
-        color: #51d8d0;
+        background: $panel;
+        color: $secondary;
     }
 
     #monitor-table > .datatable--even-row {
-        background: #0d1319;
+        background: $surface-darken-1;
     }
 
     #monitor-table > .datatable--cursor {
-        background: #24323e;
-        color: #f2f6fa;
+        background: $primary-muted;
+        color: $text;
     }
 
     #monitor-status {
         height: 1;
         padding: 0 1;
-        background: #111820;
-        color: #8fa1b3;
+        background: $panel;
+        color: $text-muted;
     }
 
     ResourceViewer {
         align: center middle;
-        background: #000000 70%;
+        background: $background 70%;
     }
 
     #resource-viewer {
         width: 92%;
         height: 88%;
-        background: #090e13;
-        border: solid #1fb5ad;
+        background: $surface;
+        border: solid $primary;
     }
 
     #resource-title {
         height: 1;
         padding: 0 1;
-        background: #172029;
-        color: #ffcc66;
+        background: $panel;
+        color: $accent;
         text-style: bold;
     }
 
     #resource-content {
         height: 1fr;
         padding: 0 1;
-        background: #090e13;
-        color: #d7dee7;
-        scrollbar-color: #1fb5ad;
-        scrollbar-color-hover: #51d8d0;
-        scrollbar-color-active: #ffcc66;
+        background: $surface;
+        color: $text;
+        scrollbar-color: $primary;
+        scrollbar-color-hover: $secondary;
+        scrollbar-color-active: $accent;
     }
 
     #resource-footer {
         height: 1;
         padding: 0 1;
-        background: #1fb5ad;
-        color: #001c1a;
+        background: $primary;
+        color: $primary-background;
         text-style: bold;
     }
 
     #chat-pane {
         width: 2fr;
         height: 1fr;
-        background: #070a0d;
+        background: $background;
     }
 
     #result {
         height: 1fr;
         padding: 0 1;
-        background: #070a0d;
-        color: #d7dee7;
+        background: $background;
+        color: $text;
         overflow-y: auto;
-        scrollbar-color: #1fb5ad;
-        scrollbar-color-hover: #51d8d0;
-        scrollbar-color-active: #ffcc66;
+        scrollbar-color: $primary;
+        scrollbar-color-hover: $secondary;
+        scrollbar-color-active: $accent;
     }
 
     #result MarkdownH1,
     #result MarkdownH2,
     #result MarkdownH3 {
-        color: #51d8d0;
+        color: $secondary;
         text-style: bold;
     }
 
     #result MarkdownTable {
-        background: #0d1319;
+        background: $surface;
     }
 
     #result MarkdownTableContent {
-        color: #d7dee7;
+        color: $text;
     }
 
     #status {
         height: 1;
         padding: 0 1;
-        background: #172029;
-        color: #8ee7e1;
+        background: $panel;
+        color: $text-primary;
     }
 
     #question {
         height: 3;
         padding: 0 1;
-        border: tall #1fb5ad;
-        background: #0d1319;
-        color: #f2f6fa;
+        border: tall $primary;
+        background: $surface;
+        color: $text;
     }
 
     #question:focus {
-        border: tall #ffcc66;
+        border: tall $accent;
     }
 
     #question > .input--placeholder,
     #question > .input--suggestion {
-        color: #9aa9b8;
+        color: $text-muted;
     }
 
     #hotkeys,
     #hotkeys-compact {
         height: 1;
         padding: 0 1;
-        background: #1fb5ad;
-        color: #001c1a;
+        background: $primary;
+        color: $primary-background;
         text-style: bold;
     }
 
@@ -264,7 +291,7 @@ class OpsAgentTui(App[None]):
         width: 1fr;
         height: 1fr;
         border-right: none;
-        border-bottom: solid #2a3440;
+        border-bottom: solid $panel-lighten-1;
     }
 
     Screen.narrow #chat-pane {
@@ -293,6 +320,7 @@ class OpsAgentTui(App[None]):
         Binding("ctrl+l", "clear_display", "清空显示", priority=True),
         Binding("ctrl+r", "refresh_monitor", "刷新监盘", priority=True),
         Binding("ctrl+k", "focus_monitor", "资源监盘", priority=True),
+        Binding("ctrl+comma", "open_settings", "设置", priority=True),
         Binding("0", "show_overview", "Overview", show=False),
         Binding("1", "show_pods", "Pods", show=False),
         Binding("2", "show_deployments", "Deployments", show=False),
@@ -319,24 +347,32 @@ class OpsAgentTui(App[None]):
         monitor: Monitor,
         environment: str,
         namespace: str,
+        settings: Settings,
+        save_settings: Callable[[Settings], None],
     ) -> None:
         super().__init__()
         self._conversation = conversation
         self._monitor = monitor
         self._environment = environment
         self._namespace = namespace
+        self._settings = settings
+        self._save_settings = save_settings
         self._busy = False
         self._monitor_refresh_in_progress = False
         self._monitor_refresh_pending = False
 
     def compose(self) -> ComposeResult:
+        with Horizontal(id="topbar"):
+            yield Static(
+                f" OPS AGENT  Project: {self._settings.project.name}"
+                f"  Context: {self._environment}"
+                f"  Namespace: {self._namespace}  Mode: READ-ONLY / 只读",
+                id="context",
+            )
+            yield Button("⚙ Settings", id="settings-button", compact=True, flat=True)
         yield Static(
-            f" OPS AGENT  Context: {self._environment}"
-            f"  Namespace: {self._namespace}  Mode: READ-ONLY / 只读",
-            id="context",
-        )
-        yield Static(
-            "全局：Ctrl+C 退出 · F1/? 帮助 · Ctrl+R 刷新 · Ctrl+K 聚焦监盘\n"
+            "全局：Ctrl+C 退出 · F1/? 帮助 · Ctrl+, 设置"
+            " · Ctrl+R 刷新 · Ctrl+K 聚焦监盘\n"
             "聊天：Enter 提交 · i 返回输入 · Ctrl+L 清空右侧显示\n"
             "监盘：0 总览 · 1~6 切换资源 · Enter/d 详情 · l Pod 日志 · q 退出",
             id="help",
@@ -362,6 +398,7 @@ class OpsAgentTui(App[None]):
         )
 
     def on_mount(self) -> None:
+        self._apply_theme(self._settings.tui)
         self.query_one("#question", Input).focus()
         self._apply_responsive_layout(self.size.width)
         self._request_monitor_refresh()
@@ -463,6 +500,15 @@ class OpsAgentTui(App[None]):
                 "监盘模式 · ↑/↓ 选择 · Enter/d 详情 · l Pod 日志 · i 聊天"
             )
 
+    def action_open_settings(self) -> None:
+        self.push_screen(
+            SettingsScreen(
+                settings=self._settings,
+                preview_theme=self._apply_theme,
+            ),
+            self._settings_closed,
+        )
+
     def action_show_overview(self) -> None:
         self.query_one("#monitor-pane", MonitorPane).show_overview()
 
@@ -526,6 +572,10 @@ class OpsAgentTui(App[None]):
     def open_selected_resource(self) -> None:
         self.action_describe_resource()
 
+    @on(Button.Pressed, "#settings-button")
+    def open_settings(self) -> None:
+        self.action_open_settings()
+
     def _show_monitor_kind(self, kind: KubernetesResourceKind) -> None:
         pane = self.query_one("#monitor-pane", MonitorPane)
         pane.show_kind(kind)
@@ -585,6 +635,35 @@ class OpsAgentTui(App[None]):
             return
         self._monitor_refresh_in_progress = True
         self._refresh_monitor()
+
+    def _apply_theme(self, settings: TuiSettings) -> None:
+        theme = build_theme(settings)
+        self.register_theme(theme)
+        self.theme = theme.name
+        if self.is_mounted:
+            self.query_one("#monitor-pane", MonitorPane).refresh_theme()
+
+    def _settings_closed(self, updated: Settings | None) -> None:
+        if updated is None:
+            return
+        previous = self._settings
+        requires_restart = (
+            updated.project != previous.project
+            or updated.kubernetes != previous.kubernetes
+            or updated.model != previous.model
+        )
+        try:
+            self._save_settings(updated)
+        except Exception as error:  # noqa: BLE001 - TUI 必须恢复持久化边界异常
+            self._apply_theme(previous.tui)
+            self.query_one("#status", Static).update(f"配置保存失败：{error}")
+            return
+        self._settings = updated
+        self._apply_theme(updated.tui)
+        message = "配置已保存 · 主题已生效"
+        if requires_restart:
+            message += " · Project Profile 重启生效"
+        self.query_one("#status", Static).update(message)
 
 
 def _next_event(events: Iterator[AgentEvent]) -> AgentEvent | None:

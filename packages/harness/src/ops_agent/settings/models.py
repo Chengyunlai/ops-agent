@@ -1,3 +1,4 @@
+from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
 
@@ -19,6 +20,10 @@ _NonEmptyString = Annotated[
 _PositiveInteger = Annotated[
     StrictInt,
     Field(gt=0),
+]
+_HexColor = Annotated[
+    StrictStr,
+    StringConstraints(pattern=r"^#[0-9A-Fa-f]{6}$"),
 ]
 
 
@@ -74,6 +79,37 @@ class ModelSettings(_ConfigModel):
     )
 
 
+class ThemeName(StrEnum):
+    OPS_DARK = "ops-dark"
+    LIGHT = "light"
+    HIGH_CONTRAST = "high-contrast"
+
+
+class ProjectSettings(_ConfigModel):
+    name: _NonEmptyString = Field(
+        default="Ops Project",
+        description="Project Profile 显示名称",
+    )
+
+
+class TuiColorSettings(_ConfigModel):
+    primary: _HexColor | None = Field(default=None, description="主题主色")
+    accent: _HexColor | None = Field(default=None, description="主题强调色")
+    background: _HexColor | None = Field(default=None, description="主题背景色")
+    foreground: _HexColor | None = Field(default=None, description="主题文字色")
+    warning: _HexColor | None = Field(default=None, description="主题警告色")
+
+
+class TuiSettings(_ConfigModel):
+    theme: ThemeName = Field(
+        default=ThemeName.OPS_DARK,
+        description="TUI 预设主题",
+    )
+    colors: TuiColorSettings = Field(default_factory=TuiColorSettings)
+
+
 class Settings(_ConfigModel):
+    project: ProjectSettings = Field(default_factory=ProjectSettings)
     kubernetes: KubernetesSettings
     model: ModelSettings
+    tui: TuiSettings = Field(default_factory=TuiSettings)

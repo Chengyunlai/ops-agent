@@ -109,6 +109,10 @@ class MonitorPane(Vertical):
     def focus_table(self) -> None:
         self.query_one("#monitor-table", DataTable).focus()
 
+    def refresh_theme(self) -> None:
+        self._render_tabs()
+        self._render_table()
+
     def open_selected_overview_kind(self) -> bool:
         snapshot = self._snapshot
         table = self.query_one("#monitor-table", DataTable)
@@ -152,6 +156,9 @@ class MonitorPane(Vertical):
         self.query_one("#monitor-title", Static).update(title)
 
     def _render_tabs(self) -> None:
+        theme = self.app.current_theme
+        selected_color = theme.accent or theme.primary
+        idle_color = theme.foreground or theme.primary
         labels = [("0", "Overview", self._kind is None)]
         if self._snapshot is not None:
             labels.extend(
@@ -165,13 +172,13 @@ class MonitorPane(Vertical):
             )
         tabs = [
             (
-                f"[bold #ffcc66]{shortcut} {label}[/]"
+                f"[bold {selected_color}]{shortcut} {label}[/]"
                 if selected
-                else f"[#8fa1b3]{shortcut} {label}[/]"
+                else f"[{idle_color}]{shortcut} {label}[/]"
             )
             for shortcut, label, selected in labels
         ]
-        tabs.append("[#8fa1b3]↑/↓ Enter 浏览目录[/]")
+        tabs.append(f"[{idle_color}]↑/↓ Enter 浏览目录[/]")
         self.query_one("#monitor-tabs", Static).update("  ".join(tabs))
 
     def _render_table(self) -> None:
@@ -181,13 +188,20 @@ class MonitorPane(Vertical):
         if self._kind is None:
             table.add_columns("RESOURCE", "COUNT", "READY", "STATUS")
             if snapshot is not None:
+                theme = self.app.current_theme
                 for collection in snapshot.resources:
                     count, ready, status, healthy = _collection_status(collection)
                     table.add_row(
                         collection.label,
                         count,
                         ready,
-                        _health_text(status, healthy),
+                        _health_text(
+                            status,
+                            healthy,
+                            success=theme.success,
+                            warning=theme.warning,
+                            neutral=theme.foreground,
+                        ),
                         key=collection.kind.value,
                     )
             return
@@ -199,18 +213,22 @@ class MonitorPane(Vertical):
         table.add_columns(*collection.columns)
         if collection.error is not None:
             table.add_row(
-                Text("Unavailable", style="#ffcc66"),
+                Text(
+                    "Unavailable",
+                    style=self.app.current_theme.warning,
+                ),
                 collection.error,
                 *("-" for _ in collection.columns[2:]),
             )
             return
+        theme = self.app.current_theme
         for row in collection.rows:
             name_style = (
-                "#ffcc66"
+                theme.warning
                 if row.healthy is False
-                else "#51d8d0"
+                else theme.success
                 if row.healthy is True
-                else "#d7dee7"
+                else theme.foreground
             )
             values = (Text(row.values[0], style=name_style), *row.values[1:])
             table.add_row(*values, key=row.ref.name)
@@ -253,8 +271,13 @@ def _collection_status(
     )
 
 
-def _health_text(label: str, healthy: bool | None) -> Text:
-    style = (
-        "#51d8d0" if healthy is True else "#ffcc66" if healthy is False else "#8fa1b3"
-    )
+def _health_text(
+    label: str,
+    healthy: bool | None,
+    *,
+    success: str | None,
+    warning: str | None,
+    neutral: str | None,
+) -> Text:
+    style = success if healthy is True else warning if healthy is False else neutral
     return Text(label, style=style)

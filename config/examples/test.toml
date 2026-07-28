@@ -1,3 +1,6 @@
+[project]
+name = "Testing"
+
 [kubernetes]
 environment = "test"
 namespace = "YOUR_NAMESPACE"
@@ -9,3 +12,13 @@ provider = "openai"
 model = "deepseek-v4-pro"
 base_url = "https://api.deepseek.com"
 api_key_env = "DEEPSEEK_API_KEY"
+
+[tui]
+theme = "ops-dark"
+
+[tui.colors]
+# primary = "#1FB5AD"
+# accent = "#FFCC66"
+# background = "#070A0D"
+# foreground = "#D7DEE7"
+# warning = "#FFCC66"

@@ -7,6 +7,7 @@ dependencies = [
     "langchain>=1.0,<2",
     "langgraph>=1.0,<2",
     "pydantic>=2.13,<3",
+    "tomli-w>=1.2,<2",
     "urllib3",
 ]
 

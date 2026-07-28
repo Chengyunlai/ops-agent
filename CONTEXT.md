@@ -34,6 +34,11 @@ A sequence of related user turns sharing immutable Interaction Context and
 prior conversational references.
 _Avoid_: Request, chat message
 
+**Project Profile**:
+A named operations target that identifies one environment and its fixed
+Kubernetes connection and namespace.
+_Avoid_: Project, cluster config, runtime context
+
 **Clarification**:
 A question that resolves missing or ambiguous intent before a Capability is
 selected.

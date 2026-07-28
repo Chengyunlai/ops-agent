@@ -75,6 +75,9 @@ cp config/examples/test.toml config/local/test.toml
 本地配置内容如下；不要在其中保存访问令牌、证书等敏感信息：
 
 ```toml
+[project]
+name = "Operations"
+
 [kubernetes]
 environment = "local"
 namespace = "operations"
@@ -86,6 +89,13 @@ provider = "openai"
 model = "deepseek-v4-pro"
 base_url = "https://api.deepseek.com"
 api_key_env = "DEEPSEEK_API_KEY"
+
+[tui]
+theme = "ops-dark"
+
+[tui.colors]
+# primary = "#1FB5AD"
+# accent = "#FFCC66"
 ```
 
 这里使用 DeepSeek 官方提供的 OpenAI-compatible 接口，所以
@@ -101,6 +111,7 @@ export DEEPSEEK_API_KEY="..."
 
 | 配置项 | 类型 | 说明 |
 | --- | --- | --- |
+| `project.name` | string | Project Profile 的显示名称 |
 | `environment` | string | 环境标识，例如 `dev`、`test`、`prod` |
 | `namespace` | string | Agent 默认访问的 Kubernetes 命名空间 |
 | `kubeconfig_path` | string | kubeconfig 路径，推荐使用绝对路径 |
@@ -110,11 +121,18 @@ export DEEPSEEK_API_KEY="..."
 | `model.model` | string | 供应商提供的、支持工具调用的模型名称 |
 | `model.base_url` | string | 可选的模型接口地址 |
 | `model.api_key_env` | string | 保存 API Key 的环境变量名称 |
+| `tui.theme` | enum | `ops-dark`、`light` 或 `high-contrast` |
+| `tui.colors.primary` | `#RRGGBB` | 可选的主题主色覆盖 |
+| `tui.colors.accent` | `#RRGGBB` | 可选的主题强调色覆盖 |
+| `tui.colors.background` | `#RRGGBB` | 可选的主题背景色覆盖 |
+| `tui.colors.foreground` | `#RRGGBB` | 可选的主题文字色覆盖 |
+| `tui.colors.warning` | `#RRGGBB` | 可选的主题警告色覆盖 |
 
 当前加载器校验配置文件、TOML 格式、`[kubernetes]` / `[model]`
-区块、字段类型、正整数超时和可选代理 URL；kubeconfig 是否存在由创建
-Kubernetes Client 时检查。`proxy_url` 由配置模型校验并在 Kubernetes
-Client 创建前注入，因此不依赖启动 Shell 是否继承 macOS 系统代理。
+区块、字段类型、正整数超时、可选代理 URL、主题名称和十六进制颜色；
+kubeconfig 是否存在由创建 Kubernetes Client 时检查。`proxy_url` 由配置
+模型校验并在 Kubernetes Client 创建前注入，因此不依赖启动 Shell 是否
+继承 macOS 系统代理。
 
 当前可通过 Python API 加载配置：
 
@@ -175,8 +193,15 @@ DaemonSet、Service、ReplicaSet、Job、CronJob、Ingress 和 PVC 的数量与
 `Ctrl+K` 聚焦左侧监盘，`0` 返回 Overview，`1`～`6` 切换具体资源；
 Overview 中可用方向键和 `Enter` 进入任意资源类型。选中资源后按
 `Enter`/`d` 读取对象详情与关联 Event；Pod 上按 `l` 读取每个容器最近
-200 行日志。TUI 不接管鼠标事件，可以像普通终端文本一样拖选任意区域并使用
-终端复制快捷键复制，不局限于整块内容。
+200 行日志。TUI 启用鼠标以支持点击聚焦；复制终端内容时按住
+`Shift`/`Option` 再拖选，不局限于整块内容。
+
+顶部 `Settings`（或 `Ctrl+,`）编辑当前 Project Profile、主题和颜色。主题
+选择与有效颜色会即时预览；保存后写回启动时使用的 TOML。项目名称、环境、
+namespace、kubeconfig、代理和请求超时属于运行边界，保存后需要重启应用才会
+生效；主题与颜色无需重启。内置 `ops-dark`、`light`、`high-contrast`
+三个主题，也可恢复预设默认颜色。
+
 这些固定操作直接使用绑定 namespace 的 Monitor/Reader，不经过 Agent，也不
 读取或改变右侧 Conversation Session。`i` 返回聊天输入，`Ctrl+R` 立即刷新
 监盘，`Ctrl+L` 清空右侧显示但保留会话上下文，`F1`/`?` 显示帮助，
@@ -386,9 +411,9 @@ CLI / TUI ──► Interaction Context（可信）
 只依赖 `ops_agent.agent` 的稳定公开接口。审批、持久化和 interrupt/resume
 属于有状态执行协议，不复用当前的只读诊断计划。
 
-`settings/` 保持 `load_settings()` 这一公开接口：`loader.py` 只处理 TOML
-文件读取和统一错误转换，`models.py` 使用 Pydantic 模型声明配置结构、字段
-说明、不可变性和校验规则。
+`settings/` 通过 `load_settings()` / `save_settings()` 提供 TOML 配置
+边界：`loader.py` 负责文件读取、原子写回和统一错误转换，`models.py` 使用
+Pydantic 模型声明配置结构、字段说明、不可变性和校验规则。
 
 ## 建议架构
 

@@ -5,6 +5,7 @@ from ops_agent.agent import (
     InteractionChannel,
     InteractionContext,
 )
+from ops_agent.settings import save_settings
 
 from ops_agent_cli.bootstrap import create_runtime
 from ops_agent_cli.tui.app import OpsAgentTui
@@ -25,6 +26,8 @@ def run_tui(config_path: Path) -> None:
         monitor=runtime.monitor,
         environment=runtime.environment,
         namespace=runtime.namespace,
+        settings=runtime.settings,
+        save_settings=lambda updated: save_settings(config_path, updated),
     ).run(mouse=True)
 
 
