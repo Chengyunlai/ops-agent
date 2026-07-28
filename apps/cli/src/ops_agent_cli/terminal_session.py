@@ -62,8 +62,12 @@ class _DownloadProtocol:
                 yield b"\r\n[OPS AGENT] download request is too large\r\n"
                 continue
             try:
+                normalized_path = encoded_path.replace(b"\r", b"").replace(
+                    b"\n",
+                    b"",
+                )
                 remote_path = base64.b64decode(
-                    encoded_path,
+                    normalized_path,
                     validate=True,
                 ).decode("utf-8")
             except binascii.Error, UnicodeDecodeError:

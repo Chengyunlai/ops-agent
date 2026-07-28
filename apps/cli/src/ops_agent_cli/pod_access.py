@@ -34,25 +34,20 @@ exec "$interpreter" -c "$script" "$@"
 """.strip()
 
 _READ_POD_FILE = r"""
-import os
-import stat
-import sys
-
-path = sys.argv[1]
-descriptor = None
-try:
-    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-    info = os.fstat(descriptor)
-    if not stat.S_ISREG(info.st_mode):
-        raise OSError("目标不是普通文件")
-    while chunk := os.read(descriptor, 1024 * 1024):
-        sys.stdout.buffer.write(chunk)
-except OSError as error:
-    print(error, file=sys.stderr)
-    raise SystemExit(1)
-finally:
-    if descriptor is not None:
-        os.close(descriptor)
+path=$1
+if [ ! -f "$path" ]; then
+    printf '目标不是普通文件: %s\n' "$path" >&2
+    exit 1
+fi
+if [ -L "$path" ]; then
+    printf '为避免下载目标在传输前改变，不下载符号链接: %s\n' "$path" >&2
+    exit 1
+fi
+if ! command -v cat >/dev/null 2>&1; then
+    printf '%s\n' '容器中缺少 cat，无法读取文件' >&2
+    exit 127
+fi
+exec cat "$path"
 """.strip()
 
 _READ_PVC_FILE = r"""
@@ -108,75 +103,73 @@ case "$1" in
     /*) candidate=$1 ;;
     *) candidate=$PWD/$1 ;;
 esac
-if command -v python3 >/dev/null 2>&1; then
-    interpreter=python3
-elif command -v python >/dev/null 2>&1; then
-    interpreter=python
+if command -v realpath >/dev/null 2>&1; then
+    remote_path=$(realpath "$candidate") || exit 1
+elif command -v readlink >/dev/null 2>&1; then
+    remote_path=$(readlink -f "$candidate") || exit 1
 else
-    printf '%s\n' 'download: container is missing Python' >&2
+    directory=${candidate%/*}
+    filename=${candidate##*/}
+    if [ -z "$directory" ]; then
+        directory=/
+    fi
+    canonical_directory=$(
+        CDPATH= cd "$directory" 2>/dev/null && pwd -P
+    ) || exit 1
+    remote_path=$canonical_directory/$filename
+fi
+if [ ! -f "$remote_path" ]; then
+    printf 'download: not a regular file: %s\n' "$remote_path" >&2
+    exit 1
+fi
+if ! command -v base64 >/dev/null 2>&1; then
+    printf '%s\n' 'download: container is missing base64' >&2
     exit 127
 fi
-encoded_path=$(
-    "$interpreter" - "$candidate" <<'OPS_AGENT_PYTHON'
-import base64
-import os
-import sys
-
-remote_path = os.path.realpath(sys.argv[1])
-if not os.path.isfile(remote_path):
-    print(f"download: not a regular file: {remote_path}", file=sys.stderr)
-    raise SystemExit(1)
-print(base64.b64encode(remote_path.encode()).decode())
-OPS_AGENT_PYTHON
-) || exit
+encoded_path=$(printf '%s' "$remote_path" | base64)
 printf '\033]777;ops-agent-download;%s;%s\007' \
     "$OPS_AGENT_DOWNLOAD_TOKEN" "$encoded_path"
 """.strip()
 
 _CLEANUP_INTERACTIVE_SESSION = r"""
-import os
-import shutil
-import signal
-import sys
-import time
+session_dir=$1
+session_id=$2
+case "$session_id" in
+    ""|*[!0-9a-f]*) exit 2 ;;
+esac
+expected_dir="/tmp/.ops-agent-session-$session_id"
+if [ "$session_dir" != "$expected_dir" ]; then
+    exit 2
+fi
 
-session_dir, session_id = sys.argv[1:3]
+pid=
+if [ -r "$session_dir/pid" ]; then
+    IFS= read -r pid <"$session_dir/pid"
+fi
 
+matches_session_process() {
+    case "$pid" in
+        ""|*[!0-9]*) return 1 ;;
+    esac
+    [ -r "/proc/$pid/cmdline" ] || return 1
+    [ -r "/proc/$pid/stat" ] || return 1
+    tr '\000' '\n' <"/proc/$pid/cmdline" \
+        | grep -F -x "$session_id" >/dev/null 2>&1 \
+        || return 1
+    IFS= read -r process_stat <"/proc/$pid/stat" || return 1
+    stat_fields=${process_stat#*) }
+    set -- $stat_fields
+    [ "$3" = "$pid" ]
+}
 
-def is_matching_session_process(pid):
-    with open(f"/proc/{pid}/cmdline", "rb") as command_line:
-        arguments = command_line.read().split(b"\0")
-    with open(f"/proc/{pid}/stat", encoding="utf-8") as process_stat:
-        stat_fields = process_stat.read().rsplit(")", 1)[1].split()
-    process_group = int(stat_fields[2])
-    return session_id.encode() in arguments and process_group == pid
-
-
-def read_session_process():
-    descriptor = os.open(
-        os.path.join(session_dir, "pid"),
-        os.O_RDONLY | os.O_NOFOLLOW,
-    )
-    try:
-        pid = int(os.read(descriptor, 32))
-    finally:
-        os.close(descriptor)
-    if not is_matching_session_process(pid):
-        return None
-    return pid
-
-
-try:
-    process_group = read_session_process()
-    if process_group is not None:
-        os.killpg(process_group, signal.SIGHUP)
-        time.sleep(0.2)
-        if is_matching_session_process(process_group):
-            os.killpg(process_group, signal.SIGKILL)
-except (OSError, ValueError):
-    pass
-finally:
-    shutil.rmtree(session_dir, ignore_errors=True)
+if matches_session_process; then
+    kill -HUP "-$pid" >/dev/null 2>&1 || true
+    sleep 1
+    if matches_session_process; then
+        kill -KILL "-$pid" >/dev/null 2>&1 || true
+    fi
+fi
+rm -rf "$session_dir"
 """.strip()
 
 _INTERACTIVE_SHELL = r"""
@@ -269,9 +262,8 @@ class KubectlPodAccess:
             remote_command=[
                 "sh",
                 "-c",
-                _PYTHON_RUNNER,
-                "ops-agent",
                 _READ_POD_FILE,
+                "ops-agent",
                 remote_path,
             ],
         )
@@ -397,9 +389,8 @@ class KubectlPodAccess:
             remote_command=[
                 "sh",
                 "-c",
-                _PYTHON_RUNNER,
-                "ops-agent-cleanup",
                 _CLEANUP_INTERACTIVE_SESSION,
+                "ops-agent-cleanup",
                 session_dir,
                 session_id,
             ],

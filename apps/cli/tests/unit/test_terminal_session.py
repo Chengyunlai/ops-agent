@@ -35,6 +35,22 @@ def test_terminal_download_protocol_handles_chunked_marker_without_displaying_it
     assert requests == [remote_path]
 
 
+def test_terminal_download_protocol_accepts_wrapped_base64() -> None:
+    token = "abc123"
+    remote_path = "/workspace/" + "nested/" * 20 + "report.log"
+    encoded_path = base64.b64encode(remote_path.encode())
+    wrapped_path = b"\n".join(
+        encoded_path[index : index + 76] for index in range(0, len(encoded_path), 76)
+    )
+    marker = (
+        b"\x1b]777;ops-agent-download;" + token.encode() + b";" + wrapped_path + b"\x07"
+    )
+
+    events = list(_DownloadProtocol(token).feed(marker))
+
+    assert events == [_DownloadRequest(remote_path=remote_path)]
+
+
 def test_terminal_download_protocol_requires_session_token() -> None:
     protocol = _DownloadProtocol("expected")
     foreign_marker = (

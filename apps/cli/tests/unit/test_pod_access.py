@@ -1,7 +1,7 @@
 import base64
 import hashlib
 import io
-import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -13,6 +13,7 @@ from ops_agent.settings import (
 )
 from ops_agent_cli.pod_access import (
     _DOWNLOAD_HELPER,
+    _READ_POD_FILE,
     KubectlPodAccess,
     PodAccessError,
 )
@@ -105,6 +106,7 @@ def test_download_pod_file_streams_to_scoped_destination(
         "--",
         "sh",
     ]
+    assert commands[0][-3] == _READ_POD_FILE
     assert commands[0][-1] == "/var/log/sample/app.log"
 
 
@@ -382,7 +384,7 @@ def test_interactive_session_downloads_discovered_file_without_exiting_shell(
     ]
 
 
-def test_download_helper_resolves_relative_path_with_python(
+def test_download_helper_resolves_relative_path_without_python(
     tmp_path: Path,
 ) -> None:
     parent = tmp_path / "workspace"
@@ -390,11 +392,16 @@ def test_download_helper_resolves_relative_path_with_python(
     child.mkdir(parents=True)
     artifact = parent / "daily report.log"
     artifact.write_text("report")
-    environment = os.environ.copy()
+    tool_directory = tmp_path / "tools"
+    tool_directory.mkdir()
+    base64_path = shutil.which("base64")
+    assert base64_path is not None
+    (tool_directory / "base64").symlink_to(base64_path)
+    environment = {"PATH": str(tool_directory)}
     environment["OPS_AGENT_DOWNLOAD_TOKEN"] = "session-token"
 
     completed = subprocess.run(
-        ["sh", "-c", _DOWNLOAD_HELPER, "download", "../daily report.log"],
+        ["/bin/sh", "-c", _DOWNLOAD_HELPER, "download", "../daily report.log"],
         cwd=child,
         env=environment,
         check=True,
@@ -406,6 +413,25 @@ def test_download_helper_resolves_relative_path_with_python(
     assert completed.stdout.endswith(b"\x07")
     encoded_path = completed.stdout[len(prefix) : -1]
     assert base64.b64decode(encoded_path).decode() == str(artifact)
+
+
+def test_pod_file_reader_does_not_require_python(tmp_path: Path) -> None:
+    artifact = tmp_path / "report.log"
+    artifact.write_bytes(b"portable reader")
+    tool_directory = tmp_path / "bin"
+    tool_directory.mkdir()
+    cat_path = shutil.which("cat")
+    assert cat_path is not None
+    (tool_directory / "cat").symlink_to(cat_path)
+
+    completed = subprocess.run(
+        ["/bin/sh", "-c", _READ_POD_FILE, "reader", str(artifact)],
+        env={"PATH": str(tool_directory)},
+        check=True,
+        capture_output=True,
+    )
+
+    assert completed.stdout == b"portable reader"
 
 
 def test_interactive_session_runs_remote_cleanup_after_terminal_error(
