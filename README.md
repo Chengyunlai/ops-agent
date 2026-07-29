@@ -664,7 +664,7 @@ Agent 编排层 ──► 上下文与运维知识
 - 提交前运行：
 
 ```bash
-uv run pytest
+make check
 ```
 
 ## 路线图
@@ -688,4 +688,6 @@ uv run pytest
 
 ## 贡献
 
-欢迎通过 Issue 讨论需求或缺陷，并通过 Pull Request 提交改进。提交前请确保测试通过，且新增行为有相应测试覆盖。
+欢迎通过 Issue 讨论需求或缺陷，并通过 Pull Request 提交改进。提交前请阅读
+[贡献指南](CONTRIBUTING.md)，按模板提供可复现信息、完成脱敏并运行
+`make check`。
