@@ -2,6 +2,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from ops_agent_cli import __version__
 from ops_agent_cli import installation as installation_module
 from ops_agent_cli import main as main_module
 from ops_agent_cli.main import main
@@ -142,7 +143,7 @@ def test_main_reports_application_version(capsys) -> None:
         main(["--version"])
 
     assert exit_info.value.code == 0
-    assert capsys.readouterr().out == "ops-agent 0.1.0\n"
+    assert capsys.readouterr().out == f"ops-agent {__version__}\n"
 
 
 def test_main_doctor_reports_missing_runtime_requirements(

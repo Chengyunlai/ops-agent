@@ -40,8 +40,9 @@ from ops_agent_cli import tui as tui_module
 from ops_agent_cli.pod_access import DownloadResult, InteractiveSessionResult
 from ops_agent_cli.tui import run_tui
 from ops_agent_cli.tui.app import OpsAgentTui
+from textual.color import Color
 from textual.coordinate import Coordinate
-from textual.widgets import DataTable, Input, Markdown, RichLog, Select, Static
+from textual.widgets import Button, DataTable, Input, Markdown, RichLog, Select, Static
 
 
 class FakeAgent:
@@ -381,6 +382,46 @@ def create_tui(
         save_settings=save_settings or (lambda _: None),
         pod_access=pod_access,
     )
+
+
+def _contrast_ratio(foreground: Color, background: Color) -> float:
+    def relative_luminance(color: Color) -> float:
+        def linearize(channel: int) -> float:
+            value = channel / 255
+            return (
+                value / 12.92 if value <= 0.04045 else ((value + 0.055) / 1.055) ** 2.4
+            )
+
+        return (
+            0.2126 * linearize(color.r)
+            + 0.7152 * linearize(color.g)
+            + 0.0722 * linearize(color.b)
+        )
+
+    lighter, darker = sorted(
+        (relative_luminance(foreground), relative_luminance(background)),
+        reverse=True,
+    )
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+def test_tui_settings_button_is_readable_without_hover() -> None:
+    async def exercise() -> None:
+        app = create_tui(FakeAgent(answer="unused"))
+
+        async with app.run_test(size=(140, 34)) as pilot:
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            button = app.query_one("#settings-button", Button)
+            foreground = button.styles.color
+            background = button.styles.background
+
+            assert foreground is not None
+            assert background is not None
+            assert _contrast_ratio(foreground, background) >= 4.5
+
+    asyncio.run(exercise())
 
 
 def test_run_tui_opens_kubernetes_scoped_conversation(

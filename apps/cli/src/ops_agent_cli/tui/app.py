@@ -135,7 +135,7 @@ class OpsAgentTui(App[None]):
         width: 1fr;
         padding: 0 1;
         background: $primary;
-        color: $primary-background;
+        color: $background;
         text-style: bold;
     }
 
@@ -146,7 +146,7 @@ class OpsAgentTui(App[None]):
         padding: 0 1;
         border: none;
         background: $primary;
-        color: $primary-background;
+        color: $background;
         text-style: bold;
     }
 
