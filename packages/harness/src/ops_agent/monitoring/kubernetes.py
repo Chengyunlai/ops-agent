@@ -157,22 +157,28 @@ class KubernetesMonitor:
         source: KubernetesMonitoringSource,
         *,
         namespace: str,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._source = source
         self._namespace = namespace
+        self._clock = clock or _utc_now
 
     def snapshot(self) -> KubernetesMonitorSnapshot:
+        observed_at = self._clock()
         return KubernetesMonitorSnapshot(
             namespace=self._namespace,
-            observed_at=datetime.now(UTC),
+            observed_at=observed_at,
             resources=(
                 self._capture(
                     kind=KubernetesResourceKind.POD,
                     label="Pods",
                     shortcut="1",
-                    columns=("NAME", "READY", "STATUS", "RESTARTS"),
+                    columns=("NAME", "READY", "STATUS", "RESTARTS", "AGE"),
                     request=self._source.list_pods,
-                    to_row=_pod_row,
+                    to_row=lambda pod: _pod_row(
+                        pod,
+                        observed_at=observed_at,
+                    ),
                 ),
                 self._capture(
                     kind=KubernetesResourceKind.DEPLOYMENT,
@@ -414,7 +420,11 @@ def _ref(kind: KubernetesResourceKind, name: str) -> KubernetesResourceRef:
     return KubernetesResourceRef(kind=kind, name=name)
 
 
-def _pod_row(pod: PodSummary) -> KubernetesResourceRow:
+def _pod_row(
+    pod: PodSummary,
+    *,
+    observed_at: datetime,
+) -> KubernetesResourceRow:
     healthy = pod.phase == "Running" and pod.ready_containers == pod.total_containers
     return KubernetesResourceRow(
         ref=_ref(KubernetesResourceKind.POD, pod.name),
@@ -423,9 +433,37 @@ def _pod_row(pod: PodSummary) -> KubernetesResourceRow:
             f"{pod.ready_containers}/{pod.total_containers}",
             pod.phase,
             str(pod.restart_count),
+            _format_age(pod.created_at, observed_at=observed_at),
         ),
         healthy=healthy,
     )
+
+
+def _format_age(
+    created_at: datetime | None,
+    *,
+    observed_at: datetime,
+) -> str:
+    if created_at is None:
+        return "-"
+
+    age_seconds = max(0, int((observed_at - created_at).total_seconds()))
+    if age_seconds < 60:
+        return f"{age_seconds}s"
+    age_minutes = age_seconds // 60
+    if age_minutes < 60:
+        return f"{age_minutes}m"
+    age_hours = age_minutes // 60
+    if age_hours < 24:
+        return f"{age_hours}h"
+    age_days = age_hours // 24
+    if age_days < 365:
+        return f"{age_days}d"
+    return f"{age_days // 365}y"
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
 
 
 def _deployment_row(item: DeploymentSummary) -> KubernetesResourceRow:

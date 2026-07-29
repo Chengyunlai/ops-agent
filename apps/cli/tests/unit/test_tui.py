@@ -265,8 +265,8 @@ def create_monitor_snapshot() -> KubernetesMonitorSnapshot:
                 KubernetesResourceKind.POD,
                 "Pods",
                 "1",
-                ("NAME", "READY", "STATUS", "RESTARTS"),
-                ("sample-api-7f8", "2/2", "Running", "1"),
+                ("NAME", "READY", "STATUS", "RESTARTS", "AGE"),
+                ("sample-api-7f8", "2/2", "Running", "1", "2d"),
             ),
             collection(
                 KubernetesResourceKind.DEPLOYMENT,

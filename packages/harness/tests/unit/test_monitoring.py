@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 from ops_agent.kubernetes import (
     ContainerSummary,
     CronJobSummary,
@@ -39,6 +41,7 @@ class FakeKubernetesSource:
                 restart_count=1,
                 ready_containers=2,
                 total_containers=2,
+                created_at=datetime(2026, 7, 27, 6, 15, tzinfo=UTC),
             )
         ]
 
@@ -233,7 +236,11 @@ class FakeKubernetesSource:
 
 def test_monitor_captures_fixed_namespace_snapshot() -> None:
     source = FakeKubernetesSource()
-    monitor = KubernetesMonitor(source, namespace="sample")
+    monitor = KubernetesMonitor(
+        source,
+        namespace="sample",
+        clock=lambda: datetime(2026, 7, 29, 10, 30, tzinfo=UTC),
+    )
 
     snapshot = monitor.snapshot()
 
@@ -243,6 +250,14 @@ def test_monitor_captures_fixed_namespace_snapshot() -> None:
         "2/2",
         "Running",
         "1",
+        "2d",
+    )
+    assert snapshot.collection(KubernetesResourceKind.POD).columns == (
+        "NAME",
+        "READY",
+        "STATUS",
+        "RESTARTS",
+        "AGE",
     )
     assert snapshot.collection(KubernetesResourceKind.DEPLOYMENT).rows[0].values[1] == (
         "2/2"

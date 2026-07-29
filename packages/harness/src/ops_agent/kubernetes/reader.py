@@ -456,6 +456,7 @@ def _to_pod_summary(pod) -> PodSummary:
         restart_count=sum(status.restart_count for status in statuses),
         ready_containers=sum(bool(status.ready) for status in statuses),
         total_containers=len(containers),
+        created_at=pod.metadata.creation_timestamp,
     )
 
 

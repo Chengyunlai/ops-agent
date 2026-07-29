@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 
 
@@ -22,6 +23,7 @@ class PodSummary:
     restart_count: int
     ready_containers: int = 0
     total_containers: int = 0
+    created_at: datetime | None = None
 
 
 @dataclass(frozen=True)

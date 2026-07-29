@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -51,8 +52,12 @@ class UnreachableCoreV1Api:
 
 
 def test_list_pods_returns_summaries_from_api() -> None:
+    created_at = datetime(2026, 7, 28, 9, 15, tzinfo=UTC)
     pod = SimpleNamespace(
-        metadata=SimpleNamespace(name="sample-api"),
+        metadata=SimpleNamespace(
+            name="sample-api",
+            creation_timestamp=created_at,
+        ),
         spec=SimpleNamespace(
             containers=[SimpleNamespace(), SimpleNamespace()],
         ),
@@ -80,6 +85,7 @@ def test_list_pods_returns_summaries_from_api() -> None:
             restart_count=3,
             ready_containers=1,
             total_containers=2,
+            created_at=created_at,
         )
     ]
     assert api.calls == [("sample", 7)]
@@ -87,7 +93,10 @@ def test_list_pods_returns_summaries_from_api() -> None:
 
 def test_list_pods_uses_zero_restarts_before_containers_start() -> None:
     pod = SimpleNamespace(
-        metadata=SimpleNamespace(name="sample-pending"),
+        metadata=SimpleNamespace(
+            name="sample-pending",
+            creation_timestamp=None,
+        ),
         spec=SimpleNamespace(containers=[]),
         status=SimpleNamespace(
             phase="Pending",
