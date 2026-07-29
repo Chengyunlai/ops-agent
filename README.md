@@ -168,6 +168,9 @@ request_timeout_seconds = 10
 
 [kubernetes.interactive_exec]
 enabled = false
+locale = "auto"
+terminal_type = "xterm-256color"
+color = true
 
 [kubernetes.downloads]
 directory = "~/Downloads/ops-agent"
@@ -210,6 +213,9 @@ export DEEPSEEK_API_KEY="..."
 | `request_timeout_seconds` | integer | Kubernetes API 请求超时时间（秒） |
 | `proxy_url` | HTTP(S) URL | 可选；访问 Kubernetes API 使用的代理，例如 `http://127.0.0.1:7897` |
 | `kubernetes.interactive_exec.enabled` | boolean | 是否允许左侧监盘启动人工 Pod Shell；默认 `false` |
+| `kubernetes.interactive_exec.locale` | string | Pod Shell UTF-8 locale；`auto` 自动探测，默认 `auto` |
+| `kubernetes.interactive_exec.terminal_type` | string | Pod Shell 的 `TERM` 值；默认 `xterm-256color` |
+| `kubernetes.interactive_exec.color` | boolean | 若容器的 `ls` 支持颜色参数，是否自动启用彩色目录；默认 `true` |
 | `kubernetes.downloads.directory` | path | Pod/PVC 文件下载的本机根目录；默认 `~/Downloads/ops-agent` |
 | `kubernetes.pod_transfer.strategy` | enum | Pod 文件传输策略：`auto`、`exec-cat` 或 `exec-dd`；默认 `auto` |
 | `kubernetes.pod_transfer.max_file_size_mb` | integer | 单个 Pod 文件下载上限（MiB）；默认 `512` |
@@ -225,8 +231,9 @@ export DEEPSEEK_API_KEY="..."
 | `tui.colors.warning` | `#RRGGBB` | 可选的主题警告色覆盖 |
 
 当前加载器校验配置文件、TOML 格式、`[kubernetes]` / `[model]`
-区块、字段类型、正整数超时、可选代理 URL、人工终端开关、下载目录、Pod
-传输策略、文件大小上限、主题名称和十六进制颜色；
+区块、字段类型、正整数超时、可选代理 URL、人工终端开关、Shell locale、
+终端类型、颜色开关、下载目录、Pod 传输策略、文件大小上限、主题名称和
+十六进制颜色；
 kubeconfig 是否存在由创建 Kubernetes Client 时检查。`proxy_url` 由配置
 模型校验并在 Kubernetes Client 创建前注入，因此不依赖启动 Shell 是否
 继承 macOS 系统代理。
@@ -329,6 +336,14 @@ Pods 表格选中 Pod 后按 `x` 可启动 **Interactive Pod Session**。该功�
 的终端协议请求本机执行只读传输。会话期间暂停后台监盘刷新，退出 Shell 后
 恢复，避免 Kubernetes TLS 警告污染终端。该入口只属于左侧人工操作，不注册
 为 LangChain Tool、不进入主图或子 Agent，也不会把 Shell 命令交给模型。
+
+会话默认以 `locale = "auto"` 探测目标容器现有 locale 及
+`C.UTF-8`、`C.utf8`、`en_US.UTF-8`、`zh_CN.UTF-8` 等常见 UTF-8 选项，
+避免中文文件名被 `ls` 显示为八进制转义。没有可用 UTF-8 locale 时会明确
+警告，此时需要在容器镜像中安装 locale；Ops Agent 不会修改镜像。
+`terminal_type` 默认设为 `xterm-256color`，`color = true` 时仅在容器
+`ls --color=auto` 可用的情况下为本次 Shell 增加颜色 alias。三个选项也可在
+顶部 Settings 的“人工 Pod 访问”区域修改，保存后重启生效。
 
 Interactive Pod Session 及其下载命令要求目标容器包含 POSIX `sh`，并包含
 `cat` 或 `dd`；不要求 Python 或 `base64`。PVC 目录浏览和 PVC 文件下载还

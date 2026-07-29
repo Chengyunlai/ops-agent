@@ -621,6 +621,20 @@ def test_tui_settings_persist_project_and_apply_theme_immediately() -> None:
                 == "disabled"
             )
             assert (
+                screen.query_one("#setting-interactive-locale", Input).value == "auto"
+            )
+            assert (
+                screen.query_one(
+                    "#setting-interactive-terminal-type",
+                    Input,
+                ).value
+                == "xterm-256color"
+            )
+            assert (
+                screen.query_one("#setting-interactive-color", Select).value
+                == "enabled"
+            )
+            assert (
                 screen.query_one("#setting-download-directory", Input).value
                 == "~/Downloads/ops-agent"
             )
@@ -635,6 +649,18 @@ def test_tui_settings_persist_project_and_apply_theme_immediately() -> None:
             screen.query_one("#setting-project-name", Input).value = "Sample Platform"
             screen.query_one("#setting-namespace", Input).value = "sample-next"
             screen.query_one("#setting-interactive-exec", Select).value = "enabled"
+            screen.query_one(
+                "#setting-interactive-locale",
+                Input,
+            ).value = "C.UTF-8"
+            screen.query_one(
+                "#setting-interactive-terminal-type",
+                Input,
+            ).value = "screen-256color"
+            screen.query_one(
+                "#setting-interactive-color",
+                Select,
+            ).value = "disabled"
             screen.query_one(
                 "#setting-download-directory", Input
             ).value = "/tmp/sample-downloads"
@@ -657,6 +683,11 @@ def test_tui_settings_persist_project_and_apply_theme_immediately() -> None:
             assert saved[0].project.name == "Sample Platform"
             assert saved[0].kubernetes.namespace == "sample-next"
             assert saved[0].kubernetes.interactive_exec.enabled
+            assert saved[0].kubernetes.interactive_exec.locale == "C.UTF-8"
+            assert (
+                saved[0].kubernetes.interactive_exec.terminal_type == "screen-256color"
+            )
+            assert not saved[0].kubernetes.interactive_exec.color
             assert saved[0].kubernetes.downloads.directory == Path(
                 "/tmp/sample-downloads"
             )

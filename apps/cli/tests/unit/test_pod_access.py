@@ -504,6 +504,276 @@ def test_interactive_session_downloads_discovered_file_without_exiting_shell(
     ]
 
 
+def _run_fake_interactive_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    interactive_exec: InteractiveExecSettings,
+    shell_name: str,
+    available_locales: tuple[str, ...],
+    utf8_locales: tuple[str, ...],
+    color_supported: bool,
+    sh_env_value: str | None = None,
+) -> tuple[str, str]:
+    real_run = subprocess.run
+    tool_directory = tmp_path / "bin"
+    tool_directory.mkdir()
+    capture_path = tmp_path / "shell-environment.txt"
+    home_directory = tmp_path / "home"
+    home_directory.mkdir()
+    existing_rc = tmp_path / "existing-rc"
+    existing_rc.write_text(
+        "export EXISTING_RC=loaded\nexport LANG=C\nexport LC_ALL=C\nexport TERM=dumb\n",
+        encoding="utf-8",
+    )
+    if shell_name == "bash":
+        (home_directory / ".bashrc").write_text(
+            existing_rc.read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+
+    fake_shell = tool_directory / shell_name
+    fake_shell.write_text(
+        """#!/bin/sh
+rcfile=${ENV:-}
+while [ "$#" -gt 0 ]; do
+    if [ "$1" = "--rcfile" ]; then
+        shift
+        rcfile=$1
+    fi
+    shift
+done
+if [ -n "$rcfile" ]; then
+    . "$rcfile"
+fi
+{
+    printf 'LANG=%s\\n' "$LANG"
+    printf 'LC_ALL=%s\\n' "$LC_ALL"
+    printf 'TERM=%s\\n' "$TERM"
+    printf 'EXISTING_RC=%s\\n' "$EXISTING_RC"
+    if alias ls >/dev/null 2>&1; then
+        alias ls
+    else
+        printf '%s\\n' 'NO_LS_ALIAS'
+    fi
+} >"$CAPTURE_FILE"
+exit 0
+""",
+        encoding="utf-8",
+    )
+    fake_shell.chmod(0o755)
+
+    for tool in ("chmod", "mkdir", "rm", "tr"):
+        tool_path = shutil.which(tool)
+        assert tool_path is not None
+        (tool_directory / tool).symlink_to(tool_path)
+
+    fake_locale = tool_directory / "locale"
+    fake_locale.write_text(
+        """#!/bin/sh
+[ "$1" = "-a" ] || exit 1
+old_ifs=$IFS
+IFS=:
+for candidate in $AVAILABLE_LOCALES; do
+    printf '%s\\n' "$candidate"
+done
+IFS=$old_ifs
+""",
+        encoding="utf-8",
+    )
+    fake_locale.chmod(0o755)
+    fake_wc = tool_directory / "wc"
+    fake_wc.write_text(
+        """#!/bin/sh
+case ":$UTF8_LOCALES:" in
+    *":$LC_ALL:"*) printf '%s\\n' 1 ;;
+    *) printf '%s\\n' 3 ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    fake_wc.chmod(0o755)
+    fake_ls = tool_directory / "ls"
+    fake_ls.write_text(
+        '#!/bin/sh\n[ "$LS_COLOR_SUPPORTED" = true ]\n',
+        encoding="utf-8",
+    )
+    fake_ls.chmod(0o755)
+    terminal_output: list[str] = []
+
+    def fake_terminal(
+        command,
+        *,
+        environment,
+        download_token,
+        download_file,
+    ):
+        assert command[-3:] == [
+            interactive_exec.locale,
+            interactive_exec.terminal_type,
+            "true" if interactive_exec.color else "false",
+        ]
+        remote_command = command[command.index("--") + 1 :]
+        remote_command[0] = "/bin/sh"
+        remote_environment = {
+            "PATH": str(tool_directory),
+            "HOME": str(home_directory),
+            "CAPTURE_FILE": str(capture_path),
+            "LANG": "C",
+            "LC_ALL": "C",
+            "TERM": "dumb",
+            "AVAILABLE_LOCALES": ":".join(available_locales),
+            "UTF8_LOCALES": ":".join(utf8_locales),
+            "LS_COLOR_SUPPORTED": "true" if color_supported else "false",
+        }
+        if shell_name == "sh":
+            remote_environment["ENV"] = sh_env_value or str(existing_rc)
+        completed = real_run(
+            remote_command,
+            env=remote_environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert completed.returncode == 0, completed.stderr
+        terminal_output.append(completed.stdout + completed.stderr)
+        return completed.returncode
+
+    monkeypatch.setattr(
+        "ops_agent_cli.pod_access.run_interactive_terminal",
+        fake_terminal,
+    )
+    monkeypatch.setattr(
+        "ops_agent_cli.pod_access.subprocess.run",
+        lambda command, **kwargs: subprocess.CompletedProcess(command, 0),
+    )
+    settings = create_settings(
+        tmp_path,
+        interactive_exec=True,
+    ).model_copy(update={"interactive_exec": interactive_exec})
+    access = KubectlPodAccess(settings)
+
+    result = access.interactive_session(
+        pod_name="pod-1",
+        container_name="main",
+    )
+
+    assert result.exit_code == 0
+    return capture_path.read_text(encoding="utf-8"), "".join(terminal_output)
+
+
+def test_interactive_session_initializes_utf8_locale_term_and_colors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured, _ = _run_fake_interactive_session(
+        tmp_path,
+        monkeypatch,
+        interactive_exec=InteractiveExecSettings(enabled=True),
+        shell_name="bash",
+        available_locales=(),
+        utf8_locales=("C.UTF-8",),
+        color_supported=True,
+    )
+
+    assert "LANG=C.UTF-8" in captured
+    assert "LC_ALL=C.UTF-8" in captured
+    assert "TERM=xterm-256color" in captured
+    assert "EXISTING_RC=loaded" in captured
+    assert "ls --color=auto" in captured
+
+
+def test_interactive_session_auto_detects_container_specific_utf8_locale(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured, _ = _run_fake_interactive_session(
+        tmp_path,
+        monkeypatch,
+        interactive_exec=InteractiveExecSettings(enabled=True),
+        shell_name="bash",
+        available_locales=("C", "en_GB.UTF-8"),
+        utf8_locales=("en_GB.UTF-8",),
+        color_supported=True,
+    )
+
+    assert "LANG=en_GB.UTF-8" in captured
+    assert "LC_ALL=en_GB.UTF-8" in captured
+
+
+def test_interactive_session_sh_preserves_env_and_respects_overrides(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured, _ = _run_fake_interactive_session(
+        tmp_path,
+        monkeypatch,
+        interactive_exec=InteractiveExecSettings(
+            enabled=True,
+            locale="zh_CN.UTF-8",
+            terminal_type="screen-256color",
+            color=False,
+        ),
+        shell_name="sh",
+        available_locales=("zh_CN.UTF-8",),
+        utf8_locales=("zh_CN.UTF-8",),
+        color_supported=True,
+    )
+
+    assert "LANG=zh_CN.UTF-8" in captured
+    assert "LC_ALL=zh_CN.UTF-8" in captured
+    assert "TERM=screen-256color" in captured
+    assert "EXISTING_RC=loaded" in captured
+    assert "NO_LS_ALIAS" in captured
+
+
+@pytest.mark.parametrize(
+    "sh_env_value",
+    ["$HOME/../existing-rc", "${HOME}/../existing-rc"],
+)
+def test_interactive_session_sh_expands_home_in_original_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    sh_env_value: str,
+) -> None:
+    captured, _ = _run_fake_interactive_session(
+        tmp_path,
+        monkeypatch,
+        interactive_exec=InteractiveExecSettings(enabled=True),
+        shell_name="sh",
+        available_locales=(),
+        utf8_locales=("C.UTF-8",),
+        color_supported=True,
+        sh_env_value=sh_env_value,
+    )
+
+    assert "EXISTING_RC=loaded" in captured
+    assert "LANG=C.UTF-8" in captured
+    assert "LC_ALL=C.UTF-8" in captured
+    assert "TERM=xterm-256color" in captured
+
+
+def test_interactive_session_warns_when_utf8_and_color_are_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured, terminal_output = _run_fake_interactive_session(
+        tmp_path,
+        monkeypatch,
+        interactive_exec=InteractiveExecSettings(enabled=True),
+        shell_name="bash",
+        available_locales=("C", "POSIX"),
+        utf8_locales=(),
+        color_supported=False,
+    )
+
+    assert "LANG=C" in captured
+    assert "LC_ALL=C" in captured
+    assert "TERM=xterm-256color" in captured
+    assert "NO_LS_ALIAS" in captured
+    assert "容器未提供可用的 UTF-8 locale" in terminal_output
+
+
 def test_download_helper_resolves_relative_path_without_python(
     tmp_path: Path,
 ) -> None:

@@ -26,6 +26,14 @@ _HexColor = Annotated[
     StrictStr,
     StringConstraints(pattern=r"^#[0-9A-Fa-f]{6}$"),
 ]
+_ShellEnvironmentValue = Annotated[
+    StrictStr,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+        pattern=r"^[A-Za-z0-9_.@+-]+$",
+    ),
+]
 
 
 def _validate_path_input(value: object) -> object:
@@ -55,6 +63,18 @@ class InteractiveExecSettings(_ConfigModel):
     enabled: StrictBool = Field(
         default=False,
         description="是否允许用户从资源监盘启动交互式 Pod Shell",
+    )
+    locale: _ShellEnvironmentValue = Field(
+        default="auto",
+        description="Pod Shell UTF-8 locale；auto 自动探测容器支持项",
+    )
+    terminal_type: _ShellEnvironmentValue = Field(
+        default="xterm-256color",
+        description="Pod Shell TERM 值",
+    )
+    color: StrictBool = Field(
+        default=True,
+        description="是否为支持 GNU/BusyBox color 参数的 ls 启用颜色",
     )
 
 

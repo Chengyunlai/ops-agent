@@ -195,8 +195,15 @@ _INTERACTIVE_SHELL = r"""
 download_token=$1
 download_helper=$2
 session_id=$3
+requested_locale=$4
+terminal_type=$5
+color_enabled=$6
 case "$session_id" in
     ""|*[!0-9a-f]*) exit 2 ;;
+esac
+case "$color_enabled" in
+    true|false) ;;
+    *) exit 2 ;;
 esac
 session_dir="/tmp/.ops-agent-session-$session_id"
 
@@ -214,12 +221,117 @@ printf '%s\n' "$download_helper" >"$session_dir/download" || exit 1
 chmod 700 "$session_dir/download" || exit 1
 export OPS_AGENT_DOWNLOAD_TOKEN="$download_token"
 export PATH="$session_dir:$PATH"
+export TERM="$terminal_type"
+
+supports_utf8_locale() {
+    candidate_locale=$1
+    character_count=$(
+        printf '\344\273\277' \
+            | LC_ALL="$candidate_locale" LANG="$candidate_locale" \
+                wc -m 2>/dev/null
+    ) || return 1
+    character_count=$(printf '%s' "$character_count" | tr -d '[:space:]')
+    [ "$character_count" = 1 ]
+}
+
+selected_locale=
+if [ "$requested_locale" = auto ]; then
+    for candidate_locale in "${LC_ALL:-}" "${LC_CTYPE:-}" "${LANG:-}"; do
+        [ -n "$candidate_locale" ] || continue
+        if supports_utf8_locale "$candidate_locale"; then
+            selected_locale=$candidate_locale
+            break
+        fi
+    done
+    if [ -z "$selected_locale" ] && command -v locale >/dev/null 2>&1; then
+        locale_list="$session_dir/locales"
+        locale -a >"$locale_list" 2>/dev/null || : >"$locale_list"
+        while IFS= read -r candidate_locale; do
+            case "$candidate_locale" in
+                *[Uu][Tt][Ff]*8*) ;;
+                *) continue ;;
+            esac
+            if supports_utf8_locale "$candidate_locale"; then
+                selected_locale=$candidate_locale
+                break
+            fi
+        done <"$locale_list"
+    fi
+    if [ -z "$selected_locale" ]; then
+        for candidate_locale in \
+            C.UTF-8 C.utf8 \
+            en_US.UTF-8 en_US.utf8 \
+            zh_CN.UTF-8 zh_CN.utf8
+        do
+            if supports_utf8_locale "$candidate_locale"; then
+                selected_locale=$candidate_locale
+                break
+            fi
+        done
+    fi
+elif supports_utf8_locale "$requested_locale"; then
+    selected_locale=$requested_locale
+fi
+
+if [ -n "$selected_locale" ]; then
+    export LANG="$selected_locale"
+    export LC_ALL="$selected_locale"
+else
+    printf '%s\n' \
+        '[OPS AGENT] 容器未提供可用的 UTF-8 locale；中文文件名可能显示为转义序列。' \
+        >&2
+fi
+
+bash_rc="$session_dir/bashrc"
+sh_rc="$session_dir/shrc"
+export OPS_AGENT_SHELL_LOCALE="$selected_locale"
+export OPS_AGENT_SHELL_TERM="$terminal_type"
+export OPS_AGENT_ORIGINAL_ENV="${ENV:-}"
+
+append_session_environment() {
+    rc_file=$1
+    printf '%s\n' \
+        'if [ -n "$OPS_AGENT_SHELL_LOCALE" ]; then' \
+        '    export LANG="$OPS_AGENT_SHELL_LOCALE"' \
+        '    export LC_ALL="$OPS_AGENT_SHELL_LOCALE"' \
+        'fi' \
+        'export TERM="$OPS_AGENT_SHELL_TERM"' \
+        'unset OPS_AGENT_SHELL_LOCALE OPS_AGENT_SHELL_TERM OPS_AGENT_ORIGINAL_ENV' \
+        >>"$rc_file"
+}
+
+printf '%s\n' '[ -f "$HOME/.bashrc" ] && . "$HOME/.bashrc"' >"$bash_rc"
+printf '%s\n' \
+    'original_env_path=$OPS_AGENT_ORIGINAL_ENV' \
+    'case "$original_env_path" in' \
+    '    "\$HOME") original_env_path=$HOME ;;' \
+    '    "\$HOME/"*) original_env_path=$HOME/${original_env_path#"\$HOME/"} ;;' \
+    '    "\${HOME}") original_env_path=$HOME ;;' \
+    '    "\${HOME}/"*) original_env_path=$HOME/${original_env_path#"\${HOME}/"} ;;' \
+    'esac' \
+    '[ -n "$original_env_path" ] && [ -f "$original_env_path" ] && . "$original_env_path"' \
+    'unset original_env_path' \
+    >"$sh_rc"
+append_session_environment "$bash_rc"
+append_session_environment "$sh_rc"
+if [ "$color_enabled" = true ] \
+    && command -v ls >/dev/null 2>&1 \
+    && ls --color=auto -d . >/dev/null 2>&1
+then
+    printf "%s\n" \
+        "alias ls >/dev/null 2>&1 || alias ls='ls --color=auto'" \
+        >>"$bash_rc"
+    printf "%s\n" \
+        "alias ls >/dev/null 2>&1 || alias ls='ls --color=auto'" \
+        >>"$sh_rc"
+fi
 
 printf '%s\n' \
     '[OPS AGENT] 使用 download <文件> 下载当前容器中的文件到本机。'
 if command -v bash >/dev/null 2>&1; then
-    bash -i
+    bash --rcfile "$bash_rc" -i
 elif command -v sh >/dev/null 2>&1; then
+    export ENV="$sh_rc"
     sh -i
 else
     printf '%s\n' '容器中没有可用的 bash 或 sh' >&2
@@ -367,6 +479,7 @@ class KubectlPodAccess:
             )
         download_token = secrets.token_hex(16)
         session_id = secrets.token_hex(16)
+        interactive_exec = self._settings.interactive_exec
         command = [
             *self._kubectl_base(),
             "exec",
@@ -382,6 +495,9 @@ class KubectlPodAccess:
             download_token,
             _DOWNLOAD_HELPER,
             session_id,
+            interactive_exec.locale,
+            interactive_exec.terminal_type,
+            "true" if interactive_exec.color else "false",
         ]
         print(
             _interactive_session_banner(

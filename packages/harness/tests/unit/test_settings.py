@@ -54,6 +54,9 @@ def test_load_settings_from_toml(tmp_path: Path):
     assert settings.model.base_url == "https://api.deepseek.com"
     assert settings.model.api_key_env == "DEEPSEEK_API_KEY"
     assert not settings.kubernetes.interactive_exec.enabled
+    assert settings.kubernetes.interactive_exec.locale == "auto"
+    assert settings.kubernetes.interactive_exec.terminal_type == "xterm-256color"
+    assert settings.kubernetes.interactive_exec.color
     assert settings.kubernetes.downloads.directory == Path("~/Downloads/ops-agent")
     assert settings.kubernetes.pod_transfer.strategy.value == "auto"
     assert settings.kubernetes.pod_transfer.max_file_size_mb == 512
@@ -73,6 +76,9 @@ def test_load_settings_parses_manual_pod_access_configuration(
 
         [kubernetes.interactive_exec]
         enabled = true
+        locale = "zh_CN.UTF-8"
+        terminal_type = "screen-256color"
+        color = false
 
         [kubernetes.downloads]
         directory = "/tmp/ops-agent-downloads"
@@ -87,7 +93,46 @@ def test_load_settings_parses_manual_pod_access_configuration(
     settings = load_settings(config_path)
 
     assert settings.kubernetes.interactive_exec.enabled
+    assert settings.kubernetes.interactive_exec.locale == "zh_CN.UTF-8"
+    assert settings.kubernetes.interactive_exec.terminal_type == "screen-256color"
+    assert not settings.kubernetes.interactive_exec.color
     assert settings.kubernetes.downloads.directory == Path("/tmp/ops-agent-downloads")
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("locale", '"C UTF-8"'),
+        ("terminal_type", '"xterm;reset"'),
+        ("color", '"true"'),
+    ],
+)
+def test_load_settings_rejects_invalid_interactive_exec_configuration(
+    tmp_path: Path,
+    field: str,
+    value: str,
+) -> None:
+    config_path = tmp_path / "invalid-interactive-exec.toml"
+    config_path.write_text(
+        f"""
+        [kubernetes]
+        environment = "test"
+        namespace = "sample"
+        kubeconfig_path = "/tmp/ops_agent-kubeconfig"
+        request_timeout_seconds = 10
+
+        [kubernetes.interactive_exec]
+        {field} = {value}
+
+        [model]
+        provider = "openai"
+        model = "test-model"
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SettingsError, match=field):
+        load_settings(config_path)
 
 
 def test_load_settings_parses_pod_transfer_configuration(

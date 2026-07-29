@@ -9,6 +9,9 @@ request_timeout_seconds = 10
 
 [kubernetes.interactive_exec]
 enabled = false
+locale = "auto"
+terminal_type = "xterm-256color"
+color = true
 
 [kubernetes.downloads]
 directory = "~/Downloads/ops-agent"

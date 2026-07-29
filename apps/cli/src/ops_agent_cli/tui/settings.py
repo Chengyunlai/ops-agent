@@ -177,6 +177,36 @@ class SettingsScreen(ModalScreen[Settings | None]):
                     ),
                 )
                 yield from _field(
+                    "Pod Shell UTF-8 Locale",
+                    Input(
+                        value=kubernetes.interactive_exec.locale,
+                        id="setting-interactive-locale",
+                    ),
+                )
+                yield from _field(
+                    "Pod Shell TERM",
+                    Input(
+                        value=kubernetes.interactive_exec.terminal_type,
+                        id="setting-interactive-terminal-type",
+                    ),
+                )
+                yield from _field(
+                    "Pod Shell 彩色 ls",
+                    Select(
+                        (
+                            ("启用（默认）", "enabled"),
+                            ("禁用", "disabled"),
+                        ),
+                        value=(
+                            "enabled"
+                            if kubernetes.interactive_exec.color
+                            else "disabled"
+                        ),
+                        allow_blank=False,
+                        id="setting-interactive-color",
+                    ),
+                )
+                yield from _field(
                     "Artifact Download 本机目录",
                     Input(
                         value=str(kubernetes.downloads.directory),
@@ -273,6 +303,21 @@ class SettingsScreen(ModalScreen[Settings | None]):
                 enabled=(
                     self.query_one(
                         "#setting-interactive-exec",
+                        Select,
+                    ).value
+                    == "enabled"
+                ),
+                locale=self.query_one(
+                    "#setting-interactive-locale",
+                    Input,
+                ).value,
+                terminal_type=self.query_one(
+                    "#setting-interactive-terminal-type",
+                    Input,
+                ).value,
+                color=(
+                    self.query_one(
+                        "#setting-interactive-color",
                         Select,
                     ).value
                     == "enabled"
