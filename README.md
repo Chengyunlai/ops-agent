@@ -34,6 +34,23 @@
 | 交互式终端 | 基础已完成 | TUI 提供可信 Kubernetes 上下文、多轮会话和受控进度事件 |
 | 审计与可观测性 | 规划中 | 结构化日志、Tracing、指标和操作审计 |
 
+## 界面预览
+
+以下截图由本地 Textual 应用使用完全虚构的 `demo` 环境和 `sample-app`
+资源生成，不包含真实集群地址、资源名称、路径或凭据。
+
+### 资源总览与受控对话
+
+![Ops Agent 资源总览与受控对话](docs/images/tui-overview.svg)
+
+### Pods 实时监盘
+
+![Ops Agent Pods 实时监盘，包含 AGE](docs/images/tui-pods.svg)
+
+### 项目与界面设置
+
+![Ops Agent 项目与界面设置](docs/images/tui-settings.svg)
+
 ## 技术栈
 
 - Python 3.12+（仅源码开发需要；GitHub Release 已内置运行时）
