@@ -16,6 +16,11 @@ Apache-2.0 LICENSE; releases publish SHA-256 checksums and GitHub build
 provenance. The source workspace and Python wheels remain development and
 integration interfaces, not the primary installation path.
 
+The executable is shipped with its adjacent PyInstaller runtime directory.
+Homebrew keeps that bundle under `libexec` and links the public commands into
+`bin`. This avoids repeatedly extracting the full Python runtime on every
+command invocation while preserving a self-contained installation.
+
 The installed configuration path resolves in this order: explicit `--config`,
 `OPS_AGENT_CONFIG`, then `$XDG_CONFIG_HOME/ops-agent/config.toml` or
 `~/.config/ops-agent/config.toml`. `ops-agent init` creates a private starter

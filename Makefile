@@ -46,13 +46,13 @@ bump-version: ## 同步发布版本；使用 VERSION=x.y.z
 	$(UV) run python scripts/bump_version.py "$(VERSION)"
 	$(UV) lock
 
-package: ## 构建当前平台的独立 ops-agent 可执行文件
+package: ## 构建当前平台的独立 ops-agent 应用包
 	$(UV) sync --locked --group build
 	$(UV) run pyinstaller --clean --noconfirm packaging/ops-agent.spec
 
 release: package ## 生成当前平台发布压缩包和 SHA-256；可设置 TARGET
 	$(UV) run python scripts/create_release_archive.py \
-		--binary dist/ops-agent \
+		--bundle dist/ops-agent \
 		--version "$$($(UV) run ops-agent --version | awk '{print $$2}')" \
 		--target "$(TARGET)" \
 		--output-directory "$(RELEASE_DIR)"

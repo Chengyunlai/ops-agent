@@ -63,15 +63,15 @@ ops-agent_<version>_darwin-amd64.tar.gz
 ops-agent_<version>_linux-amd64.tar.gz
 ```
 
-例如 macOS arm64 用户可以解压并安装到个人命令目录：
+例如 macOS arm64 用户可以解压到个人应用目录，并为两个兼容命令建立链接：
 
 ```bash
 mkdir -p ~/.local/bin
+mkdir -p ~/.local/share/ops-agent
 tar -xzf ops-agent_0.1.0_darwin-arm64.tar.gz
-install -m 0755 \
-  ops-agent_0.1.0_darwin-arm64/ops-agent \
-  ops-agent_0.1.0_darwin-arm64/ops_agent \
-  ~/.local/bin/
+cp -R ops-agent_0.1.0_darwin-arm64/. ~/.local/share/ops-agent/
+ln -sf ~/.local/share/ops-agent/ops-agent ~/.local/bin/ops-agent
+ln -sf ~/.local/share/ops-agent/ops-agent ~/.local/bin/ops_agent
 ```
 
 确保 `~/.local/bin` 已加入 `PATH`，然后创建初始 Project Profile：
@@ -380,13 +380,15 @@ workspace 发行元数据并更新 lockfile，测试也会校验它们没有漂�
 
 1. 在 macOS arm64、macOS amd64 和 Linux amd64 原生 Runner 构建；
 2. 验证标签版本与 `ops-agent --version` 完全一致；
-3. 对独立程序执行配置初始化和 OpenAI-compatible Provider 加载冒烟测试；
-4. 生成包含程序、配置示例、README 和 Apache-2.0 LICENSE 的 `tar.gz`；
+3. 对独立应用包执行配置初始化和 OpenAI-compatible Provider 加载冒烟测试；
+4. 生成包含目录式运行时、配置示例、README 和 Apache-2.0 LICENSE 的
+   `tar.gz`；
 5. 汇总 `SHA256SUMS`、生成 GitHub provenance 并创建 Release。
 
 本机可以使用 `make package` 构建 `dist/ops-agent`；使用
 `make release TARGET=<platform-arch>` 生成与 GitHub 相同结构的压缩包。
-发布目录、PyInstaller 构建目录和二进制均被 Git 忽略。
+发布目录、PyInstaller 构建目录和应用包均被 Git 忽略。目录式运行时避免
+单文件程序每次启动时重复解压完整依赖。
 
 公开发布采用两个仓库：`Chengyunlai/ops-agent` 保存源码和 Release，
 `Chengyunlai/homebrew-tap` 保存 Homebrew Formula。Release 发布完成后，
@@ -403,7 +405,7 @@ Formula；不需要在主仓库存储跨仓库写权限令牌。
 ops_agent/
 ├── .github/workflows/              # CI 与标签发布
 ├── packaging/
-│   └── ops-agent.spec              # PyInstaller 独立程序描述
+│   └── ops-agent.spec              # PyInstaller 独立应用包描述
 ├── scripts/
 │   ├── create_release_archive.py
 │   └── write_release_checksums.py

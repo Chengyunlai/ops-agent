@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import gzip
-import io
 import re
 import tarfile
 from pathlib import Path
@@ -15,14 +14,15 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Create one installable Ops Agent release archive.",
     )
-    parser.add_argument("--binary", required=True, type=Path)
+    parser.add_argument("--bundle", required=True, type=Path)
     parser.add_argument("--version", required=True)
     parser.add_argument("--target", required=True)
     parser.add_argument("--output-directory", required=True, type=Path)
     args = parser.parse_args()
 
-    if not args.binary.is_file():
-        parser.error(f"binary does not exist: {args.binary}")
+    executable = args.bundle / "ops-agent"
+    if not args.bundle.is_dir() or not executable.is_file():
+        parser.error(f"bundle does not contain ops-agent: {args.bundle}")
     for name, value in (("version", args.version), ("target", args.target)):
         if not _SAFE_RELEASE_VALUE.fullmatch(value):
             parser.error(f"{name} is not release-safe: {value}")
@@ -31,11 +31,6 @@ def main() -> int:
     release_name = f"ops-agent_{args.version}_{args.target}"
     archive_path = args.output_directory / f"{release_name}.tar.gz"
     resources = (
-        (
-            args.binary,
-            f"{release_name}/ops-agent",
-            0o755,
-        ),
         (
             _REPOSITORY_ROOT / "apps/cli/src/ops_agent_cli/resources/config.toml",
             f"{release_name}/config.example.toml",
@@ -58,31 +53,70 @@ def main() -> int:
         gzip.GzipFile(filename="", mode="wb", fileobj=output, mtime=0) as zipped,
         tarfile.open(fileobj=zipped, mode="w") as archive,
     ):
+        _add_path(
+            archive,
+            executable,
+            f"{release_name}/ops-agent",
+            mode=0o755,
+        )
+        compatibility = tarfile.TarInfo(f"{release_name}/ops_agent")
+        compatibility.type = tarfile.LNKTYPE
+        compatibility.linkname = f"{release_name}/ops-agent"
+        _normalize_info(compatibility, mode=0o755)
+        archive.addfile(compatibility)
+
+        for source in sorted(args.bundle.iterdir(), key=lambda path: path.name):
+            if source == executable:
+                continue
+            _add_path(
+                archive,
+                source,
+                f"{release_name}/{source.name}",
+            )
+
         for source, archive_name, mode in resources:
-            payload = source.read_bytes()
-            info = tarfile.TarInfo(archive_name)
-            info.size = len(payload)
-            info.mode = mode
-            info.mtime = 0
-            info.uid = 0
-            info.gid = 0
-            info.uname = ""
-            info.gname = ""
-            archive.addfile(info, io.BytesIO(payload))
-            if archive_name == f"{release_name}/ops-agent":
-                compatibility = tarfile.TarInfo(f"{release_name}/ops_agent")
-                compatibility.type = tarfile.LNKTYPE
-                compatibility.linkname = archive_name
-                compatibility.mode = 0o755
-                compatibility.mtime = 0
-                compatibility.uid = 0
-                compatibility.gid = 0
-                compatibility.uname = ""
-                compatibility.gname = ""
-                archive.addfile(compatibility)
+            _add_path(archive, source, archive_name, mode=mode)
 
     print(archive_path)
     return 0
+
+
+def _add_path(
+    archive: tarfile.TarFile,
+    source: Path,
+    archive_name: str,
+    *,
+    mode: int | None = None,
+) -> None:
+    info = archive.gettarinfo(str(source), arcname=archive_name)
+    _normalize_info(info, mode=mode)
+    if info.isfile():
+        with source.open("rb") as payload:
+            archive.addfile(info, payload)
+        return
+
+    archive.addfile(info)
+    if info.isdir():
+        for child in sorted(source.iterdir(), key=lambda path: path.name):
+            _add_path(
+                archive,
+                child,
+                f"{archive_name}/{child.name}",
+            )
+
+
+def _normalize_info(
+    info: tarfile.TarInfo,
+    *,
+    mode: int | None = None,
+) -> None:
+    if mode is not None:
+        info.mode = mode
+    info.mtime = 0
+    info.uid = 0
+    info.gid = 0
+    info.uname = ""
+    info.gname = ""
 
 
 if __name__ == "__main__":

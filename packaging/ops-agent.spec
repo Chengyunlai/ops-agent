@@ -40,9 +40,8 @@ python_modules = PYZ(analysis.pure)
 executable = EXE(
     python_modules,
     analysis.scripts,
-    analysis.binaries,
-    analysis.datas,
     [],
+    exclude_binaries=True,
     name="ops-agent",
     debug=False,
     bootloader_ignore_signals=False,
@@ -54,4 +53,13 @@ executable = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+)
+
+bundle = COLLECT(
+    executable,
+    analysis.binaries,
+    analysis.datas,
+    strip=False,
+    upx=False,
+    name="ops-agent",
 )

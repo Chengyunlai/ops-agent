@@ -1,11 +1,14 @@
 import hashlib
+import runpy
 import subprocess
 import sys
 import tarfile
 import tomllib
 from pathlib import Path
 from shutil import copyfile
+from types import ModuleType
 
+import pytest
 from ops_agent_cli import __version__
 
 REPOSITORY_ROOT = Path(__file__).parents[4]
@@ -48,17 +51,22 @@ def test_release_metadata_uses_application_version_and_installable_entry_points(
 def test_release_scripts_create_installable_archive_and_checksums(
     tmp_path: Path,
 ) -> None:
-    binary = tmp_path / "ops-agent"
+    bundle = tmp_path / "ops-agent"
+    bundle.mkdir()
+    binary = bundle / "ops-agent"
     binary.write_bytes(b"standalone-binary")
     binary.chmod(0o755)
+    runtime = bundle / "_internal"
+    runtime.mkdir()
+    (runtime / "python-runtime").write_bytes(b"embedded-runtime")
     output_directory = tmp_path / "release"
 
     completed = subprocess.run(
         [
             sys.executable,
             str(REPOSITORY_ROOT / "scripts/create_release_archive.py"),
-            "--binary",
-            str(binary),
+            "--bundle",
+            str(bundle),
             "--version",
             "0.1.0",
             "--target",
@@ -79,6 +87,8 @@ def test_release_scripts_create_installable_archive_and_checksums(
         assert names == [
             f"{root}/ops-agent",
             f"{root}/ops_agent",
+            f"{root}/_internal",
+            f"{root}/_internal/python-runtime",
             f"{root}/config.example.toml",
             f"{root}/README.md",
             f"{root}/LICENSE",
@@ -89,6 +99,8 @@ def test_release_scripts_create_installable_archive_and_checksums(
         compatibility = release.getmember(f"{root}/ops_agent")
         assert compatibility.islnk()
         assert compatibility.linkname == f"{root}/ops-agent"
+        runtime_file = release.extractfile(f"{root}/_internal/python-runtime")
+        assert runtime_file.read() == b"embedded-runtime"
         config = release.extractfile(f"{root}/config.example.toml")
         assert b"[kubernetes]" in config.read()
         license_text = release.extractfile(f"{root}/LICENSE")
@@ -107,6 +119,26 @@ def test_release_scripts_create_installable_archive_and_checksums(
     assert (output_directory / "SHA256SUMS").read_text() == (
         f"{checksum}  {archive.name}\n"
     )
+
+
+def test_packaged_version_entrypoint_does_not_import_full_application(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    main_module = ModuleType("ops_agent_cli.main")
+
+    def unexpected_main() -> int:
+        pytest.fail("version entrypoint imported the full application")
+
+    main_module.main = unexpected_main
+    monkeypatch.setitem(sys.modules, "ops_agent_cli.main", main_module)
+    monkeypatch.setattr(sys, "argv", ["ops-agent", "--version"])
+
+    with pytest.raises(SystemExit) as exit_info:
+        runpy.run_module("ops_agent_cli.__main__", run_name="__main__")
+
+    assert exit_info.value.code == 0
+    assert capsys.readouterr().out == f"ops-agent {__version__}\n"
 
 
 def test_bump_version_updates_all_lockstep_declarations(tmp_path: Path) -> None:

@@ -56,20 +56,20 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           test "$(uv run ops-agent --version)" = "ops-agent ${version}"
-      - name: Build standalone executable
+      - name: Build standalone application bundle
         run: uv run pyinstaller --clean --noconfirm packaging/ops-agent.spec
       - name: Smoke test installed interfaces
         shell: bash
         run: |
-          ./dist/ops-agent --version
+          ./dist/ops-agent/ops-agent --version
           config_home="${RUNNER_TEMP}/ops-agent-config-${{ matrix.target }}"
-          XDG_CONFIG_HOME="${config_home}" ./dist/ops-agent init
-          XDG_CONFIG_HOME="${config_home}" ./dist/ops-agent config path
+          XDG_CONFIG_HOME="${config_home}" ./dist/ops-agent/ops-agent init
+          XDG_CONFIG_HOME="${config_home}" ./dist/ops-agent/ops-agent config path
           test -f "${config_home}/ops-agent/config.toml"
           set +e
           provider_smoke="$(
             DEEPSEEK_API_KEY=dummy \
-              ./dist/ops-agent \
+              ./dist/ops-agent/ops-agent \
               --config config/examples/test.toml \
               ask "检查 Pod" 2>&1
           )"
@@ -82,7 +82,7 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           uv run python scripts/create_release_archive.py \
-            --binary dist/ops-agent \
+            --bundle dist/ops-agent \
             --version "${version}" \
             --target "${{ matrix.target }}" \
             --output-directory release
