@@ -25,7 +25,7 @@ from ops_agent_cli.tui.chat import ChatTranscript
 
 _REPOSITORY_ROOT = Path(__file__).parents[1]
 _OUTPUT_DIRECTORY = _REPOSITORY_ROOT / "docs/images"
-_SCREEN_SIZE = (160, 42)
+_SCREEN_SIZE = (128, 42)
 
 
 class _CaptureView(Enum):
@@ -272,6 +272,10 @@ async def _capture(
         screenshot = app.export_screenshot(
             title=f"Ops Agent · {filename.removesuffix('.svg')}",
             simplify=True,
+        )
+        screenshot = screenshot.replace(
+            " textLength=",
+            ' lengthAdjust="spacingAndGlyphs" textLength=',
         )
         normalized_screenshot = "\n".join(
             line.rstrip() for line in screenshot.splitlines()
