@@ -191,13 +191,68 @@ fi
 rm -rf "$session_dir"
 """.strip()
 
+_STAGE_INTERACTIVE_FILES = r"""
+session_dir=$1
+session_id=$2
+boundary=$3
+end_boundary=$4
+case "$session_id" in
+    ""|*[!0-9a-f]*) exit 2 ;;
+esac
+expected_dir="/tmp/.ops-agent-session-$session_id"
+expected_boundary="OPS_AGENT_FILE_BOUNDARY_$session_id"
+expected_end_boundary="OPS_AGENT_FILE_END_$session_id"
+if [ "$session_dir" != "$expected_dir" ] \
+    || [ "$boundary" != "$expected_boundary" ] \
+    || [ "$end_boundary" != "$expected_end_boundary" ]
+then
+    exit 2
+fi
+
+cleanup() {
+    rm -rf "$session_dir"
+}
+
+trap cleanup 0
+trap 'cleanup; exit 129' HUP
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
+umask 077
+mkdir "$session_dir" || exit 1
+bootstrap_file="$session_dir/bootstrap"
+download_file="$session_dir/download"
+: >"$bootstrap_file" || exit 1
+: >"$download_file" || exit 1
+target_file=$bootstrap_file
+boundary_found=false
+end_boundary_found=false
+while IFS= read -r payload_line || [ -n "$payload_line" ]; do
+    [ "$end_boundary_found" = false ] || exit 2
+    if [ "$payload_line" = "$boundary" ]; then
+        [ "$boundary_found" = false ] || exit 2
+        boundary_found=true
+        target_file=$download_file
+        continue
+    fi
+    if [ "$payload_line" = "$end_boundary" ]; then
+        [ "$boundary_found" = true ] || exit 2
+        end_boundary_found=true
+        continue
+    fi
+    printf '%s\n' "$payload_line" >>"$target_file" || exit 1
+done
+[ "$boundary_found" = true ] || exit 2
+[ "$end_boundary_found" = true ] || exit 2
+chmod 700 "$bootstrap_file" "$download_file" || exit 1
+trap - 0 HUP INT TERM
+""".strip()
+
 _INTERACTIVE_SHELL = r"""
 download_token=$1
-download_helper=$2
-session_id=$3
-requested_locale=$4
-terminal_type=$5
-color_enabled=$6
+session_id=$2
+requested_locale=$3
+terminal_type=$4
+color_enabled=$5
 case "$session_id" in
     ""|*[!0-9a-f]*) exit 2 ;;
 esac
@@ -214,10 +269,9 @@ cleanup() {
 trap cleanup EXIT
 trap 'cleanup; exit 129' HUP
 trap 'cleanup; exit 143' TERM
-umask 077
-mkdir "$session_dir" || exit 1
+[ -d "$session_dir" ] || exit 1
+rm -f "$session_dir/bootstrap" || exit 1
 printf '%s\n' "$$" >"$session_dir/pid" || exit 1
-printf '%s\n' "$download_helper" >"$session_dir/download" || exit 1
 chmod 700 "$session_dir/download" || exit 1
 export OPS_AGENT_DOWNLOAD_TOKEN="$download_token"
 export PATH="$session_dir:$PATH"
@@ -479,6 +533,7 @@ class KubectlPodAccess:
             )
         download_token = secrets.token_hex(16)
         session_id = secrets.token_hex(16)
+        session_dir = f"/tmp/.ops-agent-session-{session_id}"
         interactive_exec = self._settings.interactive_exec
         command = [
             *self._kubectl_base(),
@@ -489,11 +544,8 @@ class KubectlPodAccess:
             _local_component(container_name, "Container"),
             "--",
             "sh",
-            "-c",
-            _INTERACTIVE_SHELL,
-            "ops-agent",
+            f"{session_dir}/bootstrap",
             download_token,
-            _DOWNLOAD_HELPER,
             session_id,
             interactive_exec.locale,
             interactive_exec.terminal_type,
@@ -509,6 +561,11 @@ class KubectlPodAccess:
             flush=True,
         )
         try:
+            self._stage_interactive_session(
+                pod_name=pod_name,
+                container_name=container_name,
+                session_id=session_id,
+            )
             try:
                 exit_code = run_interactive_terminal(
                     command,
@@ -529,6 +586,58 @@ class KubectlPodAccess:
                 session_id=session_id,
             )
         return InteractiveSessionResult(exit_code=exit_code)
+
+    def _stage_interactive_session(
+        self,
+        *,
+        pod_name: str,
+        container_name: str,
+        session_id: str,
+    ) -> None:
+        session_dir = f"/tmp/.ops-agent-session-{session_id}"
+        boundary = f"OPS_AGENT_FILE_BOUNDARY_{session_id}"
+        end_boundary = f"OPS_AGENT_FILE_END_{session_id}"
+        command = [
+            *self._kubectl_base(),
+            "exec",
+            "-i",
+            _local_component(pod_name, "Pod"),
+            "-c",
+            _local_component(container_name, "Container"),
+            "--",
+            "sh",
+            "-c",
+            _STAGE_INTERACTIVE_FILES,
+            "ops-agent-stage",
+            session_dir,
+            session_id,
+            boundary,
+            end_boundary,
+        ]
+        payload = (
+            f"{_INTERACTIVE_SHELL}\n{boundary}\n{_DOWNLOAD_HELPER}\n{end_boundary}\n"
+        ).encode()
+        try:
+            completed = subprocess.run(
+                command,
+                input=payload,
+                capture_output=True,
+                env=self._kubectl_environment(),
+                check=False,
+                timeout=self._settings.request_timeout_seconds,
+            )
+        except OSError as error:
+            raise PodAccessError(f"无法准备 Pod 交互环境: {error}") from error
+        except subprocess.TimeoutExpired as error:
+            raise PodAccessError("准备 Pod 交互环境超时") from error
+        if completed.returncode:
+            message = completed.stderr.decode(
+                "utf-8",
+                errors="replace",
+            ).strip()
+            raise PodAccessError(
+                "无法准备 Pod 交互环境" + (f": {message}" if message else "")
+            )
 
     def _session_download(
         self,

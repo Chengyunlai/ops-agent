@@ -3,6 +3,7 @@ import io
 import shutil
 import subprocess
 from pathlib import Path
+from urllib.parse import urlencode
 
 import pytest
 from ops_agent.settings import (
@@ -14,7 +15,9 @@ from ops_agent.settings import (
 )
 from ops_agent_cli.pod_access import (
     _DOWNLOAD_HELPER,
+    _INTERACTIVE_SHELL,
     _READ_POD_FILE,
+    _STAGE_INTERACTIVE_FILES,
     KubectlPodAccess,
     PodAccessError,
     PodTransferBackend,
@@ -404,6 +407,8 @@ def test_interactive_session_downloads_discovered_file_without_exiting_shell(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     session_commands: list[list[str]] = []
+    stage_commands: list[list[str]] = []
+    stage_payloads: list[bytes] = []
     download_commands: list[list[str]] = []
     cleanup_commands: list[list[str]] = []
     session_messages: list[str] = []
@@ -434,6 +439,15 @@ def test_interactive_session_downloads_discovered_file_without_exiting_shell(
     )
 
     def fake_run(command, **kwargs):
+        if kwargs.get("input") is not None:
+            stage_commands.append(command)
+            stage_payloads.append(kwargs["input"])
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=b"",
+                stderr=b"",
+            )
         if kwargs.get("capture_output"):
             return subprocess.CompletedProcess(
                 command,
@@ -495,6 +509,16 @@ def test_interactive_session_downloads_discovered_file_without_exiting_shell(
         "main",
         "--",
     ]
+    assert _INTERACTIVE_SHELL not in session_commands[0]
+    assert _DOWNLOAD_HELPER not in session_commands[0]
+    assert _STAGE_INTERACTIVE_FILES in stage_commands[0]
+    assert _INTERACTIVE_SHELL.encode() in stage_payloads[0]
+    assert _DOWNLOAD_HELPER.encode() in stage_payloads[0]
+    stage_remote_command = stage_commands[0][stage_commands[0].index("--") + 1 :]
+    stage_query = urlencode(
+        [("command", value) for value in stage_remote_command],
+    ).encode()
+    assert len(stage_query) < 4096
     assert download_commands[0][-1] == "/workspace/report.log"
     assert cleanup_commands[0][6:10] == [
         "exec",
@@ -643,10 +667,24 @@ esac
         "ops_agent_cli.pod_access.run_interactive_terminal",
         fake_terminal,
     )
-    monkeypatch.setattr(
-        "ops_agent_cli.pod_access.subprocess.run",
-        lambda command, **kwargs: subprocess.CompletedProcess(command, 0),
-    )
+
+    def fake_run(command, **kwargs):
+        payload = kwargs.get("input")
+        if payload is not None:
+            remote_command = command[command.index("--") + 1 :]
+            remote_command[0] = "/bin/sh"
+            completed = real_run(
+                remote_command,
+                input=payload,
+                env={"PATH": str(tool_directory)},
+                check=False,
+                capture_output=True,
+            )
+            assert completed.returncode == 0, completed.stderr.decode()
+            return subprocess.CompletedProcess(command, 0)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr("ops_agent_cli.pod_access.subprocess.run", fake_run)
     settings = create_settings(
         tmp_path,
         interactive_exec=True,
@@ -660,6 +698,35 @@ esac
 
     assert result.exit_code == 0
     return capture_path.read_text(encoding="utf-8"), "".join(terminal_output)
+
+
+def test_interactive_staging_rejects_truncated_download_payload(
+    tmp_path: Path,
+) -> None:
+    session_id = hashlib.sha256(str(tmp_path).encode()).hexdigest()[:32]
+    session_dir = Path(f"/tmp/.ops-agent-session-{session_id}")
+    boundary = f"OPS_AGENT_FILE_BOUNDARY_{session_id}"
+    end_boundary = f"OPS_AGENT_FILE_END_{session_id}"
+    payload = f"{_INTERACTIVE_SHELL}\n{boundary}\ntruncated helper\n".encode()
+
+    completed = subprocess.run(
+        [
+            "/bin/sh",
+            "-c",
+            _STAGE_INTERACTIVE_FILES,
+            "ops-agent-stage",
+            str(session_dir),
+            session_id,
+            boundary,
+            end_boundary,
+        ],
+        input=payload,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 2
+    assert not session_dir.exists()
 
 
 def test_interactive_session_initializes_utf8_locale_term_and_colors(
@@ -823,12 +890,16 @@ def test_interactive_session_runs_remote_cleanup_after_terminal_error(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    stage_commands: list[list[str]] = []
     cleanup_commands: list[list[str]] = []
 
     def fail_terminal(*args, **kwargs):
         raise InteractiveTerminalError("terminal disconnected")
 
     def fake_run(command, **kwargs):
+        if kwargs.get("input") is not None:
+            stage_commands.append(command)
+            return subprocess.CompletedProcess(command, 0)
         cleanup_commands.append(command)
         return subprocess.CompletedProcess(command, 0)
 
@@ -845,5 +916,50 @@ def test_interactive_session_runs_remote_cleanup_after_terminal_error(
             container_name="main",
         )
 
+    assert len(stage_commands) == 1
+    assert len(cleanup_commands) == 1
+    assert ".ops-agent-session-" in cleanup_commands[0][-2]
+
+
+def test_interactive_session_reports_stage_failure_and_cleans_up(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    terminal_started = False
+    cleanup_commands: list[list[str]] = []
+
+    def fail_if_terminal_starts(*args, **kwargs):
+        nonlocal terminal_started
+        terminal_started = True
+        return 0
+
+    def fake_run(command, **kwargs):
+        if kwargs.get("input") is not None:
+            return subprocess.CompletedProcess(
+                command,
+                1,
+                stdout=b"",
+                stderr=b"stage rejected",
+            )
+        cleanup_commands.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(
+        "ops_agent_cli.pod_access.run_interactive_terminal",
+        fail_if_terminal_starts,
+    )
+    monkeypatch.setattr("ops_agent_cli.pod_access.subprocess.run", fake_run)
+    access = KubectlPodAccess(create_settings(tmp_path, interactive_exec=True))
+
+    with pytest.raises(
+        PodAccessError,
+        match="无法准备 Pod 交互环境: stage rejected",
+    ):
+        access.interactive_session(
+            pod_name="pod-1",
+            container_name="main",
+        )
+
+    assert not terminal_started
     assert len(cleanup_commands) == 1
     assert ".ops-agent-session-" in cleanup_commands[0][-2]
