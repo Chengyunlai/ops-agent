@@ -19,6 +19,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, RichLog, Static
+from textual.widgets.data_table import RowDoesNotExist, RowKey
 
 from ops_agent_cli.pod_access import DownloadResult
 
@@ -503,6 +504,7 @@ class MonitorPane(Vertical):
 
     def _render_table(self) -> None:
         table = self.query_one("#monitor-table", DataTable)
+        selected_row_key = _selected_row_key(table)
         table.clear(columns=True)
         snapshot = self._snapshot
         if self._kind is None:
@@ -524,34 +526,40 @@ class MonitorPane(Vertical):
                         ),
                         key=collection.kind.value,
                     )
-            return
-
-        collection = self._current_collection()
-        if collection is None:
-            table.add_column("RESOURCE")
-            return
-        table.add_columns(*collection.columns)
-        if collection.error is not None:
-            table.add_row(
-                Text(
-                    "Unavailable",
-                    style=self.app.current_theme.warning,
-                ),
-                collection.error,
-                *("-" for _ in collection.columns[2:]),
-            )
-            return
-        theme = self.app.current_theme
-        for row in collection.rows:
-            name_style = (
-                theme.warning
-                if row.healthy is False
-                else theme.success
-                if row.healthy is True
-                else theme.foreground
-            )
-            values = (Text(row.values[0], style=name_style), *row.values[1:])
-            table.add_row(*values, key=row.ref.name)
+        else:
+            collection = self._current_collection()
+            if collection is None:
+                table.add_column("RESOURCE")
+            else:
+                table.add_columns(*collection.columns)
+                if collection.error is not None:
+                    table.add_row(
+                        Text(
+                            "Unavailable",
+                            style=self.app.current_theme.warning,
+                        ),
+                        collection.error,
+                        *("-" for _ in collection.columns[2:]),
+                    )
+                else:
+                    theme = self.app.current_theme
+                    for row in collection.rows:
+                        name_style = (
+                            theme.warning
+                            if row.healthy is False
+                            else theme.success
+                            if row.healthy is True
+                            else theme.foreground
+                        )
+                        values = (
+                            Text(row.values[0], style=name_style),
+                            *row.values[1:],
+                        )
+                        table.add_row(
+                            *values,
+                            key=f"{row.ref.kind.value}:{row.ref.name}",
+                        )
+        _restore_selected_row(table, selected_row_key)
 
     def _current_collection(self) -> KubernetesResourceCollection | None:
         if self._snapshot is None or self._kind is None:
@@ -568,6 +576,22 @@ def _kind_label(
     if snapshot is not None and (collection := snapshot.collection(kind)) is not None:
         return collection.label
     return str(kind)
+
+
+def _selected_row_key(table: DataTable) -> RowKey | None:
+    if not table.is_valid_coordinate(table.cursor_coordinate):
+        return None
+    return table.coordinate_to_cell_key(table.cursor_coordinate).row_key
+
+
+def _restore_selected_row(table: DataTable, row_key: RowKey | None) -> None:
+    if row_key is None:
+        return
+    try:
+        row_index = table.get_row_index(row_key)
+    except RowDoesNotExist:
+        return
+    table.move_cursor(row=row_index)
 
 
 def _collection_status(

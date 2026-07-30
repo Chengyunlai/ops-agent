@@ -1402,6 +1402,65 @@ def test_tui_periodically_refreshes_monitor() -> None:
     asyncio.run(exercise())
 
 
+def test_tui_refresh_preserves_selected_monitor_resource() -> None:
+    class MultiPodMonitor(FakeMonitor):
+        def snapshot(self) -> KubernetesMonitorSnapshot:
+            self.calls += 1
+            snapshot = create_monitor_snapshot()
+            pods = snapshot.resources[0]
+            pod_names = (
+                ("sample-api-0", "sample-worker-0", "sample-frontend-0")
+                if self.calls == 1
+                else ("sample-frontend-0", "sample-api-0", "sample-worker-0")
+            )
+            pod_rows = tuple(
+                KubernetesResourceRow(
+                    ref=KubernetesResourceRef(
+                        kind=KubernetesResourceKind.POD,
+                        name=name,
+                    ),
+                    values=(name, "1/1", "Running", "0", "1h"),
+                    healthy=True,
+                )
+                for name in pod_names
+            )
+            return replace(
+                snapshot,
+                resources=(
+                    replace(pods, rows=pod_rows),
+                    *snapshot.resources[1:],
+                ),
+            )
+
+    async def exercise() -> None:
+        monitor = MultiPodMonitor()
+        app = create_tui(
+            FakeAgent(answer="unused"),
+            monitor=monitor,
+        )
+
+        async with app.run_test(size=(140, 34)) as pilot:
+            await app.workers.wait_for_complete()
+            await pilot.press("ctrl+k", "1", "down")
+
+            table = app.query_one("#monitor-table", DataTable)
+            assert (
+                str(table.get_cell_at(Coordinate(table.cursor_row, 0)))
+                == "sample-worker-0"
+            )
+
+            await pilot.press("ctrl+r")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            assert (
+                str(table.get_cell_at(Coordinate(table.cursor_row, 0)))
+                == "sample-worker-0"
+            )
+
+    asyncio.run(exercise())
+
+
 def test_tui_monitor_failure_can_recover_with_manual_refresh() -> None:
     class FlakyMonitor(FakeMonitor):
         def snapshot(self) -> KubernetesMonitorSnapshot:
