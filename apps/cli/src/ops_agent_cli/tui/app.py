@@ -140,7 +140,8 @@ class OpsAgentTui(App[None]):
     }
 
     #copy-button,
-    #settings-button {
+    #settings-button,
+    #quit-button {
         height: 1;
         min-height: 1;
         padding: 0 1;
@@ -160,11 +161,22 @@ class OpsAgentTui(App[None]):
         min-width: 12;
     }
 
+    #quit-button {
+        width: 8;
+        min-width: 8;
+    }
+
     #copy-button:hover,
     #copy-button:focus,
     #settings-button:hover,
     #settings-button:focus {
         background: $accent;
+        color: $background;
+    }
+
+    #quit-button:hover,
+    #quit-button:focus {
+        background: $error;
         color: $background;
     }
 
@@ -536,9 +548,11 @@ class OpsAgentTui(App[None]):
             )
             yield Button("复制", id="copy-button", compact=True, flat=True)
             yield Button("⚙ Settings", id="settings-button", compact=True, flat=True)
+            yield Button("退出", id="quit-button", compact=True, flat=True)
         yield Static(
-            "全局：Ctrl+C 退出 · F1/? 帮助 · 顶部“复制”（F2 备用）· Ctrl+, 设置"
-            " · Ctrl+R 刷新 · Ctrl+K 聚焦监盘\n"
+            "全局：顶部“退出” · Esc 后 q 退出 · Ctrl+C 备用 · F1/? 帮助"
+            " · 顶部“复制”（F2 备用）· Ctrl+, 设置 · Ctrl+R 刷新"
+            " · Ctrl+K 聚焦监盘\n"
             "聊天：Enter 提交 · i 返回输入 · Ctrl+L 清空右侧显示\n"
             "监盘：0 总览 · 1~7 切换资源 · Enter 打开 · d 详情"
             " · l Pod 日志 · f PVC 目录 · x 人工 Pod Shell"
@@ -560,14 +574,14 @@ class OpsAgentTui(App[None]):
                     id="question",
                 )
         yield Static(
-            " ^K 监盘  0 总览  1 Pods  2 Deploy  3 Stateful"
+            " Esc q 退出  │ ^K 监盘  0 总览  1 Pods  2 Deploy  3 Stateful"
             "  4 Daemon  5 Services  6 Replica  7 Storage"
             "  │ d 详情  l 日志  f 目录  x Shell+下载  i 聊天",
             id="hotkeys",
         )
         yield Static(
-            " ^K 监盘 │ 0~7 资源 │ d 详情 │ l 日志 │ f 目录 │ x Shell+下载"
-            " │ i 聊天 │ 顶部复制 │ F1 帮助",
+            " Esc q 退出 │ ^K 监盘 │ 0~7 资源 │ d 详情 │ l 日志"
+            " │ f 目录 │ x Shell+下载 │ i 聊天",
             id="hotkeys-compact",
         )
 
@@ -829,6 +843,10 @@ class OpsAgentTui(App[None]):
     @on(Button.Pressed, "#copy-button")
     def toggle_copy_mode(self) -> None:
         self.action_toggle_copy_mode()
+
+    @on(Button.Pressed, "#quit-button")
+    def quit_from_button(self) -> None:
+        self.exit()
 
     def _show_monitor_kind(self, kind: KubernetesResourceKind) -> None:
         pane = self.query_one("#monitor-pane", MonitorPane)

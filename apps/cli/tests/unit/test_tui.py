@@ -405,7 +405,7 @@ def _contrast_ratio(foreground: Color, background: Color) -> float:
     return (lighter + 0.05) / (darker + 0.05)
 
 
-def test_tui_settings_button_is_readable_without_hover() -> None:
+def test_tui_topbar_buttons_are_readable_without_hover() -> None:
     async def exercise() -> None:
         app = create_tui(FakeAgent(answer="unused"))
 
@@ -413,13 +413,45 @@ def test_tui_settings_button_is_readable_without_hover() -> None:
             await app.workers.wait_for_complete()
             await pilot.pause()
 
-            button = app.query_one("#settings-button", Button)
-            foreground = button.styles.color
-            background = button.styles.background
+            for selector in ("#settings-button", "#quit-button"):
+                button = app.query_one(selector, Button)
+                foreground = button.styles.color
+                background = button.styles.background
 
-            assert foreground is not None
-            assert background is not None
-            assert _contrast_ratio(foreground, background) >= 4.5
+                assert foreground is not None
+                assert background is not None
+                assert _contrast_ratio(foreground, background) >= 4.5
+
+    asyncio.run(exercise())
+
+
+def test_tui_quit_button_and_footer_exit_hint() -> None:
+    async def exercise() -> None:
+        app = create_tui(FakeAgent(answer="unused"))
+
+        async with app.run_test(size=(140, 34)) as pilot:
+            await app.workers.wait_for_complete()
+
+            assert "Esc q 退出" in str(
+                app.query_one("#hotkeys", Static).content,
+            )
+            assert "Esc q 退出" in str(
+                app.query_one("#hotkeys-compact", Static).content,
+            )
+            await pilot.click("#quit-button")
+
+        assert app.is_running is False
+
+        narrow_app = create_tui(FakeAgent(answer="unused"))
+        async with narrow_app.run_test(size=(80, 24)) as pilot:
+            await narrow_app.workers.wait_for_complete()
+            await pilot.pause()
+
+            hotkeys = narrow_app.query_one("#hotkeys", Static)
+            compact_hotkeys = narrow_app.query_one("#hotkeys-compact", Static)
+            assert hotkeys.display is False
+            assert compact_hotkeys.display is True
+            assert "Esc q 退出" in str(compact_hotkeys.content)
 
     asyncio.run(exercise())
 
