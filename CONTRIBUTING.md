@@ -51,10 +51,8 @@ Issue、日志、截图和附件中不得包含：
 
 ### 安全漏洞
 
-不要在公开 Issue 中提交漏洞利用步骤、权限绕过细节或可用凭据。请先创建一个
-标题为 `[Security] Request private reporting channel` 的联络 Issue，其中只
-说明受影响的能力类别并请求私密联系方式；维护者建立私密渠道后，再提供完整
-报告和复现材料。
+不要在公开 Issue 中提交漏洞利用步骤、权限绕过细节或可用凭据。请使用
+[GitHub 私密漏洞报告](SECURITY.md) 提交脱敏的影响范围和复现条件。
 
 ## 提交 Pull Request
 
@@ -64,6 +62,7 @@ Issue、日志、截图和附件中不得包含：
 - 从最新的 `main` 创建短生命周期分支；
 - 推荐使用 `feat/<description>`、`fix/<description>` 或
   `docs/<description>` 作为分支名。
+- 禁止直接向 `main` 推送日常变更；所有代码、配置、CI 和文档变化都通过 PR。
 
 ### 变更要求
 
@@ -86,6 +85,35 @@ make check
 修改 Kubernetes 诊断 Reader、规则或资源关系时，还应在一次性 kind 集群运行
 `make test-kubernetes-integration`。所需环境变量和安全限制见 README；禁止把
 该测试指向开发、测试或生产等共享集群。
+
+### 自动合并门禁
+
+PR 必须通过以下自动检查：
+
+- `Repository policy`：PR 标题和 GitHub Action commit pin；
+- `Dependency review`：拒绝新引入的高危或严重漏洞依赖；
+- `Secret scan`：使用 Gitleaks 检查提交中的凭据和敏感信息；
+- `Python 3.12` 与 `Python 3.14`：Ruff、格式、测试和 Python 分发包构建；
+- `Kubernetes diagnostics integration`：一次性 kind 集群真实验证。
+
+Secret Scanning 和 Push Protection 会在提交进入仓库前拦截已知凭据。机器人或
+AI Review 的评论不能替代测试，也不能批准、合并、推送代码或触发发布。仓库
+当前未配置 AI Reviewer；未来若启用，也只允许评论和提出建议。
+
+### 人工审核
+
+CODEOWNER 必须审核实现是否符合 Issue/设计、模块 interface、安全边界和文档。
+以下变化必须在 PR 中明确说明风险，不能仅凭机器人结论合并：
+
+- Agent Capability、工具注册或只读约束；
+- Pod Shell、文件传输、PVC 管理或其他人工写能力；
+- Kubernetes RBAC、namespace、代理、TLS、证书或 kubeconfig；
+- Pydantic 配置兼容性和迁移；
+- GitHub Actions 权限、依赖、打包和发布链路；
+- TUI 行为或视觉变化。
+
+所有讨论必须处理完成。使用 Squash Merge，PR 标题会成为 `main` 上的提交记录；
+合并后删除短生命周期分支。
 
 ### 提交与 PR 标题
 
@@ -124,3 +152,10 @@ PR 描述应使用
 - 尚未解决的问题或后续工作。
 
 维护者会重点审查正确性、范围、安全边界、测试覆盖和文档一致性。
+
+## 发布审核
+
+版本只能通过独立 PR 使用 `make bump-version VERSION=x.y.z` 更新。版本 PR 合并且
+required checks 全绿后，维护者才可在 `main` 提交上创建 SemVer tag。三平台构建
+与冒烟测试自动执行；GitHub Release、provenance 和 Homebrew 更新必须等待
+`release` Environment 的人工批准。

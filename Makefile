@@ -6,13 +6,16 @@ ARGS ?=
 TARGET ?= local
 RELEASE_DIR ?= release
 
-.PHONY: help sync lint format format-check test test-cli test-harness test-kubernetes-integration check cli tui bump-version package release
+.PHONY: help sync policy lint format format-check test test-cli test-harness test-kubernetes-integration check cli tui bump-version package release
 
 help: ## 显示可用的开发命令
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z_-]+:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 sync: ## 同步 workspace 依赖
 	$(UV) sync
+
+policy: ## 检查仓库治理策略与 GitHub Action 固定版本
+	$(UV) run python scripts/check_repository_policy.py workflows
 
 lint: ## 运行 Ruff 静态检查
 	$(UV) run ruff check .
@@ -38,7 +41,7 @@ test-kubernetes-integration: ## 在显式选择的临时 kind 集群运行诊断
 	@test -n "$$OPS_AGENT_KUBERNETES_CONTEXT" || (echo "OPS_AGENT_KUBERNETES_CONTEXT is required" >&2; exit 2)
 	$(UV) run pytest packages/harness/tests/integration/kubernetes -q -m kubernetes_integration
 
-check: lint format-check test ## 运行提交前完整检查
+check: policy lint format-check test ## 运行提交前完整检查
 
 cli: ## 运行 CLI；使用 ARGS='...' 传递参数
 	$(UV) run ops-agent $(ARGS)

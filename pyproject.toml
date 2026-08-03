@@ -13,6 +13,7 @@ build = [
     "pyinstaller>=6.16,<7",
 ]
 dev = [
+    "pyyaml>=6.0.3,<7",
     "pytest>=9.1.1",
     "ruff>=0.16.0",
 ]
@@ -33,6 +34,7 @@ members = [
 testpaths = [
     "apps",
     "packages",
+    "tests",
 ]
 markers = [
     "kubernetes_integration: requires an explicitly selected disposable kind cluster",
