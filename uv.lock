@@ -6,7 +6,7 @@ requires-python = ">=3.12"
 members = [
     "ops-agent",
     "ops-agent-cli",
-    "ops-agent-harness",
+    "ops-agent-runtime",
 ]
 
 [[package]]
@@ -894,27 +894,30 @@ name = "ops-agent-cli"
 source = { editable = "apps/cli" }
 dependencies = [
     { name = "langchain", extra = ["openai"] },
-    { name = "ops-agent-harness" },
+    { name = "ops-agent-runtime" },
+    { name = "pydantic" },
     { name = "textual" },
+    { name = "tomli-w" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "langchain", extras = ["openai"], specifier = ">=1.0,<2" },
-    { name = "ops-agent-harness", editable = "packages/harness" },
+    { name = "ops-agent-runtime", editable = "packages/runtime" },
+    { name = "pydantic", specifier = ">=2.13,<3" },
     { name = "textual", specifier = ">=8.2,<9" },
+    { name = "tomli-w", specifier = ">=1.2,<2" },
 ]
 
 [[package]]
-name = "ops-agent-harness"
+name = "ops-agent-runtime"
 version = "0.1.7"
-source = { editable = "packages/harness" }
+source = { editable = "packages/runtime" }
 dependencies = [
     { name = "kubernetes" },
     { name = "langchain" },
     { name = "langgraph" },
     { name = "pydantic" },
-    { name = "tomli-w" },
     { name = "urllib3" },
 ]
 
@@ -924,7 +927,6 @@ requires-dist = [
     { name = "langchain", specifier = ">=1.0,<2" },
     { name = "langgraph", specifier = ">=1.0,<2" },
     { name = "pydantic", specifier = ">=2.13,<3" },
-    { name = "tomli-w", specifier = ">=1.2,<2" },
     { name = "urllib3" },
 ]
 

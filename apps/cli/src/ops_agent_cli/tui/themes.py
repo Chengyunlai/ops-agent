@@ -1,7 +1,8 @@
 from hashlib import sha256
 
-from ops_agent.settings import ThemeName, TuiSettings
 from textual.theme import Theme
+
+from ops_agent_cli.configuration import ThemeName, TuiSettings
 
 _PRESETS: dict[ThemeName, dict[str, object]] = {
     ThemeName.OPS_DARK: {

@@ -1,7 +1,15 @@
 from collections.abc import Callable
 from typing import ClassVar
 
-from ops_agent.settings import (
+from pydantic import ValidationError
+from textual import on
+from textual.app import ComposeResult
+from textual.binding import Binding
+from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.screen import ModalScreen
+from textual.widgets import Button, Input, Label, Select, Static
+
+from ops_agent_cli.configuration import (
     DownloadSettings,
     InteractiveExecSettings,
     KubernetesSettings,
@@ -13,13 +21,6 @@ from ops_agent.settings import (
     TuiColorSettings,
     TuiSettings,
 )
-from pydantic import ValidationError
-from textual import on
-from textual.app import ComposeResult
-from textual.binding import Binding
-from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.screen import ModalScreen
-from textual.widgets import Button, Input, Label, Select, Static
 
 
 class SettingsScreen(ModalScreen[Settings | None]):

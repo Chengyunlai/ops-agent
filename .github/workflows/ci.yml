@@ -83,7 +83,7 @@ jobs:
       - name: Build Python distributions
         if: matrix.python-version == '3.12'
         run: |
-          uv build --package ops_agent_harness
+          uv build --package ops_agent_runtime
           uv build --package ops_agent_cli
 
   kubernetes-integration:

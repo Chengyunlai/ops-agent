@@ -243,7 +243,7 @@ kubeconfig 是否存在由创建 Kubernetes Client 时检查。`proxy_url` 由�
 ```python
 from pathlib import Path
 
-from ops_agent.settings import load_settings
+from ops_agent_cli.configuration import load_settings
 
 settings = load_settings(Path("config/local/test.toml"))
 print(
@@ -417,7 +417,7 @@ make sync
 make format
 make check
 make test-cli
-make test-harness
+make test-runtime
 make test-kubernetes-integration
 make tui CONFIG=config/local/test.toml
 make package
@@ -514,34 +514,43 @@ ops_agent/
 │       │       ├── __init__.py
 │       │       ├── __main__.py
 │       │       ├── bootstrap.py
+│       │       ├── configuration/
+│       │       │   ├── models.py
+│       │       │   └── persistence.py
 │       │       ├── installation.py
 │       │       ├── main.py
-│       │       ├── pod_access.py
+│       │       ├── manual_access/
+│       │       │   ├── kubectl.py
+│       │       │   └── terminal.py
 │       │       ├── resources/
 │       │       │   └── config.toml
-│       │       ├── terminal_session.py
 │       │       └── tui/
 │       │           ├── __init__.py
 │       │           ├── app.py
 │       │           ├── chat.py
-│       │           ├── monitor.py
-│       │           ├── pod_access.py
+│       │           ├── resources/
+│       │           │   ├── pane.py
+│       │           │   ├── pod_dialog.py
+│       │           │   ├── viewer.py
+│       │           │   └── volume.py
 │       │           ├── settings.py
 │       │           ├── terminal.py
 │       │           └── themes.py
 │       ├── tests/
 │       │   └── unit/
+│       │       ├── configuration/
+│       │       ├── manual_access/
+│       │       ├── tui/
 │       │       ├── test_bootstrap.py
 │       │       ├── test_main.py
-│       │       ├── test_pod_access.py
-│       │       ├── test_terminal_session.py
-│       │       └── test_tui.py
+│       │       ├── test_readme_screenshots.py
+│       │       └── test_release_artifact.py
 │       └── pyproject.toml
 ├── docs/
 │   └── research/
 │       └── terminal-tui-options.md
 ├── packages/
-│   └── harness/
+│   └── runtime/
 │       ├── src/
 │       │   └── ops_agent/
 │       │       ├── __init__.py
@@ -552,48 +561,49 @@ ops_agent/
 │       │       │   ├── orchestration/
 │       │       │   │   ├── __init__.py
 │       │       │   │   ├── graph.py
-│       │       │   │   └── routing.py
+│       │       │   │   ├── interpretation.py
+│       │       │   │   └── policy.py
 │       │       │   └── specialists/
 │       │       │       ├── __init__.py
 │       │       │       └── kubernetes/
 │       │       │           ├── __init__.py
 │       │       │           ├── agent.py
-│       │       │           └── planning.py
+│       │       │           ├── capabilities.py
+│       │       │           ├── evidence.py
+│       │       │           ├── planning.py
+│       │       │           └── tools.py
 │       │       ├── diagnostics/
 │       │       │   ├── __init__.py
 │       │       │   ├── kubernetes.py
 │       │       │   └── models.py
 │       │       ├── kubernetes/
 │       │       │   ├── __init__.py
+│       │       │   ├── errors.py
 │       │       │   ├── models.py
-│       │       │   └── reader.py
+│       │       │   ├── reader.py
+│       │       │   ├── settings.py
+│       │       │   └── storage.py
 │       │       ├── monitoring/
 │       │       │   ├── __init__.py
-│       │       │   └── kubernetes.py
-│       │       ├── settings/
-│       │       │   ├── __init__.py
-│       │       │   ├── loader.py
+│       │       │   ├── diagnostics.py
+│       │       │   ├── kubernetes.py
 │       │       │   └── models.py
-│       │       └── tools/
-│       │           ├── __init__.py
-│       │           └── kubernetes.py
 │       ├── tests/
+│       │   ├── integration/kubernetes/
 │       │   └── unit/
-│       │       ├── test_agent.py
-│       │       ├── test_graph.py
-│       │       ├── test_kubernetes.py
-│       │       ├── test_kubernetes_diagnostics.py
-│       │       ├── test_kubernetes_resources.py
-│       │       ├── test_settings.py
-│       │       └── test_tools.py
+│       │       ├── agent/
+│       │       │   └── specialists/kubernetes/
+│       │       ├── diagnostics/
+│       │       ├── kubernetes/
+│       │       └── monitoring/
 │       └── pyproject.toml
 ├── pyproject.toml
 └── README.md
 ```
 
 根项目使用 uv workspace 管理两个成员：`ops_agent_cli` 是命令行应用，
-`ops_agent_harness` 是可复用的 Agent 核心包。依赖方向固定为 CLI 指向
-harness，harness 不依赖任何具体入口。
+`ops_agent_runtime` 是可复用的 Agent 核心包。依赖方向固定为 CLI 指向
+runtime 核心包，runtime 核心包不依赖任何具体入口。
 
 Kubernetes 相关代码采用三层边界：
 
@@ -606,8 +616,10 @@ Kubernetes 相关代码采用三层边界：
   CrashLoop/OOM Finding 还会按稳定 Finding code 和结构化容器名读取 previous
   logs。采集结果通过独立 ToolMessage 数据角色提供给模型；模型只解释结果，
   不决定这些强制取证是否执行，也不能把 Event 或日志当作指令。
-- `tools/` 是 Agent 适配层。它把 Kubernetes 能力转换成模型可调用的
-  LangChain Tool，并在这里固定 namespace、限制日志行数和 Event 数量。
+- `agent/specialists/kubernetes/capabilities.py` 是 Kubernetes Capability 的
+  单一来源，维护 Capability、资源类型和工具名之间的映射；同目录的
+  `tools.py` 把 Reader 能力转换成模型可调用的 LangChain Tool，并固定
+  namespace、日志行数和 Event 数量。
 - `monitoring/` 用无参数 `snapshot()` 以及固定 namespace 的 `diagnostics()` /
   `describe()` / `pod_logs()` / `pod_containers()` 接口封装资源浏览与诊断呈现。
   Snapshot 携带 Finding 摘要和结构化 Deployment 拓扑。TUI 只消费这些
@@ -616,13 +628,16 @@ Kubernetes 相关代码采用三层边界：
   聊天与布局。
 
 `apps/cli/bootstrap.py` 是终端应用的组合根，负责读取进程环境并选择具体的
-模型、Reader、Monitor、Tool 和 Agent 适配器。`main.py` 保留脚本化命令，
-`pod_access.py` 把 kubectl 命令构造、流式传输、原子落盘和人工终端收敛在
-CLI 侧深模块；它不属于 Agent capability。`tui/` 只管理 Textual 的界面
-状态、键盘交互和后台任务。TUI 打开带固定
+模型、Reader、Monitor、Tool 和 Agent 适配器。`configuration/` 拥有完整的
+Project Profile、Pydantic 校验与 TOML 持久化；runtime 只消费收窄后的
+`KubernetesConnectionSettings`。`main.py` 保留脚本化命令，
+`manual_access/` 把 kubectl 命令构造、流式传输、原子落盘和人工终端收敛在
+CLI 侧深模块；它不属于 Agent Capability。`tui/` 只管理 Textual 的界面
+状态、键盘交互和后台任务，`tui/resources/` 隔离资源监盘、详情、Pod 对话框
+和存储浏览器。TUI 打开带固定
 `InteractionContext` 的 `ConversationSession`，并消费稳定的 `AgentEvent`，
 不依赖 LangGraph 节点名。以后增加 API 或其他应用入口时，各应用拥有自己的
-组合根，harness 不依赖任何具体入口。
+组合根，runtime 核心包不依赖任何具体入口。
 
 `agent/` 是 Agent 编排模块。`models.py` 定义应用可以依赖的冻结 Pydantic
 契约：可信 Interaction Context、不可信 Intent Proposal、可信 Policy
@@ -631,9 +646,10 @@ Decision、注册 Capability 和稳定 Agent Event。`application.py` 通过
 响应解析和错误转换；CLI 不依赖模块内部的图、路由、计划或专业 Agent 实现。
 
 `agent/orchestration/` 负责跨专业 Agent 的主图编排和全局策略。
-`graph.py` 定义 State、Node 与 Edge；`routing.py` 让模型只提出结构化
-Intent Proposal，再由纯代码 Policy 校验应用 scope、已注册只读 Capability、
-未接入平台和写操作。模型不能授予能力或改变 environment/namespace。
+`graph.py` 定义 State、Node 与 Edge；`interpretation.py` 让模型只提出结构化
+Intent Proposal，`policy.py` 再用纯代码校验应用 scope、已注册只读
+Capability、未接入平台和写操作。模型不能授予能力或改变
+environment/namespace。
 Intent Interpreter 对模型只发起一次调用，同时兼容标准 tool call 和
 OpenAI-compatible Provider 常见的 JSON 文本响应；两种响应都必须通过同一个
 Pydantic `IntentProposal` 校验，避免结构化输出不兼容时进入 Agent 重试循环。
@@ -688,9 +704,11 @@ CLI / TUI ──► Interaction Context（可信）
 只依赖 `ops_agent.agent` 的稳定公开接口。审批、持久化和 interrupt/resume
 属于有状态执行协议，不复用当前的只读诊断计划。
 
-`settings/` 通过 `load_settings()` / `save_settings()` 提供 TOML 配置
-边界：`loader.py` 负责文件读取、原子写回和统一错误转换，`models.py` 使用
-Pydantic 模型声明配置结构、字段说明、不可变性和校验规则。
+`apps/cli/configuration/` 通过 `load_settings()` / `save_settings()` 提供 TOML
+配置边界：`persistence.py` 负责文件读取、原子写回和统一错误转换，
+`models.py` 使用 Pydantic 模型声明配置结构、字段说明、不可变性和校验规则。
+`packages/runtime/src/ops_agent/kubernetes/settings.py` 只声明 Reader 所需的连接
+约束，不了解 TUI、人工访问、下载策略、模型或配置文件格式。
 
 ## 建议架构
 

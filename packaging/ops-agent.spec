@@ -4,7 +4,7 @@ from PyInstaller.utils.hooks import collect_submodules, copy_metadata
 
 repository_root = Path(SPECPATH).parent
 cli_source = repository_root / "apps/cli/src"
-harness_source = repository_root / "packages/harness/src"
+runtime_source = repository_root / "packages/runtime/src"
 config_template = cli_source / "ops_agent_cli/resources/config.toml"
 
 hidden_imports = collect_submodules("langchain_openai")
@@ -21,7 +21,7 @@ for distribution in (
 
 analysis = Analysis(
     [str(cli_source / "ops_agent_cli/__main__.py")],
-    pathex=[str(cli_source), str(harness_source)],
+    pathex=[str(cli_source), str(runtime_source)],
     binaries=[],
     datas=[
         *metadata,

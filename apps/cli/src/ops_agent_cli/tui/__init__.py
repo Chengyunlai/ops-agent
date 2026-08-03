@@ -5,9 +5,9 @@ from ops_agent.agent import (
     InteractionChannel,
     InteractionContext,
 )
-from ops_agent.settings import save_settings
 
 from ops_agent_cli.bootstrap import create_runtime
+from ops_agent_cli.configuration import save_settings
 from ops_agent_cli.tui.app import OpsAgentTui
 
 

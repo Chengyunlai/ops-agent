@@ -36,7 +36,7 @@ kubernetes/models.py
     ▼
 diagnostics/kubernetes.py
     │  DiagnosisReport(Finding + Evidence)
-    ├──────────────► tools/kubernetes.py ──► Kubernetes 专业 Agent
+    ├──────────────► agent/specialists/kubernetes/tools.py ──► Kubernetes 专业 Agent
     └──────────────► monitoring/          ──► TUI Finding、健康原因与资源拓扑
 ```
 

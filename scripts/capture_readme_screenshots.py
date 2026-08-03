@@ -15,7 +15,7 @@ from ops_agent.monitoring import (
     KubernetesResourceRef,
     KubernetesResourceRow,
 )
-from ops_agent.settings import (
+from ops_agent_cli.configuration import (
     KubernetesSettings,
     ModelSettings,
     ProjectSettings,

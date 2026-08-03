@@ -4,7 +4,6 @@
 # Security-sensitive seams are listed explicitly for future ownership splitting.
 /.github/ @Chengyunlai
 /packaging/ @Chengyunlai
-/apps/cli/src/ops_agent_cli/pod_access.py @Chengyunlai
-/packages/harness/src/ops_agent/agent/ @Chengyunlai
-/packages/harness/src/ops_agent/kubernetes/ @Chengyunlai
-/packages/harness/src/ops_agent/tools/ @Chengyunlai
+/apps/cli/src/ops_agent_cli/manual_access/ @Chengyunlai
+/packages/runtime/src/ops_agent/agent/ @Chengyunlai
+/packages/runtime/src/ops_agent/kubernetes/ @Chengyunlai
