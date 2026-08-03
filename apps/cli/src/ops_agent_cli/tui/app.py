@@ -49,6 +49,11 @@ class Monitor(Protocol):
         resource: KubernetesResourceRef,
     ) -> KubernetesResourceContent: ...
 
+    def diagnostics(
+        self,
+        resource: KubernetesResourceRef,
+    ) -> KubernetesResourceContent: ...
+
     def pod_logs(
         self,
         resource: KubernetesResourceRef,
@@ -97,6 +102,7 @@ class PodAccess(Protocol):
 
 
 class ResourceOperation(StrEnum):
+    DIAGNOSTICS = "diagnostics"
     DESCRIBE = "describe"
     LOGS = "logs"
 
@@ -501,6 +507,7 @@ class OpsAgentTui(App[None]):
         Binding("5", "show_services", "Services", show=False),
         Binding("6", "show_replica_sets", "ReplicaSets", show=False),
         Binding("7", "show_storage", "Storage", show=False),
+        Binding("h", "show_diagnostics", "Health", show=False),
         Binding("d", "describe_resource", "Describe", show=False),
         Binding("l", "show_logs", "Logs", show=False),
         Binding("f", "browse_storage", "Browse PVC", show=False),
@@ -554,7 +561,7 @@ class OpsAgentTui(App[None]):
             " · 顶部“复制”（F2 备用）· Ctrl+, 设置 · Ctrl+R 刷新"
             " · Ctrl+K 聚焦监盘\n"
             "聊天：Enter 提交 · i 返回输入 · Ctrl+L 清空右侧显示\n"
-            "监盘：0 总览 · 1~7 切换资源 · Enter 打开 · d 详情"
+            "监盘：0 总览 · 1~7 切换资源 · Enter/h 健康 · d Describe"
             " · l Pod 日志 · f PVC 目录 · x 人工 Pod Shell"
             "（Shell 内 download <文件>）· PVC 浏览器内 s 下载 · q 退出",
             id="help",
@@ -685,7 +692,7 @@ class OpsAgentTui(App[None]):
         self.query_one("#monitor-pane", MonitorPane).focus_table()
         if not self._busy:
             self.query_one("#status", Static).update(
-                "监盘模式 · ↑/↓ 选择 · Enter/d 详情 · l Pod 日志 · i 聊天"
+                "监盘模式 · ↑/↓ 选择 · Enter/h 健康 · d Describe · l Pod 日志 · i 聊天"
             )
 
     def action_open_settings(self) -> None:
@@ -767,6 +774,18 @@ class OpsAgentTui(App[None]):
             resource=resource,
         )
 
+    def action_show_diagnostics(self) -> None:
+        pane = self.query_one("#monitor-pane", MonitorPane)
+        resource = pane.selected_resource()
+        if resource is None:
+            self.query_one("#status", Static).update("请先在左侧选择一个资源")
+            return
+        self._open_resource_viewer(
+            loading_title=f"Health · {resource.kind}/{resource.name}",
+            operation=ResourceOperation.DIAGNOSTICS,
+            resource=resource,
+        )
+
     def action_show_logs(self) -> None:
         resource = self.query_one(
             "#monitor-pane",
@@ -834,7 +853,7 @@ class OpsAgentTui(App[None]):
         ):
             self.action_browse_storage()
             return
-        self.action_describe_resource()
+        self.action_show_diagnostics()
 
     @on(Button.Pressed, "#settings-button")
     def open_settings(self) -> None:
@@ -971,6 +990,11 @@ class OpsAgentTui(App[None]):
                     self._monitor.pod_logs,
                     resource,
                     tail_lines=200,
+                )
+            elif operation is ResourceOperation.DIAGNOSTICS:
+                content = await asyncio.to_thread(
+                    self._monitor.diagnostics,
+                    resource,
                 )
             else:
                 content = await asyncio.to_thread(

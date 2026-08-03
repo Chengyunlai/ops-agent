@@ -3,6 +3,11 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol, TypeVar
 
+from ops_agent.diagnostics import (
+    Finding,
+    KubernetesSnapshot,
+    diagnose_kubernetes_snapshot,
+)
 from ops_agent.kubernetes import (
     CronJobSummary,
     DaemonSetSummary,
@@ -15,6 +20,7 @@ from ops_agent.kubernetes import (
     PodDetails,
     PodSummary,
     ReplicaSetSummary,
+    ServiceEndpointSummary,
     ServiceSummary,
     StatefulSetSummary,
     VolumeDirectory,
@@ -49,6 +55,11 @@ class KubernetesMonitoringSource(Protocol):
         self,
         namespace: str,
     ) -> Sequence[ServiceSummary]: ...
+
+    def list_service_endpoints(
+        self,
+        namespace: str,
+    ) -> Sequence[ServiceEndpointSummary]: ...
 
     def list_jobs(self, namespace: str) -> Sequence[JobSummary]: ...
 
@@ -112,6 +123,41 @@ class KubernetesResourceRow:
     ref: KubernetesResourceRef
     values: tuple[str, ...]
     healthy: bool | None
+    health_reasons: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class KubernetesResourceDiagnostic:
+    ref: KubernetesResourceRef
+    severity: str
+    summary: str
+    evidence: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class KubernetesPodTopology:
+    name: str
+    owner_name: str
+    phase: str
+
+
+@dataclass(frozen=True)
+class KubernetesReplicaSetTopology:
+    name: str
+    desired_replicas: int
+    ready_replicas: int
+    revision: str | None
+    pods: tuple[KubernetesPodTopology, ...]
+
+
+@dataclass(frozen=True)
+class KubernetesDeploymentTopology:
+    ref: KubernetesResourceRef
+    generation: int | None
+    observed_generation: int | None
+    revision: str | None
+    conditions: tuple[str, ...]
+    replica_sets: tuple[KubernetesReplicaSetTopology, ...]
 
 
 @dataclass(frozen=True)
@@ -135,6 +181,13 @@ class KubernetesMonitorSnapshot:
     namespace: str
     observed_at: datetime
     resources: tuple[KubernetesResourceCollection, ...]
+    diagnostics: tuple[KubernetesResourceDiagnostic, ...] = ()
+    deployment_topologies: tuple[KubernetesDeploymentTopology, ...] = ()
+    diagnostic_errors: tuple[str, ...] = ()
+
+    @property
+    def finding_count(self) -> int:
+        return len(self.diagnostics)
 
     def collection(
         self,
@@ -142,6 +195,27 @@ class KubernetesMonitorSnapshot:
     ) -> KubernetesResourceCollection | None:
         return next(
             (resource for resource in self.resources if resource.kind is kind),
+            None,
+        )
+
+    def diagnostics_for(
+        self,
+        resource: KubernetesResourceRef,
+    ) -> tuple[KubernetesResourceDiagnostic, ...]:
+        return tuple(
+            diagnostic for diagnostic in self.diagnostics if diagnostic.ref == resource
+        )
+
+    def deployment_topology(
+        self,
+        resource: KubernetesResourceRef,
+    ) -> KubernetesDeploymentTopology | None:
+        return next(
+            (
+                topology
+                for topology in self.deployment_topologies
+                if topology.ref == resource
+            ),
             None,
         )
 
@@ -162,32 +236,61 @@ class KubernetesMonitor:
         self._source = source
         self._namespace = namespace
         self._clock = clock or _utc_now
+        self._latest_snapshot: KubernetesMonitorSnapshot | None = None
 
     def snapshot(self) -> KubernetesMonitorSnapshot:
         observed_at = self._clock()
-        return KubernetesMonitorSnapshot(
+        pods, pod_items = self._capture_observations(
+            kind=KubernetesResourceKind.POD,
+            label="Pods",
+            shortcut="1",
+            columns=("NAME", "READY", "STATUS", "RESTARTS", "AGE"),
+            request=self._source.list_pods,
+            to_row=lambda pod: _pod_row(pod, observed_at=observed_at),
+        )
+        deployments, deployment_items = self._capture_observations(
+            kind=KubernetesResourceKind.DEPLOYMENT,
+            label="Deployments",
+            shortcut="2",
+            columns=("NAME", "READY", "AVAILABLE", "UPDATED"),
+            request=self._source.list_deployments,
+            to_row=_deployment_row,
+        )
+        services, service_items = self._capture_observations(
+            kind=KubernetesResourceKind.SERVICE,
+            label="Services",
+            shortcut="5",
+            columns=("NAME", "TYPE", "CLUSTER-IP", "PORTS"),
+            request=self._source.list_services,
+            to_row=_service_row,
+        )
+        replica_sets, replica_set_items = self._capture_observations(
+            kind=KubernetesResourceKind.REPLICA_SET,
+            label="ReplicaSets",
+            shortcut="6",
+            columns=("NAME", "READY", "CURRENT", "DESIRED"),
+            request=self._source.list_replica_sets,
+            to_row=_replica_set_row,
+        )
+        endpoint_items, endpoint_error = self._read_service_endpoints()
+        report = diagnose_kubernetes_snapshot(
+            KubernetesSnapshot(
+                namespace=self._namespace,
+                pods=pod_items,
+                deployments=deployment_items,
+                replica_sets=replica_set_items,
+                services=service_items if endpoint_error is None else (),
+                service_endpoints=endpoint_items,
+            )
+        )
+        diagnostics = tuple(_to_monitor_diagnostic(item) for item in report.findings)
+        reasons = _health_reasons_by_resource(diagnostics)
+        snapshot = KubernetesMonitorSnapshot(
             namespace=self._namespace,
             observed_at=observed_at,
             resources=(
-                self._capture(
-                    kind=KubernetesResourceKind.POD,
-                    label="Pods",
-                    shortcut="1",
-                    columns=("NAME", "READY", "STATUS", "RESTARTS", "AGE"),
-                    request=self._source.list_pods,
-                    to_row=lambda pod: _pod_row(
-                        pod,
-                        observed_at=observed_at,
-                    ),
-                ),
-                self._capture(
-                    kind=KubernetesResourceKind.DEPLOYMENT,
-                    label="Deployments",
-                    shortcut="2",
-                    columns=("NAME", "READY", "AVAILABLE", "UPDATED"),
-                    request=self._source.list_deployments,
-                    to_row=_deployment_row,
-                ),
+                _with_health_reasons(pods, reasons),
+                _with_health_reasons(deployments, reasons),
                 self._capture(
                     kind=KubernetesResourceKind.STATEFUL_SET,
                     label="StatefulSets",
@@ -204,22 +307,8 @@ class KubernetesMonitor:
                     request=self._source.list_daemon_sets,
                     to_row=_daemon_set_row,
                 ),
-                self._capture(
-                    kind=KubernetesResourceKind.SERVICE,
-                    label="Services",
-                    shortcut="5",
-                    columns=("NAME", "TYPE", "CLUSTER-IP", "PORTS"),
-                    request=self._source.list_services,
-                    to_row=_service_row,
-                ),
-                self._capture(
-                    kind=KubernetesResourceKind.REPLICA_SET,
-                    label="ReplicaSets",
-                    shortcut="6",
-                    columns=("NAME", "READY", "CURRENT", "DESIRED"),
-                    request=self._source.list_replica_sets,
-                    to_row=_replica_set_row,
-                ),
+                _with_health_reasons(services, reasons),
+                _with_health_reasons(replica_sets, reasons),
                 self._capture(
                     kind=KubernetesResourceKind.JOB,
                     label="Jobs",
@@ -262,6 +351,31 @@ class KubernetesMonitor:
                     to_row=_pvc_row,
                 ),
             ),
+            diagnostics=diagnostics,
+            deployment_topologies=_deployment_topologies(
+                deployments=deployment_items,
+                replica_sets=replica_set_items,
+                pods=pod_items,
+            ),
+            diagnostic_errors=(
+                (f"Service Endpoint 诊断不可用：{endpoint_error}",)
+                if endpoint_error is not None
+                else ()
+            ),
+        )
+        self._latest_snapshot = snapshot
+        return snapshot
+
+    def diagnostics(
+        self,
+        resource: KubernetesResourceRef,
+    ) -> KubernetesResourceContent:
+        snapshot = self._latest_snapshot
+        if snapshot is None:
+            raise RuntimeError("尚未读取 Kubernetes 资源快照")
+        return KubernetesResourceContent(
+            title=f"Health · {resource.kind}/{resource.name}",
+            content=_format_resource_diagnostics(snapshot, resource),
         )
 
     def describe(
@@ -396,24 +510,231 @@ class KubernetesMonitor:
         request: Callable[[str], Sequence[Summary]],
         to_row: Callable[[Summary], KubernetesResourceRow],
     ) -> KubernetesResourceCollection:
-        try:
-            rows = tuple(to_row(item) for item in request(self._namespace))
-        except Exception as error:  # noqa: BLE001 - 每类资源必须能独立降级
-            return KubernetesResourceCollection(
-                kind=kind,
-                label=label,
-                shortcut=shortcut,
-                columns=columns,
-                rows=(),
-                error=str(error),
-            )
-        return KubernetesResourceCollection(
+        collection, _ = self._capture_observations(
             kind=kind,
             label=label,
             shortcut=shortcut,
             columns=columns,
-            rows=rows,
+            request=request,
+            to_row=to_row,
         )
+        return collection
+
+    def _capture_observations(
+        self,
+        *,
+        kind: KubernetesResourceKind,
+        label: str,
+        shortcut: str | None,
+        columns: tuple[str, ...],
+        request: Callable[[str], Sequence[Summary]],
+        to_row: Callable[[Summary], KubernetesResourceRow],
+    ) -> tuple[KubernetesResourceCollection, tuple[Summary, ...]]:
+        try:
+            items = tuple(request(self._namespace))
+            rows = tuple(to_row(item) for item in items)
+        except Exception as error:  # noqa: BLE001 - 每类资源必须能独立降级
+            return (
+                KubernetesResourceCollection(
+                    kind=kind,
+                    label=label,
+                    shortcut=shortcut,
+                    columns=columns,
+                    rows=(),
+                    error=str(error),
+                ),
+                (),
+            )
+        return (
+            KubernetesResourceCollection(
+                kind=kind,
+                label=label,
+                shortcut=shortcut,
+                columns=columns,
+                rows=rows,
+            ),
+            items,
+        )
+
+    def _read_service_endpoints(
+        self,
+    ) -> tuple[tuple[ServiceEndpointSummary, ...], str | None]:
+        try:
+            return tuple(self._source.list_service_endpoints(self._namespace)), None
+        except Exception as error:  # noqa: BLE001 - 清单仍可展示，诊断明确降级
+            return (), str(error)
+
+
+def _to_monitor_diagnostic(finding: Finding) -> KubernetesResourceDiagnostic:
+    resource_kind = KubernetesResourceKind(finding.resource_kind)
+    return KubernetesResourceDiagnostic(
+        ref=KubernetesResourceRef(
+            kind=resource_kind,
+            name=finding.resource_name,
+        ),
+        severity=str(finding.severity),
+        summary=finding.summary,
+        evidence=tuple(f"{item.source}: {item.message}" for item in finding.evidence),
+    )
+
+
+def _health_reasons_by_resource(
+    diagnostics: tuple[KubernetesResourceDiagnostic, ...],
+) -> dict[KubernetesResourceRef, tuple[str, ...]]:
+    reasons: dict[KubernetesResourceRef, list[str]] = {}
+    for diagnostic in diagnostics:
+        summaries = reasons.setdefault(diagnostic.ref, [])
+        if diagnostic.summary not in summaries:
+            summaries.append(diagnostic.summary)
+    return {resource: tuple(items) for resource, items in reasons.items()}
+
+
+def _with_health_reasons(
+    collection: KubernetesResourceCollection,
+    reasons: dict[KubernetesResourceRef, tuple[str, ...]],
+) -> KubernetesResourceCollection:
+    return KubernetesResourceCollection(
+        kind=collection.kind,
+        label=collection.label,
+        shortcut=collection.shortcut,
+        columns=collection.columns,
+        rows=tuple(
+            KubernetesResourceRow(
+                ref=row.ref,
+                values=row.values,
+                healthy=False if reasons.get(row.ref) else row.healthy,
+                health_reasons=reasons.get(row.ref, ()),
+            )
+            for row in collection.rows
+        ),
+        error=collection.error,
+    )
+
+
+def _deployment_topologies(
+    *,
+    deployments: tuple[DeploymentSummary, ...],
+    replica_sets: tuple[ReplicaSetSummary, ...],
+    pods: tuple[PodSummary, ...],
+) -> tuple[KubernetesDeploymentTopology, ...]:
+    return tuple(
+        _deployment_topology(
+            deployment,
+            replica_sets=replica_sets,
+            pods=pods,
+        )
+        for deployment in deployments
+    )
+
+
+def _deployment_topology(
+    deployment: DeploymentSummary,
+    *,
+    replica_sets: tuple[ReplicaSetSummary, ...],
+    pods: tuple[PodSummary, ...],
+) -> KubernetesDeploymentTopology:
+    owned_replica_sets = sorted(
+        (
+            replica_set
+            for replica_set in replica_sets
+            if replica_set.controller is not None
+            and replica_set.controller.kind == "Deployment"
+            and replica_set.controller.name == deployment.name
+        ),
+        key=lambda item: item.name,
+    )
+    return KubernetesDeploymentTopology(
+        ref=_ref(KubernetesResourceKind.DEPLOYMENT, deployment.name),
+        generation=deployment.generation,
+        observed_generation=deployment.observed_generation,
+        revision=deployment.revision,
+        conditions=tuple(
+            (
+                f"{condition.type}={condition.status}"
+                f" · {condition.reason or '-'}"
+                f" · {condition.message or '-'}"
+            )
+            for condition in deployment.conditions
+        ),
+        replica_sets=tuple(
+            KubernetesReplicaSetTopology(
+                name=replica_set.name,
+                desired_replicas=replica_set.desired_replicas,
+                ready_replicas=replica_set.ready_replicas,
+                revision=replica_set.revision,
+                pods=tuple(
+                    KubernetesPodTopology(
+                        name=pod.name,
+                        owner_name=replica_set.name,
+                        phase=pod.phase,
+                    )
+                    for pod in sorted(pods, key=lambda item: item.name)
+                    if pod.controller is not None
+                    and pod.controller.kind == "ReplicaSet"
+                    and pod.controller.name == replica_set.name
+                ),
+            )
+            for replica_set in owned_replica_sets
+        ),
+    )
+
+
+def _format_resource_diagnostics(
+    snapshot: KubernetesMonitorSnapshot,
+    resource: KubernetesResourceRef,
+) -> str:
+    diagnostics = snapshot.diagnostics_for(resource)
+    lines = [f"Resource: {resource.kind}/{resource.name}", ""]
+    if diagnostics:
+        lines.append(f"Findings ({len(diagnostics)}):")
+        for diagnostic in diagnostics:
+            lines.append(f"  ! {diagnostic.summary}")
+            lines.extend(f"      {evidence}" for evidence in diagnostic.evidence)
+    else:
+        lines.append("Findings: No deterministic warning in the latest snapshot")
+
+    topology = snapshot.deployment_topology(resource)
+    if topology is not None:
+        lines.extend(
+            (
+                "",
+                "Rollout:",
+                "  Generation: {} · Observed: {} · Revision: {}".format(
+                    topology.generation or "-",
+                    topology.observed_generation or "-",
+                    topology.revision or "-",
+                ),
+                "  Conditions:",
+            )
+        )
+        lines.extend(
+            (f"    {condition}" for condition in topology.conditions)
+            if topology.conditions
+            else ("    none",)
+        )
+        lines.append("  Topology:")
+        if not topology.replica_sets:
+            lines.append("    no controller-owned ReplicaSet observed")
+        for replica_set in topology.replica_sets:
+            lines.append(
+                f"    ReplicaSet/{replica_set.name}"
+                f" · desired {replica_set.desired_replicas}"
+                f" · ready {replica_set.ready_replicas}"
+                f" · revision {replica_set.revision or '-'}"
+            )
+            lines.extend(
+                (
+                    f"      Pod/{pod.name} · owner {pod.owner_name} · phase {pod.phase}"
+                    for pod in replica_set.pods
+                )
+                if replica_set.pods
+                else ("      no controller-owned Pod observed",)
+            )
+
+    if snapshot.diagnostic_errors:
+        lines.extend(("", "Partial diagnostics:"))
+        lines.extend(f"  {error}" for error in snapshot.diagnostic_errors)
+    return "\n".join(lines)
 
 
 def _ref(kind: KubernetesResourceKind, name: str) -> KubernetesResourceRef:

@@ -96,6 +96,24 @@ class FakeMonitor:
             content=f"kind: {resource.kind}\nmetadata:\n  name: {resource.name}",
         )
 
+    def diagnostics(
+        self,
+        resource: KubernetesResourceRef,
+    ) -> KubernetesResourceContent:
+        self.content_calls.append(("diagnostics", resource))
+        return KubernetesResourceContent(
+            title=f"Health · {resource.kind}/{resource.name}",
+            content=(
+                "Findings (1):\n"
+                "  ! Deployment rollout 超过进度期限\n\n"
+                "Rollout:\n"
+                "  Generation: 7 · Observed: 7 · Revision: 3\n"
+                "  Topology:\n"
+                "    ReplicaSet/sample-api-7f8 · desired 2 · ready 1\n"
+                "      Pod/sample-api-7f8-x1 · phase Running"
+            ),
+        )
+
     def pod_logs(
         self,
         resource: KubernetesResourceRef,
@@ -228,7 +246,10 @@ class FakePodAccess:
         return InteractiveSessionResult(exit_code=0)
 
 
-def create_monitor_snapshot() -> KubernetesMonitorSnapshot:
+def create_monitor_snapshot(
+    *,
+    deployment_health_reasons: tuple[str, ...] = (),
+) -> KubernetesMonitorSnapshot:
     def collection(
         kind: KubernetesResourceKind,
         label: str,
@@ -244,6 +265,11 @@ def create_monitor_snapshot() -> KubernetesMonitorSnapshot:
                     ref=KubernetesResourceRef(kind=kind, name=values[0]),
                     values=values,
                     healthy=healthy,
+                    health_reasons=(
+                        deployment_health_reasons
+                        if kind is KubernetesResourceKind.DEPLOYMENT
+                        else ()
+                    ),
                 ),
             )
             if values is not None
@@ -905,6 +931,43 @@ def test_tui_opens_describe_and_pod_logs_for_selected_resource() -> None:
                     ),
                 ),
             ]
+
+    asyncio.run(exercise())
+
+
+def test_tui_shows_health_reason_and_opens_diagnostic_details() -> None:
+    class DiagnosticMonitor(FakeMonitor):
+        def snapshot(self) -> KubernetesMonitorSnapshot:
+            self.calls += 1
+            return create_monitor_snapshot(
+                deployment_health_reasons=("Deployment rollout 超过进度期限",)
+            )
+
+    async def exercise() -> None:
+        monitor = DiagnosticMonitor()
+        app = create_tui(FakeAgent(answer="unused"), monitor=monitor)
+
+        async with app.run_test(size=(140, 34)) as pilot:
+            await app.workers.wait_for_complete()
+            await pilot.press("escape", "2")
+            await pilot.pause()
+
+            table = app.query_one("#monitor-table", DataTable)
+            diagnosis = str(table.get_cell_at(Coordinate(0, 1)))
+            assert diagnosis.startswith("WARN")
+            assert "rollout 超过进度期限" in diagnosis
+
+            await pilot.press("enter")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert "Health · Deployment/sample-api" in str(
+                app.screen.query_one("#resource-title", Static).content
+            )
+            assert "ReplicaSet/sample-api-7f8" in "\n".join(
+                line.text
+                for line in app.screen.query_one("#resource-content", RichLog).lines
+            )
+            assert monitor.content_calls[-1][0] == "diagnostics"
 
     asyncio.run(exercise())
 

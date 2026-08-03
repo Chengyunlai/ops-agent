@@ -31,7 +31,7 @@
 | 审批与处置执行 | 规划中 | 执行扩缩容、重启、回滚等受控动作 |
 | LLM / Agent 编排 | 基础已完成 | 受控主图负责范围路由和诊断计划，Kubernetes 子图负责只读诊断 |
 | CLI 自然语言入口 | 已完成 | 使用 `ops-agent ask` 查询真实集群状态 |
-| 交互式终端 | 基础已完成 | TUI 提供可信 Kubernetes 上下文、多轮会话和受控进度事件 |
+| 交互式终端 | 基础已完成 | 左侧直接呈现确定性 Finding、健康原因和 Deployment 资源拓扑；右侧保留受控多轮对话 |
 | 审计与可观测性 | 规划中 | 结构化日志、Tracing、指标和操作审计 |
 
 ## 界面预览
@@ -302,15 +302,22 @@ uv run ops-agent \
 
 TUI 显示当前环境、固定 namespace 和 AI 只读标识。宽终端采用左右布局：左侧每
 5 秒刷新资源目录，默认 Overview 明确列出 Pod、Deployment、StatefulSet、
-DaemonSet、Service、ReplicaSet、Job、CronJob、Ingress 和 PVC 的数量与
-状态；右侧保留本次运行中的用户消息和 Agent Markdown 回复。窄终端自动改为
+DaemonSet、Service、ReplicaSet、Job、CronJob、Ingress 和 PVC 的数量、
+Finding 数与状态；具体资源表紧邻名称显示 `OK` 或 `WARN · 原因`。右侧保留
+本次运行中的用户消息和 Agent Markdown 回复。窄终端自动改为
 上下布局。每类资源独立查询，单类 API 或 RBAC 失败会在该行显示
 `Unavailable`，不会让 Pod、Service 等其他目录一起消失。
 
 `Ctrl+K` 聚焦左侧监盘，`0` 返回 Overview，`1`～`7` 切换具体资源；
 Overview 中可用方向键和 `Enter` 进入任意资源类型。选中资源后按
-`Enter`/`d` 读取对象详情与关联 Event；Pod 上按 `l` 读取每个容器最近
-200 行日志。
+`Enter` 或 `h` 打开最新确定性 Finding 和 Evidence；Deployment 还会显示
+generation、observedGeneration、revision、Conditions，以及只按 controller
+owner 构建的 Deployment → ReplicaSet → Pod 拓扑。`d` 读取原始对象详情与
+关联 Event；Pod 上按 `l` 读取每个容器最近 200 行日志。指标时间线将在
+Prometheus 接入后增加，不会用模型猜测实时指标。
+
+如果 EndpointSlice 查询失败，Service 清单仍然保留，但监盘会明确标记
+`diagnostics partial`，不会把权限失败或 API 失败误判成“Service 没有后端”。
 
 `7` 进入 Storage/PVC 视图，表格展示 PVC、PV、容量、StorageClass、NFS/CSI
 等后端类型，以及实际挂载它的 Pod、容器和 `mountPath`。选中 PVC 后按
@@ -574,8 +581,9 @@ Kubernetes 相关代码采用三层边界：
   finding，不访问集群，也不依赖 LLM 或 LangChain。
 - `tools/` 是 Agent 适配层。它把 Kubernetes 能力转换成模型可调用的
   LangChain Tool，并在这里固定 namespace、限制日志行数和 Event 数量。
-- `monitoring/` 用无参数 `snapshot()` 以及固定 namespace 的 `describe()` /
-  `pod_logs()` / `pod_containers()` 接口封装资源浏览能力。TUI 只消费这些
+- `monitoring/` 用无参数 `snapshot()` 以及固定 namespace 的 `diagnostics()` /
+  `describe()` / `pod_logs()` / `pod_containers()` 接口封装资源浏览与诊断呈现。
+  Snapshot 携带 Finding 摘要和结构化 Deployment 拓扑。TUI 只消费这些
   稳定接口，不导入
   Kubernetes SDK，也不解析 Agent 文本；以后将轮询替换为 watch 时无需改动
   聊天与布局。
@@ -719,6 +727,7 @@ make check
 - [x] Pod 调度、CrashLoop、OOM、镜像拉取及 previous logs 诊断链路
 - [x] Deployment rollout、ReplicaSet/Pod 关系诊断链路
 - [x] Service Endpoint 基础症状诊断及 Agent 工具链路
+- [x] TUI Finding、健康原因及 Deployment/ReplicaSet/Pod 拓扑呈现
 - [x] 请求范围路由、默认拒绝与实时证据校验
 - [x] 最小 Kubernetes 只读诊断计划
 - [ ] 发布失败根因和资源压力诊断

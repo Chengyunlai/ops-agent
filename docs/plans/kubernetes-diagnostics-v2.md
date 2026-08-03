@@ -1,6 +1,6 @@
 # Kubernetes Diagnostics V2 实施规划
 
-实施状态：Slice 1 至 Slice 4 已完成；下一步为 Slice 5 TUI 诊断呈现。
+实施状态：Slice 1 至 Slice 5 已完成；指标时间线随 Prometheus 切片实施。
 
 ## 目标
 
@@ -37,7 +37,7 @@ kubernetes/models.py
 diagnostics/kubernetes.py
     │  DiagnosisReport(Finding + Evidence)
     ├──────────────► tools/kubernetes.py ──► Kubernetes 专业 Agent
-    └──────────────► monitoring/          ──► TUI 健康原因（后续切片）
+    └──────────────► monitoring/          ──► TUI Finding、健康原因与资源拓扑
 ```
 
 ### Kubernetes Reader module
@@ -80,8 +80,12 @@ Service 清单和 Endpoint 证据；完整 Diagnostics Capability 也必须持�
 
 ### Monitoring module
 
-第一批实现不改变 TUI 表格。后续通过现有 `KubernetesMonitor` interface 添加
-健康原因和关系详情，不让 Textual 直接依赖 diagnostics implementation。
+`KubernetesMonitor` 把 DiagnosisReport 映射为稳定的监盘 Snapshot：资源行携带
+简短健康原因，完整 Evidence 和 Deployment 拓扑通过 `diagnostics(resource)`
+读取。Textual 不依赖 Kubernetes SDK，也不调用 Agent 刷新监盘。
+
+Service Endpoint 查询失败与零 Endpoint 严格区分：失败时保留 Service 清单并
+标记 partial diagnostics，不生成“没有 Ready Endpoint”的 Finding。
 
 ## 数据模型
 
@@ -155,10 +159,13 @@ namespace 纳入身份，不提前增加全局资源抽象。
 
 ### Slice 5：TUI 诊断呈现
 
-- 表格健康原因；
-- 资源关系详情；
-- Event/日志/指标时间线入口；
-- 保持 Monitor interface，之后再把轮询 implementation 替换为 watch。
+- [x] Overview Finding 数与资源表健康原因；
+- [x] Enter/`h` Finding + Evidence 详情；
+- [x] Deployment rollout condition 与 ReplicaSet/Pod owner 拓扑；
+- [x] `d` Event/Describe、`l` Pod 日志入口；
+- [x] 自动刷新后按资源 key 保持当前选择；
+- [ ] 指标时间线（等待 Prometheus 数据源，不由模型猜测）；
+- [x] 保持 Monitor interface，之后可把轮询 implementation 替换为 watch。
 
 ## 安全与失败模式
 
@@ -182,3 +189,6 @@ namespace 纳入身份，不提前增加全局资源抽象。
 - 固定故障在一次性 kind 集群通过真实 Kubernetes Adapter 验证；
 - EndpointSlice 403 明确失败，404 才回退 CoreV1 Endpoints；
 - `make check` 全部通过，README 与实现一致。
+- TUI 直接显示 Finding 数与简短原因，Enter 可查看完整 Evidence；
+- Deployment 详情显示 generation、condition 和 owner 拓扑；
+- EndpointSlice 查询失败显示 partial diagnostics，不产生零后端误报。

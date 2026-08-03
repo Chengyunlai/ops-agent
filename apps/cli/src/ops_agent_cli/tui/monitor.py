@@ -8,6 +8,7 @@ from ops_agent.monitoring import (
     KubernetesResourceContent,
     KubernetesResourceKind,
     KubernetesResourceRef,
+    KubernetesResourceRow,
     VolumeDirectory,
     VolumeEntry,
     VolumeEntryKind,
@@ -405,9 +406,12 @@ class MonitorPane(Vertical):
 
     def display_snapshot(self, snapshot: KubernetesMonitorSnapshot) -> None:
         self._snapshot = snapshot
+        diagnostic_status = f" · {snapshot.finding_count} findings"
+        if snapshot.diagnostic_errors:
+            diagnostic_status += " · diagnostics partial"
         self.query_one("#monitor-status", Static).update(
             f"最近刷新 {snapshot.observed_at.astimezone():%H:%M:%S}"
-            " · d Describe · l Logs(Pod)"
+            f"{diagnostic_status} · Enter Health · d Describe · l Logs(Pod)"
         )
         self._render_title()
         self._render_tabs()
@@ -467,7 +471,7 @@ class MonitorPane(Vertical):
         if snapshot is not None:
             if self._kind is None:
                 total = sum(len(resource.rows) for resource in snapshot.resources)
-                title += f" · {total} resources"
+                title += f" · {total} resources · {snapshot.finding_count} findings"
             elif (collection := self._current_collection()) is not None:
                 title += (
                     " · Unavailable"
@@ -499,7 +503,7 @@ class MonitorPane(Vertical):
             )
             for shortcut, label, selected in labels
         ]
-        tabs.append(f"[{idle_color}]↑/↓ Enter 打开[/]")
+        tabs.append(f"[{idle_color}]↑/↓ Enter 健康[/]")
         self.query_one("#monitor-tabs", Static).update("  ".join(tabs))
 
     def _render_table(self) -> None:
@@ -508,15 +512,20 @@ class MonitorPane(Vertical):
         table.clear(columns=True)
         snapshot = self._snapshot
         if self._kind is None:
-            table.add_columns("RESOURCE", "COUNT", "READY", "STATUS")
+            table.add_columns("RESOURCE", "COUNT", "READY", "FINDINGS", "STATUS")
             if snapshot is not None:
                 theme = self.app.current_theme
                 for collection in snapshot.resources:
                     count, ready, status, healthy = _collection_status(collection)
+                    finding_count = sum(
+                        diagnostic.ref.kind is collection.kind
+                        for diagnostic in snapshot.diagnostics
+                    )
                     table.add_row(
                         collection.label,
                         count,
                         ready,
+                        str(finding_count),
                         _health_text(
                             status,
                             healthy,
@@ -531,7 +540,11 @@ class MonitorPane(Vertical):
             if collection is None:
                 table.add_column("RESOURCE")
             else:
-                table.add_columns(*collection.columns)
+                table.add_columns(
+                    collection.columns[0],
+                    "DIAGNOSIS",
+                    *collection.columns[1:],
+                )
                 if collection.error is not None:
                     table.add_row(
                         Text(
@@ -539,20 +552,27 @@ class MonitorPane(Vertical):
                             style=self.app.current_theme.warning,
                         ),
                         collection.error,
-                        *("-" for _ in collection.columns[2:]),
+                        *("-" for _ in collection.columns[1:]),
                     )
                 else:
                     theme = self.app.current_theme
                     for row in collection.rows:
+                        has_findings = bool(row.health_reasons)
                         name_style = (
                             theme.warning
-                            if row.healthy is False
+                            if row.healthy is False or has_findings
                             else theme.success
                             if row.healthy is True
                             else theme.foreground
                         )
                         values = (
                             Text(row.values[0], style=name_style),
+                            _diagnosis_text(
+                                row,
+                                success=theme.success,
+                                warning=theme.warning,
+                                neutral=theme.foreground,
+                            ),
                             *row.values[1:],
                         )
                         table.add_row(
@@ -625,6 +645,25 @@ def _health_text(
 ) -> Text:
     style = success if healthy is True else warning if healthy is False else neutral
     return Text(label, style=style)
+
+
+def _diagnosis_text(
+    row: KubernetesResourceRow,
+    *,
+    success: str | None,
+    warning: str | None,
+    neutral: str | None,
+) -> Text:
+    if row.health_reasons:
+        reason = row.health_reasons[0]
+        remaining = len(row.health_reasons) - 1
+        suffix = f" · +{remaining}" if remaining else ""
+        return Text(f"WARN · {reason}{suffix}", style=warning)
+    if row.healthy is False:
+        return Text("WARN", style=warning)
+    if row.healthy is True:
+        return Text("OK", style=success)
+    return Text("—", style=neutral)
 
 
 def _child_volume_path(parent: str, name: str) -> str:

@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 
 from ops_agent.kubernetes import (
     ContainerSummary,
+    ControllerReferenceSummary,
     CronJobSummary,
     DaemonSetSummary,
     DeploymentSummary,
@@ -11,6 +12,7 @@ from ops_agent.kubernetes import (
     PersistentVolumeMountSummary,
     PodSummary,
     ReplicaSetSummary,
+    ServiceEndpointSummary,
     ServicePortSummary,
     ServiceSummary,
     StatefulSetSummary,
@@ -107,6 +109,20 @@ class FakeKubernetesSource:
                         target_port="8080",
                     )
                 ],
+            )
+        ]
+
+    def list_service_endpoints(
+        self,
+        namespace: str,
+    ) -> list[ServiceEndpointSummary]:
+        self.calls.append(("service_endpoints", namespace))
+        return [
+            ServiceEndpointSummary(
+                service_name="sample-api",
+                ready_addresses=2,
+                not_ready_addresses=0,
+                endpoint_slice_count=1,
             )
         ]
 
@@ -290,10 +306,11 @@ def test_monitor_captures_fixed_namespace_snapshot() -> None:
     assert source.calls == [
         ("pods", "sample"),
         ("deployments", "sample"),
-        ("stateful_sets", "sample"),
-        ("daemon_sets", "sample"),
         ("services", "sample"),
         ("replica_sets", "sample"),
+        ("service_endpoints", "sample"),
+        ("stateful_sets", "sample"),
+        ("daemon_sets", "sample"),
         ("jobs", "sample"),
         ("cron_jobs", "sample"),
         ("ingresses", "sample"),
@@ -451,4 +468,123 @@ def test_monitor_keeps_other_container_logs_when_one_container_fails() -> None:
     assert "api server started" in logs.content
     assert "===== container: sidecar =====\n[读取失败] sidecar logs forbidden" in (
         logs.content
+    )
+
+
+def test_monitor_exposes_deterministic_findings_as_resource_health_reasons() -> None:
+    class UnhealthySource(FakeKubernetesSource):
+        def list_pods(self, namespace: str) -> list[PodSummary]:
+            self.calls.append(("pods", namespace))
+            return [
+                PodSummary(
+                    name="sample-api-7f8-x1",
+                    phase="Pending",
+                    restart_count=0,
+                    ready_containers=0,
+                    total_containers=1,
+                    controller=ControllerReferenceSummary(
+                        kind="ReplicaSet",
+                        name="sample-api-7f8",
+                    ),
+                )
+            ]
+
+        def list_deployments(self, namespace: str) -> list[DeploymentSummary]:
+            self.calls.append(("deployments", namespace))
+            return [
+                DeploymentSummary(
+                    name="sample-api",
+                    desired_replicas=1,
+                    ready_replicas=0,
+                    available_replicas=0,
+                    updated_replicas=1,
+                    generation=7,
+                    observed_generation=7,
+                    revision="3",
+                )
+            ]
+
+        def list_replica_sets(self, namespace: str) -> list[ReplicaSetSummary]:
+            self.calls.append(("replica_sets", namespace))
+            return [
+                ReplicaSetSummary(
+                    name="sample-api-7f8",
+                    desired_replicas=1,
+                    current_replicas=1,
+                    ready_replicas=0,
+                    revision="3",
+                    controller=ControllerReferenceSummary(
+                        kind="Deployment",
+                        name="sample-api",
+                    ),
+                )
+            ]
+
+        def list_service_endpoints(
+            self,
+            namespace: str,
+        ) -> list[ServiceEndpointSummary]:
+            self.calls.append(("service_endpoints", namespace))
+            return [
+                ServiceEndpointSummary(
+                    service_name="sample-api",
+                    ready_addresses=0,
+                    not_ready_addresses=1,
+                    endpoint_slice_count=1,
+                )
+            ]
+
+    monitor = KubernetesMonitor(UnhealthySource(), namespace="sample")
+
+    snapshot = monitor.snapshot()
+
+    pod = snapshot.collection(KubernetesResourceKind.POD).rows[0]
+    deployment = snapshot.collection(KubernetesResourceKind.DEPLOYMENT).rows[0]
+    service = snapshot.collection(KubernetesResourceKind.SERVICE).rows[0]
+    assert pod.health_reasons == (
+        "Pod 未处于 Running 状态",
+        "Pod 容器未全部就绪",
+    )
+    assert deployment.health_reasons == ("Deployment 就绪副本少于期望副本",)
+    assert service.health_reasons == ("Service 没有 Ready Endpoint",)
+    assert snapshot.finding_count == 4
+
+    details = monitor.diagnostics(
+        KubernetesResourceRef(
+            kind=KubernetesResourceKind.DEPLOYMENT,
+            name="sample-api",
+        )
+    )
+    assert details.title == "Health · Deployment/sample-api"
+    assert "Generation: 7 · Observed: 7 · Revision: 3" in details.content
+    assert "ReplicaSet/sample-api-7f8 · desired 1 · ready 0 · revision 3" in (
+        details.content
+    )
+    assert "Pod/sample-api-7f8-x1 · owner sample-api-7f8 · phase Pending" in (
+        details.content
+    )
+
+
+def test_monitor_marks_endpoint_diagnostics_partial_without_guessing_no_backends() -> (
+    None
+):
+    class ForbiddenEndpointSource(FakeKubernetesSource):
+        def list_service_endpoints(
+            self,
+            namespace: str,
+        ) -> list[ServiceEndpointSummary]:
+            self.calls.append(("service_endpoints", namespace))
+            raise RuntimeError("endpointslices is forbidden")
+
+    snapshot = KubernetesMonitor(
+        ForbiddenEndpointSource(),
+        namespace="sample",
+    ).snapshot()
+
+    service = snapshot.collection(KubernetesResourceKind.SERVICE).rows[0]
+    assert service.health_reasons == ()
+    assert service.healthy is None
+    assert snapshot.finding_count == 0
+    assert snapshot.diagnostic_errors == (
+        "Service Endpoint 诊断不可用：endpointslices is forbidden",
     )

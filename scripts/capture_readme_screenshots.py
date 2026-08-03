@@ -10,6 +10,7 @@ from ops_agent.kubernetes import KubernetesResourceKind
 from ops_agent.monitoring import (
     KubernetesMonitorSnapshot,
     KubernetesResourceCollection,
+    KubernetesResourceDiagnostic,
     KubernetesResourceRef,
     KubernetesResourceRow,
 )
@@ -60,11 +61,13 @@ def _row(
     values: tuple[str, ...],
     *,
     healthy: bool | None = True,
+    health_reasons: tuple[str, ...] = (),
 ) -> KubernetesResourceRow:
     return KubernetesResourceRow(
         ref=KubernetesResourceRef(kind=kind, name=values[0]),
         values=values,
         healthy=healthy,
+        health_reasons=health_reasons,
     )
 
 
@@ -104,7 +107,12 @@ def _demo_snapshot() -> KubernetesMonitorSnapshot:
                 (
                     _row(pod, ("api-7d9f6c8b5-x2k4m", "2/2", "Running", "0", "18m")),
                     _row(pod, ("web-6c7d8f9b4-p8q2n", "1/1", "Running", "0", "18m")),
-                    _row(pod, ("worker-0", "1/1", "Running", "1", "3d")),
+                    _row(
+                        pod,
+                        ("worker-0", "0/1", "Pending", "0", "18m"),
+                        healthy=False,
+                        health_reasons=("Pod 无法调度",),
+                    ),
                 ),
             ),
             _collection(
@@ -211,6 +219,14 @@ def _demo_snapshot() -> KubernetesMonitorSnapshot:
                 ),
             ),
         ),
+        diagnostics=(
+            KubernetesResourceDiagnostic(
+                ref=KubernetesResourceRef(kind=pod, name="worker-0"),
+                severity="warning",
+                summary="Pod 无法调度",
+                evidence=("pod_condition: PodScheduled=False, reason=Unschedulable",),
+            ),
+        ),
     )
 
 
@@ -248,10 +264,10 @@ async def _populate_chat(app: OpsAgentTui) -> None:
     await app.workers.wait_for_complete()
     transcript.complete_exchange(
         "已读取 `sample-app` 的实时状态（演示数据）：\n\n"
-        "- **3/3 Pods** 处于 Running\n"
+        "- **2/3 Pods** 处于 Running\n"
         "- **2 Services** 已就绪\n"
-        "- 未发现 Warning Event\n\n"
-        "建议继续观察 `worker-0` 的单次历史重启。"
+        "- **1 个确定性 Finding**：Pod 无法调度\n\n"
+        "`worker-0` 未完成调度；左侧可直接查看确定性原因。"
     )
     await app.workers.wait_for_complete()
 
