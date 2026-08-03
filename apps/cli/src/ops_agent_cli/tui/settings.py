@@ -13,6 +13,7 @@ from ops_agent_cli.configuration import (
     DownloadSettings,
     InteractiveExecSettings,
     KubernetesSettings,
+    KubernetesWatchSettings,
     PodTransferSettings,
     PodTransferStrategy,
     ProjectSettings,
@@ -160,6 +161,33 @@ class SettingsScreen(ModalScreen[Settings | None]):
                         id="setting-timeout",
                     ),
                 )
+                yield Static("监盘刷新", classes="settings-section")
+                yield from _field(
+                    "Kubernetes Watch",
+                    Select(
+                        (
+                            ("启用（推荐）", "enabled"),
+                            ("禁用，仅轮询", "disabled"),
+                        ),
+                        value=("enabled" if kubernetes.watch.enabled else "disabled"),
+                        allow_blank=False,
+                        id="setting-watch-enabled",
+                    ),
+                )
+                yield from _field(
+                    "单次 Watch 超时（秒）",
+                    Input(
+                        value=str(kubernetes.watch.timeout_seconds),
+                        id="setting-watch-timeout",
+                    ),
+                )
+                yield from _field(
+                    "完整轮询兜底间隔（秒）",
+                    Input(
+                        value=str(kubernetes.watch.poll_interval_seconds),
+                        id="setting-poll-interval",
+                    ),
+                )
                 yield Static("人工 Pod 访问", classes="settings-section")
                 yield from _field(
                     "Interactive Pod Session",
@@ -300,6 +328,17 @@ class SettingsScreen(ModalScreen[Settings | None]):
                 name=self.query_one("#setting-project-name", Input).value,
             )
             proxy_value = self.query_one("#setting-proxy", Input).value.strip()
+            watch = KubernetesWatchSettings(
+                enabled=(
+                    self.query_one("#setting-watch-enabled", Select).value == "enabled"
+                ),
+                timeout_seconds=int(
+                    self.query_one("#setting-watch-timeout", Input).value
+                ),
+                poll_interval_seconds=float(
+                    self.query_one("#setting-poll-interval", Input).value
+                ),
+            )
             interactive_exec = InteractiveExecSettings(
                 enabled=(
                     self.query_one(
@@ -352,6 +391,7 @@ class SettingsScreen(ModalScreen[Settings | None]):
                 kubeconfig_path=self.query_one("#setting-kubeconfig", Input).value,
                 request_timeout_seconds=timeout,
                 proxy_url=proxy_value or None,
+                watch=watch,
                 interactive_exec=interactive_exec,
                 downloads=downloads,
                 pod_transfer=pod_transfer,

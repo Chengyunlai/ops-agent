@@ -12,6 +12,14 @@ API or endpoint is absent or forbidden, that source must report `Unavailable`
 and the rest of the terminal must continue without attempting installation or
 permission escalation.
 
+The local resource monitor may use the existing Kubernetes Watch API as an
+optional read-only refresh optimization. It starts from a resource version
+obtained by a normal list request and treats events only as snapshot
+invalidation signals. `watch` RBAC is optional: forbidden, unavailable,
+disconnected, and timed-out watches fall back to bounded list polling. Ops
+Agent does not create a controller or request broader credentials to enable
+this optimization.
+
 Kubernetes-native resource-pressure diagnosis therefore uses existing Pod
 spec, status, condition, Event, and container-state observations. Declared
 requests and limits, QoS class, `OOMKilled`, scheduler resource shortages, and

@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from threading import Event
 
 from ops_agent.diagnostics import FindingCode
 from ops_agent.kubernetes import (
@@ -10,6 +11,9 @@ from ops_agent.kubernetes import (
     DeploymentSummary,
     IngressSummary,
     JobSummary,
+    KubernetesChangeSignal,
+    KubernetesWatchOutcome,
+    KubernetesWatchResult,
     PersistentVolumeClaimSummary,
     PersistentVolumeMountSummary,
     PodConditionSummary,
@@ -320,6 +324,47 @@ def test_monitor_captures_fixed_namespace_snapshot() -> None:
         ("cron_jobs", "sample"),
         ("ingresses", "sample"),
         ("persistent_volume_claims", "sample"),
+    ]
+
+
+def test_monitor_waits_for_change_without_exposing_namespace() -> None:
+    class WatchableSource(FakeKubernetesSource):
+        def wait_for_change(
+            self,
+            namespace: str,
+            *,
+            timeout_seconds: int,
+            stop_event: Event | None = None,
+        ) -> KubernetesWatchResult:
+            self.calls.append(("watch", f"{namespace}/{timeout_seconds}"))
+            assert stop_event is expected_stop
+            return expected_result
+
+        def stop_waiting_for_change(self) -> None:
+            self.calls.append(("stop_watch", "sample"))
+
+    expected_stop = Event()
+    expected_result = KubernetesWatchResult(
+        outcome=KubernetesWatchOutcome.CHANGED,
+        change=KubernetesChangeSignal(
+            resource_kind=KubernetesResourceKind.POD,
+            event_type="MODIFIED",
+            resource_name="sample-api",
+        ),
+    )
+    source = WatchableSource()
+    monitor = KubernetesMonitor(source, namespace="sample")
+
+    result = monitor.wait_for_change(
+        timeout_seconds=5,
+        stop_event=expected_stop,
+    )
+    monitor.stop_waiting_for_change()
+
+    assert result == expected_result
+    assert source.calls == [
+        ("watch", "sample/5"),
+        ("stop_watch", "sample"),
     ]
 
 

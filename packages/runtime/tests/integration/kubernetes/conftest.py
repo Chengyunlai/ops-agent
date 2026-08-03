@@ -176,6 +176,24 @@ def cluster_reader(kind_test_target: _KindTestTarget) -> KubernetesReader:
 
 
 @pytest.fixture
+def trigger_pod_change(kind_test_target: _KindTestTarget) -> Callable[[], None]:
+    def trigger() -> None:
+        _kubectl(
+            kind_test_target.kubeconfig_path,
+            "--context",
+            kind_test_target.context,
+            "--namespace",
+            _NAMESPACE,
+            "annotate",
+            "pod/diagnostics-ready",
+            f"ops-agent.dev/watch-test={time.time_ns()}",
+            "--overwrite",
+        )
+
+    return trigger
+
+
+@pytest.fixture
 def legacy_fallback_reader(kind_test_target: _KindTestTarget) -> KubernetesReader:
     class UnavailableDiscoveryV1Api:
         def list_namespaced_endpoint_slice(self, **_: object) -> None:

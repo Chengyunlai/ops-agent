@@ -192,7 +192,23 @@ namespace 纳入身份，不提前增加全局资源抽象。
 - [x] `d` Event/Describe、`l` Pod 日志入口；
 - [x] 自动刷新后按资源 key 保持当前选择；
 - [ ] 指标时间线（仅读取显式配置的已有数据源，不安装、不由模型猜测）；
-- [x] 保持 Monitor interface，之后可把轮询 implementation 替换为 watch。
+- [x] Monitor 用稳定失效信号接入 Pod Watch，失败时保留完整快照轮询。
+
+### Slice 6：Kubernetes Watch 增量刷新
+
+- [x] 只使用集群已有的 Kubernetes Watch API，不安装控制器、CRD、exporter
+  或其他集群组件；
+- [x] 首期 Pod Watch 从最近一次列表的 `resourceVersion` 继续，事件只作为
+  Snapshot 失效信号，不把 Kubernetes SDK Event 暴露给 Monitor/TUI；
+- [x] 事件触发后仍读取完整 `KubernetesMonitorSnapshot`，保持当前资源类型、
+  稳定 RowKey 选择与滚动上下文；
+- [x] Watch 正常超时自动重连，RBAC 403、API 不可用或网络断开时继续按配置
+  轮询，既不猜测空状态也不申请更多权限；
+- [x] Watch 开关、单次超时和轮询间隔由 Pydantic/TOML 配置约束，旧配置使用
+  安全默认值；
+- [x] TUI 退出时主动停止底层 Watch，不应用晚到事件或 Snapshot；
+- [x] Watch 不注册为 Agent Tool，不改变 Interactive Pod Session、Artifact
+  Download 或 PVC 浏览的人工权限边界。
 
 ## 安全与失败模式
 

@@ -2,9 +2,11 @@ import asyncio
 import warnings
 from collections.abc import Callable, Iterator
 from enum import StrEnum
+from threading import Event
 from typing import ClassVar, Protocol
 
 from ops_agent.agent import AgentEvent, AgentStage, ApplicationError
+from ops_agent.kubernetes import KubernetesWatchOutcome, KubernetesWatchResult
 from ops_agent.monitoring import (
     KubernetesMonitorSnapshot,
     KubernetesResourceContent,
@@ -44,6 +46,15 @@ class Conversation(Protocol):
 
 
 class Monitor(Protocol):
+    def wait_for_change(
+        self,
+        *,
+        timeout_seconds: int,
+        stop_event: Event | None = None,
+    ) -> KubernetesWatchResult: ...
+
+    def stop_waiting_for_change(self) -> None: ...
+
     def snapshot(self) -> KubernetesMonitorSnapshot: ...
 
     def describe(
@@ -123,7 +134,6 @@ class OpsAgentTui(App[None]):
 
     TITLE = "Ops Agent"
     SUB_TITLE = "Kubernetes 监盘与受控诊断"
-    MONITOR_REFRESH_SECONDS = 5.0
     NARROW_WIDTH = 100
 
     CSS = """
@@ -547,6 +557,8 @@ class OpsAgentTui(App[None]):
         self._monitor_refresh_in_progress = False
         self._monitor_refresh_pending = False
         self._monitor_timer: Timer | None = None
+        self._monitor_stop_event = Event()
+        self._monitor_snapshot_ready = asyncio.Event()
         self._copy_mode = False
 
     def compose(self) -> ComposeResult:
@@ -600,10 +612,15 @@ class OpsAgentTui(App[None]):
         self._apply_responsive_layout(self.size.width)
         self._request_monitor_refresh()
         self._monitor_timer = self.set_interval(
-            self.MONITOR_REFRESH_SECONDS,
+            self._settings.kubernetes.watch.poll_interval_seconds,
             self._request_monitor_refresh,
             name="monitor-refresh",
         )
+        if self._settings.kubernetes.watch.enabled:
+            self._watch_monitor()
+
+    def on_unmount(self) -> None:
+        self._stop_monitor_watch()
 
     def on_resize(self, event: events.Resize) -> None:
         self._apply_responsive_layout(event.size.width)
@@ -653,11 +670,39 @@ class OpsAgentTui(App[None]):
             pane.display_error(str(error))
         else:
             pane.display_snapshot(snapshot)
+            self._monitor_snapshot_ready.set()
         finally:
             self._monitor_refresh_in_progress = False
             if self._monitor_refresh_pending and self.is_running:
                 self._monitor_refresh_pending = False
                 self.call_next(self._request_monitor_refresh)
+
+    @work(
+        group="monitor-watch",
+        exclusive=True,
+        exit_on_error=False,
+    )
+    async def _watch_monitor(self) -> None:
+        watch_settings = self._settings.kubernetes.watch
+        await self._monitor_snapshot_ready.wait()
+        while not self._monitor_stop_event.is_set():
+            try:
+                result = await asyncio.to_thread(
+                    self._monitor.wait_for_change,
+                    timeout_seconds=watch_settings.timeout_seconds,
+                    stop_event=self._monitor_stop_event,
+                )
+            except Exception:  # noqa: BLE001 - Watch 失败必须无条件回退轮询
+                await asyncio.sleep(watch_settings.poll_interval_seconds)
+                continue
+            if self._monitor_stop_event.is_set() or not self.is_running:
+                return
+            if result.outcome is KubernetesWatchOutcome.CHANGED:
+                self._request_monitor_refresh()
+            elif result.outcome is KubernetesWatchOutcome.UNAVAILABLE:
+                await asyncio.sleep(watch_settings.poll_interval_seconds)
+            elif result.outcome is KubernetesWatchOutcome.STOPPED:
+                return
 
     def _finish_with_answer(self, answer: str) -> None:
         self.query_one("#result", ChatTranscript).complete_exchange(answer)
@@ -689,6 +734,17 @@ class OpsAgentTui(App[None]):
 
     def action_refresh_monitor(self) -> None:
         self._request_monitor_refresh()
+
+    def action_quit(self) -> None:
+        self._stop_monitor_watch()
+        self.exit()
+
+    def _stop_monitor_watch(self) -> None:
+        self._monitor_stop_event.set()
+        try:
+            self._monitor.stop_waiting_for_change()
+        except Exception:  # noqa: BLE001, S110 - 退出不能被 Watch 清理失败阻断
+            pass
 
     def action_focus_monitor(self) -> None:
         self.query_one("#monitor-pane", MonitorPane).focus_table()
@@ -867,7 +923,7 @@ class OpsAgentTui(App[None]):
 
     @on(Button.Pressed, "#quit-button")
     def quit_from_button(self) -> None:
-        self.exit()
+        self.action_quit()
 
     def _show_monitor_kind(self, kind: KubernetesResourceKind) -> None:
         pane = self.query_one("#monitor-pane", MonitorPane)

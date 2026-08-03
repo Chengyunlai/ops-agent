@@ -1,5 +1,6 @@
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
+from threading import Event
 from typing import Protocol, TypeVar
 
 from ops_agent.diagnostics import (
@@ -13,6 +14,7 @@ from ops_agent.kubernetes import (
     IngressSummary,
     JobSummary,
     KubernetesResourceKind,
+    KubernetesWatchResult,
     PersistentVolumeClaimSummary,
     PersistentVolumeMountSummary,
     PodDetails,
@@ -49,6 +51,16 @@ from ops_agent.monitoring.models import (
 
 
 class KubernetesMonitoringSource(Protocol):
+    def wait_for_change(
+        self,
+        namespace: str,
+        *,
+        timeout_seconds: int,
+        stop_event: Event | None = None,
+    ) -> KubernetesWatchResult: ...
+
+    def stop_waiting_for_change(self) -> None: ...
+
     def list_pods(self, namespace: str) -> Sequence[PodSummary]: ...
 
     def list_deployments(
@@ -149,6 +161,23 @@ class KubernetesMonitor:
         self._namespace = namespace
         self._clock = clock or _utc_now
         self._latest_snapshot: KubernetesMonitorSnapshot | None = None
+
+    def wait_for_change(
+        self,
+        *,
+        timeout_seconds: int,
+        stop_event: Event | None = None,
+    ) -> KubernetesWatchResult:
+        """Wait for a bounded resource invalidation in the fixed namespace."""
+        return self._source.wait_for_change(
+            self._namespace,
+            timeout_seconds=timeout_seconds,
+            stop_event=stop_event,
+        )
+
+    def stop_waiting_for_change(self) -> None:
+        """Stop an active resource change wait without changing cluster state."""
+        self._source.stop_waiting_for_change()
 
     def snapshot(self) -> KubernetesMonitorSnapshot:
         observed_at = self._clock()

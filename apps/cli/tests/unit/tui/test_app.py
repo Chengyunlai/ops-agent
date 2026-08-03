@@ -13,7 +13,10 @@ from ops_agent.agent import (
     InteractionChannel,
 )
 from ops_agent.kubernetes import (
+    KubernetesChangeSignal,
     KubernetesResourceKind,
+    KubernetesWatchOutcome,
+    KubernetesWatchResult,
     PersistentVolumeMountSummary,
 )
 from ops_agent.monitoring import (
@@ -30,6 +33,7 @@ from ops_agent_cli import tui as tui_module
 from ops_agent_cli.configuration import (
     InteractiveExecSettings,
     KubernetesSettings,
+    KubernetesWatchSettings,
     ModelSettings,
     ProjectSettings,
     Settings,
@@ -80,11 +84,15 @@ class FakeConversation:
 class FakeMonitor:
     def __init__(self) -> None:
         self.calls = 0
+        self.stop_watch_calls = 0
         self.content_calls: list[tuple[str, object]] = []
 
     def snapshot(self) -> KubernetesMonitorSnapshot:
         self.calls += 1
         return create_monitor_snapshot()
+
+    def stop_waiting_for_change(self) -> None:
+        self.stop_watch_calls += 1
 
     def describe(
         self,
@@ -382,6 +390,7 @@ def create_app_settings() -> Settings:
             namespace="sample",
             kubeconfig_path="/tmp/ops-agent-kubeconfig",
             request_timeout_seconds=10,
+            watch=KubernetesWatchSettings(enabled=False),
         ),
         model=ModelSettings(
             provider="openai",
@@ -675,6 +684,11 @@ def test_tui_settings_persist_project_and_apply_theme_immediately() -> None:
             assert screen.query_one("#setting-project-name", Input).value == "Testing"
             assert screen.query_one("#setting-namespace", Input).value == "sample"
             assert (
+                screen.query_one("#setting-watch-enabled", Select).value == "disabled"
+            )
+            assert screen.query_one("#setting-watch-timeout", Input).value == "10"
+            assert screen.query_one("#setting-poll-interval", Input).value == "5.0"
+            assert (
                 screen.query_one("#setting-interactive-exec", Select).value
                 == "disabled"
             )
@@ -706,6 +720,9 @@ def test_tui_settings_persist_project_and_apply_theme_immediately() -> None:
 
             screen.query_one("#setting-project-name", Input).value = "Sample Platform"
             screen.query_one("#setting-namespace", Input).value = "sample-next"
+            screen.query_one("#setting-watch-enabled", Select).value = "enabled"
+            screen.query_one("#setting-watch-timeout", Input).value = "12"
+            screen.query_one("#setting-poll-interval", Input).value = "7.5"
             screen.query_one("#setting-interactive-exec", Select).value = "enabled"
             screen.query_one(
                 "#setting-interactive-locale",
@@ -740,6 +757,9 @@ def test_tui_settings_persist_project_and_apply_theme_immediately() -> None:
             assert len(saved) == 1
             assert saved[0].project.name == "Sample Platform"
             assert saved[0].kubernetes.namespace == "sample-next"
+            assert saved[0].kubernetes.watch.enabled
+            assert saved[0].kubernetes.watch.timeout_seconds == 12
+            assert saved[0].kubernetes.watch.poll_interval_seconds == 7.5
             assert saved[0].kubernetes.interactive_exec.enabled
             assert saved[0].kubernetes.interactive_exec.locale == "C.UTF-8"
             assert (
@@ -1451,16 +1471,249 @@ def test_tui_stacks_monitor_and_chat_in_narrow_terminal() -> None:
 def test_tui_periodically_refreshes_monitor() -> None:
     async def exercise() -> None:
         monitor = FakeMonitor()
+        base_settings = create_app_settings()
+        settings = base_settings.model_copy(
+            update={
+                "kubernetes": base_settings.kubernetes.model_copy(
+                    update={
+                        "watch": KubernetesWatchSettings(
+                            enabled=False,
+                            poll_interval_seconds=0.02,
+                        )
+                    }
+                )
+            }
+        )
         app = create_tui(
             FakeAgent(answer="unused"),
             monitor=monitor,
+            settings=settings,
         )
-        app.MONITOR_REFRESH_SECONDS = 0.02
 
         async with app.run_test():
             await _wait_until(lambda: monitor.calls >= 2)
 
         assert monitor.calls >= 2
+
+    asyncio.run(exercise())
+
+
+def test_tui_falls_back_to_polling_when_watch_is_unavailable() -> None:
+    class UnavailableWatchMonitor(FakeMonitor):
+        def __init__(self) -> None:
+            super().__init__()
+            self.watch_calls = 0
+
+        def wait_for_change(
+            self,
+            *,
+            timeout_seconds: int,
+            stop_event: Event | None = None,
+        ) -> KubernetesWatchResult:
+            self.watch_calls += 1
+            return KubernetesWatchResult(
+                outcome=KubernetesWatchOutcome.UNAVAILABLE,
+                unavailable_reason="403 Forbidden",
+            )
+
+    async def exercise() -> None:
+        monitor = UnavailableWatchMonitor()
+        base_settings = create_app_settings()
+        settings = base_settings.model_copy(
+            update={
+                "kubernetes": base_settings.kubernetes.model_copy(
+                    update={
+                        "watch": KubernetesWatchSettings(
+                            enabled=True,
+                            timeout_seconds=1,
+                            poll_interval_seconds=0.02,
+                        )
+                    }
+                )
+            }
+        )
+        app = create_tui(
+            FakeAgent(answer="unused"),
+            monitor=monitor,
+            settings=settings,
+        )
+
+        async with app.run_test():
+            await _wait_until(lambda: monitor.calls >= 2)
+
+        assert monitor.calls >= 2
+        assert monitor.watch_calls >= 1
+        assert monitor.stop_watch_calls >= 1
+
+    asyncio.run(exercise())
+
+
+def test_tui_refreshes_monitor_when_watch_reports_change() -> None:
+    class WatchMonitor(FakeMonitor):
+        def __init__(self) -> None:
+            super().__init__()
+            self.snapshot_ready = Event()
+            self.watch_calls = 0
+
+        def snapshot(self) -> KubernetesMonitorSnapshot:
+            snapshot = super().snapshot()
+            self.snapshot_ready.set()
+            return snapshot
+
+        def wait_for_change(
+            self,
+            *,
+            timeout_seconds: int,
+            stop_event: Event | None = None,
+        ) -> KubernetesWatchResult:
+            self.watch_calls += 1
+            if self.watch_calls == 1:
+                self.snapshot_ready.wait(timeout=1)
+                return KubernetesWatchResult(
+                    outcome=KubernetesWatchOutcome.CHANGED,
+                    change=KubernetesChangeSignal(
+                        resource_kind=KubernetesResourceKind.POD,
+                        event_type="MODIFIED",
+                        resource_name="sample-api-7f8",
+                    ),
+                )
+            if stop_event is not None:
+                stop_event.wait(timeout=timeout_seconds)
+                if stop_event.is_set():
+                    return KubernetesWatchResult(
+                        outcome=KubernetesWatchOutcome.STOPPED,
+                    )
+            return KubernetesWatchResult(
+                outcome=KubernetesWatchOutcome.TIMED_OUT,
+            )
+
+    async def exercise() -> None:
+        monitor = WatchMonitor()
+        base_settings = create_app_settings()
+        settings = base_settings.model_copy(
+            update={
+                "kubernetes": base_settings.kubernetes.model_copy(
+                    update={
+                        "watch": KubernetesWatchSettings(
+                            enabled=True,
+                            timeout_seconds=1,
+                            poll_interval_seconds=60.0,
+                        )
+                    }
+                )
+            }
+        )
+        app = create_tui(
+            FakeAgent(answer="unused"),
+            monitor=monitor,
+            settings=settings,
+        )
+
+        async with app.run_test():
+            await _wait_until(lambda: monitor.calls >= 2, timeout=0.5)
+
+        assert monitor.calls >= 2
+        assert monitor.watch_calls >= 1
+
+    asyncio.run(exercise())
+
+
+def test_tui_watch_refresh_preserves_selected_monitor_resource() -> None:
+    class ReorderingWatchMonitor(FakeMonitor):
+        def __init__(self) -> None:
+            super().__init__()
+            self.watch_started = Event()
+            self.release_change = Event()
+            self.watch_calls = 0
+
+        def snapshot(self) -> KubernetesMonitorSnapshot:
+            self.calls += 1
+            snapshot = create_monitor_snapshot()
+            pods = snapshot.resources[0]
+            names = (
+                ("sample-api-0", "sample-worker-0", "sample-frontend-0")
+                if self.calls == 1
+                else ("sample-frontend-0", "sample-api-0", "sample-worker-0")
+            )
+            rows = tuple(
+                KubernetesResourceRow(
+                    ref=KubernetesResourceRef(
+                        kind=KubernetesResourceKind.POD,
+                        name=name,
+                    ),
+                    values=(name, "1/1", "Running", "0", "1h"),
+                    healthy=True,
+                )
+                for name in names
+            )
+            return replace(
+                snapshot,
+                resources=(replace(pods, rows=rows), *snapshot.resources[1:]),
+            )
+
+        def wait_for_change(
+            self,
+            *,
+            timeout_seconds: int,
+            stop_event: Event | None = None,
+        ) -> KubernetesWatchResult:
+            self.watch_calls += 1
+            self.watch_started.set()
+            if self.watch_calls == 1:
+                self.release_change.wait(timeout=1)
+                return KubernetesWatchResult(
+                    outcome=KubernetesWatchOutcome.CHANGED,
+                    change=KubernetesChangeSignal(
+                        resource_kind=KubernetesResourceKind.POD,
+                        event_type="MODIFIED",
+                        resource_name="sample-worker-0",
+                    ),
+                )
+            if stop_event is not None:
+                stop_event.wait(timeout=timeout_seconds)
+            return KubernetesWatchResult(
+                outcome=KubernetesWatchOutcome.STOPPED,
+            )
+
+    async def exercise() -> None:
+        monitor = ReorderingWatchMonitor()
+        base_settings = create_app_settings()
+        settings = base_settings.model_copy(
+            update={
+                "kubernetes": base_settings.kubernetes.model_copy(
+                    update={
+                        "watch": KubernetesWatchSettings(
+                            enabled=True,
+                            timeout_seconds=1,
+                            poll_interval_seconds=60.0,
+                        )
+                    }
+                )
+            }
+        )
+        app = create_tui(
+            FakeAgent(answer="unused"),
+            monitor=monitor,
+            settings=settings,
+        )
+
+        async with app.run_test(size=(140, 34)) as pilot:
+            await _wait_until(
+                lambda: monitor.calls == 1 and monitor.watch_started.is_set()
+            )
+            await pilot.press("ctrl+k", "1", "down")
+            table = app.query_one("#monitor-table", DataTable)
+            assert str(table.get_cell_at(Coordinate(table.cursor_row, 0))) == (
+                "sample-worker-0"
+            )
+
+            monitor.release_change.set()
+            await _wait_until(lambda: monitor.calls >= 2)
+            await pilot.pause()
+
+            assert str(table.get_cell_at(Coordinate(table.cursor_row, 0))) == (
+                "sample-worker-0"
+            )
 
     asyncio.run(exercise())
 

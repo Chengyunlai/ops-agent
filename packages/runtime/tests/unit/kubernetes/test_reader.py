@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import Event, Thread
 from types import SimpleNamespace
 
 import pytest
@@ -10,9 +11,13 @@ from ops_agent.kubernetes import (
     ContainerResourceType,
     ContainerStatusSummary,
     ControllerReferenceSummary,
+    KubernetesChangeSignal,
     KubernetesConnectionSettings,
     KubernetesError,
     KubernetesReader,
+    KubernetesResourceKind,
+    KubernetesWatchOutcome,
+    KubernetesWatchResult,
     PodConditionSummary,
     PodSummary,
     create_kubernetes_reader,
@@ -22,8 +27,14 @@ from urllib3.exceptions import HTTPError
 
 
 class FakeCoreV1Api:
-    def __init__(self, pods: list[SimpleNamespace]) -> None:
+    def __init__(
+        self,
+        pods: list[SimpleNamespace],
+        *,
+        resource_version: str | None = None,
+    ) -> None:
         self._pods = pods
+        self._resource_version = resource_version
         self.calls: list[tuple[str, int]] = []
 
     def list_namespaced_pod(
@@ -33,7 +44,10 @@ class FakeCoreV1Api:
         _request_timeout: int,
     ) -> SimpleNamespace:
         self.calls.append((namespace, _request_timeout))
-        return SimpleNamespace(items=self._pods)
+        return SimpleNamespace(
+            items=self._pods,
+            metadata=SimpleNamespace(resource_version=self._resource_version),
+        )
 
 
 class ForbiddenCoreV1Api:
@@ -54,6 +68,48 @@ class UnreachableCoreV1Api:
         _request_timeout: int,
     ) -> SimpleNamespace:
         raise HTTPError("connection failed")
+
+
+class FakePodWatcher:
+    def __init__(self, events: list[dict[str, object]]) -> None:
+        self._events = events
+        self.calls: list[tuple[object, dict[str, object]]] = []
+        self.stopped = False
+
+    def stream(self, request: object, **kwargs: object):
+        self.calls.append((request, kwargs))
+        yield from self._events
+
+    def stop(self) -> None:
+        self.stopped = True
+
+
+class FailingPodWatcher(FakePodWatcher):
+    def __init__(self, error: Exception) -> None:
+        super().__init__([])
+        self._error = error
+
+    def stream(self, request: object, **kwargs: object):
+        self.calls.append((request, kwargs))
+        raise self._error
+
+
+class BlockingPodWatcher(FakePodWatcher):
+    def __init__(self) -> None:
+        super().__init__([])
+        self.started = Event()
+        self.released = Event()
+
+    def stream(self, request: object, **kwargs: object):
+        self.calls.append((request, kwargs))
+        self.started.set()
+        self.released.wait(timeout=1)
+        if False:
+            yield {}
+
+    def stop(self) -> None:
+        super().stop()
+        self.released.set()
 
 
 def test_list_pods_returns_summaries_from_api() -> None:
@@ -94,6 +150,151 @@ def test_list_pods_returns_summaries_from_api() -> None:
         )
     ]
     assert api.calls == [("sample", 7)]
+
+
+def test_wait_for_change_returns_pod_watch_signal() -> None:
+    pod = SimpleNamespace(
+        metadata=SimpleNamespace(
+            name="sample-api",
+            resource_version="42",
+        )
+    )
+    watcher = FakePodWatcher([{"type": "MODIFIED", "object": pod}])
+    api = FakeCoreV1Api([])
+    reader = KubernetesReader(
+        core_api=api,
+        apps_api=object(),
+        request_timeout_seconds=7,
+        watch_factory=lambda: watcher,
+    )
+
+    result = reader.wait_for_change(
+        namespace="sample",
+        timeout_seconds=5,
+    )
+
+    assert result == KubernetesWatchResult(
+        outcome=KubernetesWatchOutcome.CHANGED,
+        change=KubernetesChangeSignal(
+            resource_kind=KubernetesResourceKind.POD,
+            event_type="MODIFIED",
+            resource_name="sample-api",
+        ),
+    )
+    assert watcher.calls == [
+        (
+            api.list_namespaced_pod,
+            {
+                "namespace": "sample",
+                "timeout_seconds": 5,
+                "_request_timeout": 12,
+            },
+        )
+    ]
+    assert watcher.stopped
+
+
+def test_wait_for_change_treats_watch_timeout_as_no_change() -> None:
+    watcher = FakePodWatcher([])
+    reader = KubernetesReader(
+        core_api=FakeCoreV1Api([]),
+        apps_api=object(),
+        request_timeout_seconds=7,
+        watch_factory=lambda: watcher,
+    )
+
+    result = reader.wait_for_change(
+        namespace="sample",
+        timeout_seconds=5,
+    )
+
+    assert result == KubernetesWatchResult(
+        outcome=KubernetesWatchOutcome.TIMED_OUT,
+    )
+    assert watcher.stopped
+
+
+def test_wait_for_change_reports_forbidden_watch_as_unavailable() -> None:
+    watcher = FailingPodWatcher(ApiException(status=403, reason="Forbidden"))
+    reader = KubernetesReader(
+        core_api=FakeCoreV1Api([]),
+        apps_api=object(),
+        request_timeout_seconds=7,
+        watch_factory=lambda: watcher,
+    )
+
+    result = reader.wait_for_change(
+        namespace="sample",
+        timeout_seconds=5,
+    )
+
+    assert result.outcome is KubernetesWatchOutcome.UNAVAILABLE
+    assert result.change is None
+    assert "403" in (result.unavailable_reason or "")
+    assert "Forbidden" in (result.unavailable_reason or "")
+    assert watcher.stopped
+
+
+def test_wait_for_change_continues_from_latest_pod_list_version() -> None:
+    watcher = FakePodWatcher([])
+    api = FakeCoreV1Api([], resource_version="100")
+    reader = KubernetesReader(
+        core_api=api,
+        apps_api=object(),
+        request_timeout_seconds=7,
+        watch_factory=lambda: watcher,
+    )
+
+    reader.list_pods("sample")
+    reader.wait_for_change(namespace="sample", timeout_seconds=5)
+
+    assert watcher.calls[0][1]["resource_version"] == "100"
+
+
+def test_wait_for_change_does_not_open_watch_after_stop() -> None:
+    watcher = FakePodWatcher([])
+    stop_event = Event()
+    stop_event.set()
+    reader = KubernetesReader(
+        core_api=FakeCoreV1Api([]),
+        apps_api=object(),
+        request_timeout_seconds=7,
+        watch_factory=lambda: watcher,
+    )
+
+    result = reader.wait_for_change(
+        namespace="sample",
+        timeout_seconds=5,
+        stop_event=stop_event,
+    )
+
+    assert result.outcome is KubernetesWatchOutcome.STOPPED
+    assert watcher.calls == []
+
+
+def test_stop_waiting_for_change_unblocks_active_watch() -> None:
+    watcher = BlockingPodWatcher()
+    reader = KubernetesReader(
+        core_api=FakeCoreV1Api([]),
+        apps_api=object(),
+        request_timeout_seconds=7,
+        watch_factory=lambda: watcher,
+    )
+    results: list[KubernetesWatchResult] = []
+    thread = Thread(
+        target=lambda: results.append(
+            reader.wait_for_change(namespace="sample", timeout_seconds=30)
+        )
+    )
+    thread.start()
+    assert watcher.started.wait(timeout=1)
+
+    reader.stop_waiting_for_change()
+    thread.join(timeout=1)
+
+    assert not thread.is_alive()
+    assert watcher.stopped
+    assert results == [KubernetesWatchResult(outcome=KubernetesWatchOutcome.TIMED_OUT)]
 
 
 def test_list_pods_normalizes_container_states_and_scheduling_conditions() -> None:

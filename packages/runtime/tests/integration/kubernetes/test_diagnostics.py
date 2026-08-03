@@ -1,11 +1,14 @@
 import time
 from collections.abc import Callable
+from threading import Thread
 
 import pytest
 from ops_agent.diagnostics import DiagnosisReport
 from ops_agent.kubernetes import (
     KubernetesError,
     KubernetesReader,
+    KubernetesResourceKind,
+    KubernetesWatchOutcome,
     ServiceEndpointSource,
 )
 
@@ -73,6 +76,41 @@ def test_endpoint_slice_rbac_failure_remains_an_explicit_error(
         match=r"(?s)EndpointSlice.*endpointslices.*forbidden",
     ):
         restricted_reader.list_service_endpoints("ops-agent-diagnostics-e2e")
+
+
+def test_watch_rbac_failure_falls_back_without_failing_reader(
+    restricted_reader: KubernetesReader,
+) -> None:
+    restricted_reader.list_pods("ops-agent-diagnostics-e2e")
+
+    result = restricted_reader.wait_for_change(
+        "ops-agent-diagnostics-e2e",
+        timeout_seconds=2,
+    )
+
+    assert result.outcome is KubernetesWatchOutcome.UNAVAILABLE
+    assert "forbidden" in (result.unavailable_reason or "").casefold()
+
+
+def test_watch_reports_live_pod_change(
+    cluster_reader: KubernetesReader,
+    trigger_pod_change: Callable[[], None],
+) -> None:
+    cluster_reader.list_pods("ops-agent-diagnostics-e2e")
+    trigger = Thread(target=trigger_pod_change)
+    trigger.start()
+
+    result = cluster_reader.wait_for_change(
+        "ops-agent-diagnostics-e2e",
+        timeout_seconds=10,
+    )
+    trigger.join(timeout=5)
+
+    assert not trigger.is_alive()
+    assert result.outcome is KubernetesWatchOutcome.CHANGED
+    assert result.change is not None
+    assert result.change.resource_kind is KubernetesResourceKind.POD
+    assert result.change.resource_name == "diagnostics-ready"
 
 
 def test_endpoint_slice_preserves_service_to_pod_topology(

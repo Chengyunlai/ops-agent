@@ -9,6 +9,7 @@ from pydantic import (
     ConfigDict,
     Field,
     StrictBool,
+    StrictFloat,
     StrictInt,
     StrictStr,
 )
@@ -20,6 +21,10 @@ _NonEmptyString = Annotated[
 ]
 _PositiveInteger = Annotated[
     StrictInt,
+    Field(gt=0),
+]
+_PositiveNumber = Annotated[
+    StrictFloat,
     Field(gt=0),
 ]
 _HexColor = Annotated[
@@ -102,7 +107,26 @@ class PodTransferSettings(_ConfigModel):
     )
 
 
+class KubernetesWatchSettings(_ConfigModel):
+    enabled: StrictBool = Field(
+        default=True,
+        description="是否使用只读 Kubernetes Watch 加速监盘刷新",
+    )
+    timeout_seconds: _PositiveInteger = Field(
+        default=10,
+        description="单次 Kubernetes Watch 的服务端超时秒数",
+    )
+    poll_interval_seconds: _PositiveNumber = Field(
+        default=5.0,
+        description="Watch 不可用时及一致性兜底的完整轮询间隔秒数",
+    )
+
+
 class KubernetesSettings(KubernetesConnectionSettings):
+    watch: KubernetesWatchSettings = Field(
+        default_factory=KubernetesWatchSettings,
+        description="Kubernetes Watch 增量刷新与轮询兜底配置",
+    )
     interactive_exec: InteractiveExecSettings = Field(
         default_factory=InteractiveExecSettings,
         description="人工 Pod 交互式终端配置",
