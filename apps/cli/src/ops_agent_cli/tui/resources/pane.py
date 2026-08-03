@@ -1,0 +1,296 @@
+from ops_agent.monitoring import (
+    KubernetesMonitorSnapshot,
+    KubernetesResourceCollection,
+    KubernetesResourceKind,
+    KubernetesResourceRef,
+    KubernetesResourceRow,
+)
+from rich.text import Text
+from textual.app import ComposeResult
+from textual.containers import Vertical
+from textual.widgets import DataTable, Static
+from textual.widgets.data_table import RowDoesNotExist, RowKey
+
+
+class MonitorPane(Vertical):
+    """展示固定 namespace 的资源目录与资源列表。"""
+
+    def __init__(self, *, id: str | None = None) -> None:
+        super().__init__(id=id)
+        self._snapshot: KubernetesMonitorSnapshot | None = None
+        self._kind: KubernetesResourceKind | None = None
+
+    def compose(self) -> ComposeResult:
+        yield Static(" LIVE · 正在连接 Kubernetes…", id="monitor-title")
+        yield Static(id="monitor-tabs")
+        yield DataTable(
+            cursor_type="row",
+            zebra_stripes=True,
+            id="monitor-table",
+        )
+        yield Static("等待第一次资源快照", id="monitor-status")
+
+    def on_mount(self) -> None:
+        self._render_tabs()
+        self._render_table()
+
+    def display_snapshot(self, snapshot: KubernetesMonitorSnapshot) -> None:
+        self._snapshot = snapshot
+        diagnostic_status = f" · {snapshot.finding_count} findings"
+        if snapshot.diagnostic_errors:
+            diagnostic_status += " · diagnostics partial"
+        self.query_one("#monitor-status", Static).update(
+            f"最近刷新 {snapshot.observed_at.astimezone():%H:%M:%S}"
+            f"{diagnostic_status} · Enter Health · d Describe · l Logs(Pod)"
+        )
+        self._render_title()
+        self._render_tabs()
+        self._render_table()
+
+    def display_error(self, message: str) -> None:
+        self.query_one("#monitor-title", Static).update(
+            f" LIVE · {_kind_label(self._snapshot, self._kind)} · 暂时不可用"
+        )
+        self.query_one("#monitor-status", Static).update(f"刷新失败：{message}")
+
+    def show_overview(self) -> None:
+        self._kind = None
+        self._render_all()
+
+    def show_kind(self, kind: KubernetesResourceKind) -> None:
+        self._kind = kind
+        self._render_all()
+
+    def focus_table(self) -> None:
+        self.query_one("#monitor-table", DataTable).focus()
+
+    def refresh_theme(self) -> None:
+        self._render_tabs()
+        self._render_table()
+
+    def open_selected_overview_kind(self) -> bool:
+        snapshot = self._snapshot
+        table = self.query_one("#monitor-table", DataTable)
+        if (
+            self._kind is not None
+            or snapshot is None
+            or not 0 <= table.cursor_row < len(snapshot.resources)
+        ):
+            return False
+        self.show_kind(snapshot.resources[table.cursor_row].kind)
+        return True
+
+    def selected_resource(self) -> KubernetesResourceRef | None:
+        collection = self._current_collection()
+        table = self.query_one("#monitor-table", DataTable)
+        if collection is None or not 0 <= table.cursor_row < len(collection.rows):
+            return None
+        return collection.rows[table.cursor_row].ref
+
+    def _render_all(self) -> None:
+        self._render_title()
+        self._render_tabs()
+        self._render_table()
+
+    def _render_title(self) -> None:
+        snapshot = self._snapshot
+        title = " LIVE · Namespace"
+        if snapshot is not None:
+            title += f" {snapshot.namespace}"
+        title += f" · {_kind_label(snapshot, self._kind)}"
+        if snapshot is not None:
+            if self._kind is None:
+                total = sum(len(resource.rows) for resource in snapshot.resources)
+                title += f" · {total} resources · {snapshot.finding_count} findings"
+            elif (collection := self._current_collection()) is not None:
+                title += (
+                    " · Unavailable"
+                    if collection.error is not None
+                    else f" · {len(collection.rows)}"
+                )
+        self.query_one("#monitor-title", Static).update(title)
+
+    def _render_tabs(self) -> None:
+        theme = self.app.current_theme
+        selected_color = theme.accent or theme.primary
+        idle_color = theme.foreground or theme.primary
+        labels = [("0", "Overview", self._kind is None)]
+        if self._snapshot is not None:
+            labels.extend(
+                (
+                    resource.shortcut,
+                    resource.label.removesuffix("ments").removesuffix("Sets"),
+                    resource.kind is self._kind,
+                )
+                for resource in self._snapshot.resources
+                if resource.shortcut is not None
+            )
+        tabs = [
+            (
+                f"[bold {selected_color}]{shortcut} {label}[/]"
+                if selected
+                else f"[{idle_color}]{shortcut} {label}[/]"
+            )
+            for shortcut, label, selected in labels
+        ]
+        tabs.append(f"[{idle_color}]↑/↓ Enter 健康[/]")
+        self.query_one("#monitor-tabs", Static).update("  ".join(tabs))
+
+    def _render_table(self) -> None:
+        table = self.query_one("#monitor-table", DataTable)
+        selected_row_key = _selected_row_key(table)
+        table.clear(columns=True)
+        snapshot = self._snapshot
+        if self._kind is None:
+            table.add_columns("RESOURCE", "COUNT", "READY", "FINDINGS", "STATUS")
+            if snapshot is not None:
+                theme = self.app.current_theme
+                for collection in snapshot.resources:
+                    count, ready, status, healthy = _collection_status(collection)
+                    finding_count = sum(
+                        diagnostic.ref.kind is collection.kind
+                        for diagnostic in snapshot.diagnostics
+                    )
+                    table.add_row(
+                        collection.label,
+                        count,
+                        ready,
+                        str(finding_count),
+                        _health_text(
+                            status,
+                            healthy,
+                            success=theme.success,
+                            warning=theme.warning,
+                            neutral=theme.foreground,
+                        ),
+                        key=collection.kind.value,
+                    )
+        else:
+            collection = self._current_collection()
+            if collection is None:
+                table.add_column("RESOURCE")
+            else:
+                table.add_columns(
+                    collection.columns[0],
+                    "DIAGNOSIS",
+                    *collection.columns[1:],
+                )
+                if collection.error is not None:
+                    table.add_row(
+                        Text(
+                            "Unavailable",
+                            style=self.app.current_theme.warning,
+                        ),
+                        collection.error,
+                        *("-" for _ in collection.columns[1:]),
+                    )
+                else:
+                    theme = self.app.current_theme
+                    for row in collection.rows:
+                        has_findings = bool(row.health_reasons)
+                        name_style = (
+                            theme.warning
+                            if row.healthy is False or has_findings
+                            else theme.success
+                            if row.healthy is True
+                            else theme.foreground
+                        )
+                        values = (
+                            Text(row.values[0], style=name_style),
+                            _diagnosis_text(
+                                row,
+                                success=theme.success,
+                                warning=theme.warning,
+                                neutral=theme.foreground,
+                            ),
+                            *row.values[1:],
+                        )
+                        table.add_row(
+                            *values,
+                            key=f"{row.ref.kind.value}:{row.ref.name}",
+                        )
+        _restore_selected_row(table, selected_row_key)
+
+    def _current_collection(self) -> KubernetesResourceCollection | None:
+        if self._snapshot is None or self._kind is None:
+            return None
+        return self._snapshot.collection(self._kind)
+
+
+def _kind_label(
+    snapshot: KubernetesMonitorSnapshot | None,
+    kind: KubernetesResourceKind | None,
+) -> str:
+    if kind is None:
+        return "Overview"
+    if snapshot is not None and (collection := snapshot.collection(kind)) is not None:
+        return collection.label
+    return str(kind)
+
+
+def _selected_row_key(table: DataTable) -> RowKey | None:
+    if not table.is_valid_coordinate(table.cursor_coordinate):
+        return None
+    return table.coordinate_to_cell_key(table.cursor_coordinate).row_key
+
+
+def _restore_selected_row(table: DataTable, row_key: RowKey | None) -> None:
+    if row_key is None:
+        return
+    try:
+        row_index = table.get_row_index(row_key)
+    except RowDoesNotExist:
+        return
+    table.move_cursor(row=row_index)
+
+
+def _collection_status(
+    collection: KubernetesResourceCollection,
+) -> tuple[str, str, str, bool | None]:
+    if collection.error is not None:
+        return "-", "-", "Unavailable", False
+    count = len(collection.rows)
+    if count == 0:
+        return "0", "-", "Empty", None
+    health = [row.healthy for row in collection.rows if row.healthy is not None]
+    if not health:
+        return str(count), "-", "Inventory", None
+    ready = sum(health)
+    healthy = ready == len(health)
+    return (
+        str(count),
+        f"{ready}/{len(health)}",
+        "Healthy" if healthy else "Attention",
+        healthy,
+    )
+
+
+def _health_text(
+    label: str,
+    healthy: bool | None,
+    *,
+    success: str | None,
+    warning: str | None,
+    neutral: str | None,
+) -> Text:
+    style = success if healthy is True else warning if healthy is False else neutral
+    return Text(label, style=style)
+
+
+def _diagnosis_text(
+    row: KubernetesResourceRow,
+    *,
+    success: str | None,
+    warning: str | None,
+    neutral: str | None,
+) -> Text:
+    if row.health_reasons:
+        reason = row.health_reasons[0]
+        remaining = len(row.health_reasons) - 1
+        suffix = f" · +{remaining}" if remaining else ""
+        return Text(f"WARN · {reason}{suffix}", style=warning)
+    if row.healthy is False:
+        return Text("WARN", style=warning)
+    if row.healthy is True:
+        return Text("OK", style=success)
+    return Text("—", style=neutral)

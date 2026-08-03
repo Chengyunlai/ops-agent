@@ -105,12 +105,12 @@ apps/cli/src/ops_agent_cli/
 依赖方向应保持：
 
 ```text
-Textual UI -> OpsAgent.ask() -> harness 主图/专业 Agent
+Textual UI -> OpsAgent.ask() -> runtime core 主图/专业 Agent
 ```
 
 TUI 不应导入 `agent.orchestration`、LangGraph state、Kubernetes reader 或
 具体 tool。UI state 只描述输入、选中项、busy/error/result 等显示状态；
-Graph state 仍只属于 harness。这样未来 API、Web UI 或不同 TUI 布局都能复用
+Graph state 仍只属于 runtime core。这样未来 API、Web UI 或不同 TUI 布局都能复用
 核心能力。
 
 ## 最小 tracer-bullet MVP
@@ -136,7 +136,7 @@ Graph state 仍只属于 harness。这样未来 API、Web UI 或不同 TUI 布�
 ## 不推荐的方向
 
 - 不 fork 或嵌入 k9s/KDash/kubetui：语言、发布模型和现有 Python 核心不匹配。
-- 不把 TUI 放入 `packages/harness`：展示生命周期会污染可复用 Agent 能力。
+- 不把 TUI 放入 `packages/runtime`：展示生命周期会污染可复用 Agent 能力。
 - 不让 UI 直接调用 Kubernetes SDK：会绕过当前固定 namespace、只读工具和
   证据校验边界。
 - 不在 MVP 同时实现资源 watch 与 Agent 对话：两类长期任务一起落地会掩盖

@@ -5,8 +5,10 @@ license = "Apache-2.0"
 requires-python = ">=3.12"
 dependencies = [
     "langchain[openai]>=1.0,<2",
-    "ops_agent_harness",
+    "ops_agent_runtime",
+    "pydantic>=2.13,<3",
     "textual>=8.2,<9",
+    "tomli-w>=1.2,<2",
 ]
 
 [project.scripts]
@@ -14,7 +16,7 @@ ops-agent = "ops_agent_cli.main:main"
 ops_agent = "ops_agent_cli.main:main"
 
 [tool.uv.sources]
-ops_agent_harness = { workspace = true }
+ops_agent_runtime = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

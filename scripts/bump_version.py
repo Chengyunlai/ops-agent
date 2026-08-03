@@ -17,7 +17,7 @@ _DECLARATIONS = (
         'version = "{version}"',
     ),
     (
-        Path("packages/harness/pyproject.toml"),
+        Path("packages/runtime/pyproject.toml"),
         re.compile(r'^version = "[^"]+"$', re.MULTILINE),
         'version = "{version}"',
     ),

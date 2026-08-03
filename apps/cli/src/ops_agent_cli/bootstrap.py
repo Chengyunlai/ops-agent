@@ -5,10 +5,11 @@ from pathlib import Path
 from langchain.chat_models import init_chat_model
 from langchain_core.language_models import BaseChatModel
 from ops_agent.agent import OpsAgent, create_ops_agent
+from ops_agent.agent.specialists.kubernetes import create_kubernetes_tools
 from ops_agent.kubernetes import create_kubernetes_reader
 from ops_agent.monitoring import KubernetesMonitor
-from ops_agent.settings import ModelSettings, Settings, load_settings
-from ops_agent.tools import create_kubernetes_tools
+
+from ops_agent_cli.configuration import ModelSettings, Settings, load_settings
 
 
 class BootstrapError(Exception):

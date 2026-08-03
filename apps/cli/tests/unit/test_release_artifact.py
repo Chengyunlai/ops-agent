@@ -20,8 +20,8 @@ def test_release_metadata_uses_application_version_and_installable_entry_points(
     root_project = tomllib.loads(
         (REPOSITORY_ROOT / "pyproject.toml").read_text(encoding="utf-8")
     )
-    harness_project = tomllib.loads(
-        (REPOSITORY_ROOT / "packages/harness/pyproject.toml").read_text(
+    runtime_project = tomllib.loads(
+        (REPOSITORY_ROOT / "packages/runtime/pyproject.toml").read_text(
             encoding="utf-8"
         )
     )
@@ -30,11 +30,11 @@ def test_release_metadata_uses_application_version_and_installable_entry_points(
     )
 
     assert root_project["project"]["version"] == __version__
-    assert harness_project["project"]["version"] == __version__
+    assert runtime_project["project"]["version"] == __version__
     assert cli_project["project"]["dynamic"] == ["version"]
     assert {
         root_project["project"]["license"],
-        harness_project["project"]["license"],
+        runtime_project["project"]["license"],
         cli_project["project"]["license"],
     } == {"Apache-2.0"}
     assert cli_project["project"]["scripts"] == {
@@ -43,7 +43,7 @@ def test_release_metadata_uses_application_version_and_installable_entry_points(
     }
     assert {
         root_project["project"]["requires-python"],
-        harness_project["project"]["requires-python"],
+        runtime_project["project"]["requires-python"],
         cli_project["project"]["requires-python"],
     } == {">=3.12"}
 
@@ -145,7 +145,7 @@ def test_bump_version_updates_all_lockstep_declarations(tmp_path: Path) -> None:
     paths = (
         Path("apps/cli/src/ops_agent_cli/__init__.py"),
         Path("pyproject.toml"),
-        Path("packages/harness/pyproject.toml"),
+        Path("packages/runtime/pyproject.toml"),
     )
     for relative_path in paths:
         destination = tmp_path / relative_path

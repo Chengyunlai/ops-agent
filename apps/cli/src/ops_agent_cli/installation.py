@@ -9,7 +9,8 @@ from importlib.resources import files
 from pathlib import Path
 
 from ops_agent.kubernetes import KubernetesError, create_kubernetes_reader
-from ops_agent.settings import SettingsError, load_settings
+
+from ops_agent_cli.configuration import SettingsError, load_settings
 
 CONFIG_ENVIRONMENT_VARIABLE = "OPS_AGENT_CONFIG"
 

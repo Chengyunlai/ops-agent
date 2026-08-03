@@ -12,7 +12,6 @@ from ops_agent.monitoring import (
     KubernetesResourceRef,
     VolumeDirectory,
 )
-from ops_agent.settings import Settings, TuiSettings
 from textual import events, on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -21,16 +20,19 @@ from textual.timer import Timer
 from textual.widgets import Button, DataTable, Input, Static
 from urllib3.exceptions import InsecureRequestWarning
 
-from ops_agent_cli.pod_access import (
+from ops_agent_cli.configuration import Settings, TuiSettings
+from ops_agent_cli.manual_access import (
     DownloadResult,
     InteractiveSessionResult,
     KubectlPodAccess,
 )
 from ops_agent_cli.tui.chat import ChatTranscript
-from ops_agent_cli.tui.monitor import MonitorPane, ResourceViewer, VolumeBrowser
-from ops_agent_cli.tui.pod_access import (
+from ops_agent_cli.tui.resources import (
+    MonitorPane,
     PodAccessDialog,
     PodAccessRequest,
+    ResourceViewer,
+    VolumeBrowser,
 )
 from ops_agent_cli.tui.settings import SettingsScreen
 from ops_agent_cli.tui.terminal import set_terminal_mouse_capture

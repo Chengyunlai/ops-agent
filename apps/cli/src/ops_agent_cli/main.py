@@ -4,10 +4,10 @@ from pathlib import Path
 
 from ops_agent.agent import ApplicationError
 from ops_agent.kubernetes import KubernetesError
-from ops_agent.settings import SettingsError, load_settings
 
 from ops_agent_cli import __version__
 from ops_agent_cli.bootstrap import BootstrapError, create_application
+from ops_agent_cli.configuration import SettingsError, load_settings
 from ops_agent_cli.installation import (
     InstallationError,
     diagnose_installation,

@@ -27,10 +27,13 @@ ops_agent_cli = { workspace = true }
 [tool.uv.workspace]
 members = [
     "apps/cli",
-    "packages/harness",
+    "packages/runtime",
 ]
 
 [tool.pytest.ini_options]
+addopts = [
+    "--import-mode=importlib",
+]
 testpaths = [
     "apps",
     "packages",
