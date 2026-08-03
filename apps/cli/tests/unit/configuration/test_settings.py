@@ -138,6 +138,7 @@ def test_load_settings_parses_watch_refresh_configuration(tmp_path: Path) -> Non
         ("timeout_seconds", "0"),
         ("timeout_seconds", "1.5"),
         ("poll_interval_seconds", "0"),
+        ("poll_interval_seconds", "inf"),
         ("poll_interval_seconds", '"5"'),
     ],
 )

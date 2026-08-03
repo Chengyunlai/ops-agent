@@ -13,7 +13,6 @@ from ops_agent.agent import (
     InteractionChannel,
 )
 from ops_agent.kubernetes import (
-    KubernetesChangeSignal,
     KubernetesResourceKind,
     KubernetesWatchOutcome,
     KubernetesWatchResult,
@@ -1571,11 +1570,6 @@ def test_tui_refreshes_monitor_when_watch_reports_change() -> None:
                 self.snapshot_ready.wait(timeout=1)
                 return KubernetesWatchResult(
                     outcome=KubernetesWatchOutcome.CHANGED,
-                    change=KubernetesChangeSignal(
-                        resource_kind=KubernetesResourceKind.POD,
-                        event_type="MODIFIED",
-                        resource_name="sample-api-7f8",
-                    ),
                 )
             if stop_event is not None:
                 stop_event.wait(timeout=timeout_seconds)
@@ -1641,7 +1635,13 @@ def test_tui_watch_refresh_preserves_selected_monitor_resource() -> None:
                         kind=KubernetesResourceKind.POD,
                         name=name,
                     ),
-                    values=(name, "1/1", "Running", "0", "1h"),
+                    values=(
+                        name,
+                        "1/1",
+                        f"Running · {'diagnostic-context-' * 8}",
+                        "0",
+                        "1h",
+                    ),
                     healthy=True,
                 )
                 for name in names
@@ -1663,11 +1663,6 @@ def test_tui_watch_refresh_preserves_selected_monitor_resource() -> None:
                 self.release_change.wait(timeout=1)
                 return KubernetesWatchResult(
                     outcome=KubernetesWatchOutcome.CHANGED,
-                    change=KubernetesChangeSignal(
-                        resource_kind=KubernetesResourceKind.POD,
-                        event_type="MODIFIED",
-                        resource_name="sample-worker-0",
-                    ),
                 )
             if stop_event is not None:
                 stop_event.wait(timeout=timeout_seconds)
@@ -1706,6 +1701,15 @@ def test_tui_watch_refresh_preserves_selected_monitor_resource() -> None:
             assert str(table.get_cell_at(Coordinate(table.cursor_row, 0))) == (
                 "sample-worker-0"
             )
+            table.scroll_to(
+                x=20,
+                animate=False,
+                force=True,
+                immediate=True,
+            )
+            await pilot.pause()
+            scroll_x = table.scroll_x
+            assert scroll_x > 0
 
             monitor.release_change.set()
             await _wait_until(lambda: monitor.calls >= 2)
@@ -1714,6 +1718,7 @@ def test_tui_watch_refresh_preserves_selected_monitor_resource() -> None:
             assert str(table.get_cell_at(Coordinate(table.cursor_row, 0))) == (
                 "sample-worker-0"
             )
+            assert table.scroll_x == scroll_x
 
     asyncio.run(exercise())
 

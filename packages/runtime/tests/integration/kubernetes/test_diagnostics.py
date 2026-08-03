@@ -7,7 +7,6 @@ from ops_agent.diagnostics import DiagnosisReport
 from ops_agent.kubernetes import (
     KubernetesError,
     KubernetesReader,
-    KubernetesResourceKind,
     KubernetesWatchOutcome,
     ServiceEndpointSource,
 )
@@ -108,9 +107,6 @@ def test_watch_reports_live_pod_change(
 
     assert not trigger.is_alive()
     assert result.outcome is KubernetesWatchOutcome.CHANGED
-    assert result.change is not None
-    assert result.change.resource_kind is KubernetesResourceKind.POD
-    assert result.change.resource_name == "diagnostics-ready"
 
 
 def test_endpoint_slice_preserves_service_to_pod_topology(

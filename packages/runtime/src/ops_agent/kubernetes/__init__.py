@@ -31,7 +31,6 @@ from ops_agent.kubernetes.models import (
     VolumeFilePreview,
 )
 from ops_agent.kubernetes.observations import (
-    KubernetesChangeSignal,
     KubernetesWatchOutcome,
     KubernetesWatchResult,
 )
@@ -50,7 +49,6 @@ __all__ = [
     "DeploymentSummary",
     "IngressSummary",
     "JobSummary",
-    "KubernetesChangeSignal",
     "KubernetesConnectionSettings",
     "KubernetesError",
     "KubernetesEventSummary",

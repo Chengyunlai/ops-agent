@@ -11,7 +11,6 @@ from ops_agent.kubernetes import (
     DeploymentSummary,
     IngressSummary,
     JobSummary,
-    KubernetesChangeSignal,
     KubernetesWatchOutcome,
     KubernetesWatchResult,
     PersistentVolumeClaimSummary,
@@ -344,14 +343,7 @@ def test_monitor_waits_for_change_without_exposing_namespace() -> None:
             self.calls.append(("stop_watch", "sample"))
 
     expected_stop = Event()
-    expected_result = KubernetesWatchResult(
-        outcome=KubernetesWatchOutcome.CHANGED,
-        change=KubernetesChangeSignal(
-            resource_kind=KubernetesResourceKind.POD,
-            event_type="MODIFIED",
-            resource_name="sample-api",
-        ),
-    )
+    expected_result = KubernetesWatchResult(outcome=KubernetesWatchOutcome.CHANGED)
     source = WatchableSource()
     monitor = KubernetesMonitor(source, namespace="sample")
 

@@ -25,7 +25,7 @@ _PositiveInteger = Annotated[
 ]
 _PositiveNumber = Annotated[
     StrictFloat,
-    Field(gt=0),
+    Field(gt=0, allow_inf_nan=False),
 ]
 _HexColor = Annotated[
     StrictStr,

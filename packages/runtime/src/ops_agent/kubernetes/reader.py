@@ -50,7 +50,6 @@ from ops_agent.kubernetes.models import (
     VolumeFilePreview,
 )
 from ops_agent.kubernetes.observations import (
-    KubernetesChangeSignal,
     KubernetesWatchOutcome,
     KubernetesWatchResult,
 )
@@ -130,6 +129,13 @@ class KubernetesReader:
             return KubernetesWatchResult(
                 outcome=KubernetesWatchOutcome.STOPPED,
             )
+        if not self._pod_resource_version:
+            return KubernetesWatchResult(
+                outcome=KubernetesWatchOutcome.UNAVAILABLE,
+                unavailable_reason=(
+                    "Pod Watch requires a successful list resourceVersion"
+                ),
+            )
         watcher = self._watch_factory()
         with self._watch_lock:
             self._active_watcher = watcher
@@ -138,8 +144,7 @@ class KubernetesReader:
             "timeout_seconds": timeout_seconds,
             "_request_timeout": timeout_seconds + self._request_timeout_seconds,
         }
-        if self._pod_resource_version is not None:
-            kwargs["resource_version"] = self._pod_resource_version
+        kwargs["resource_version"] = self._pod_resource_version
         try:
             if stop_event is not None and stop_event.is_set():
                 return KubernetesWatchResult(
@@ -153,7 +158,6 @@ class KubernetesReader:
                     return KubernetesWatchResult(
                         outcome=KubernetesWatchOutcome.STOPPED,
                     )
-                event_type = str(event.get("type", "UNKNOWN"))
                 resource = event.get("object")
                 metadata = getattr(resource, "metadata", None)
                 resource_version = getattr(metadata, "resource_version", None)
@@ -161,11 +165,6 @@ class KubernetesReader:
                     self._pod_resource_version = str(resource_version)
                 return KubernetesWatchResult(
                     outcome=KubernetesWatchOutcome.CHANGED,
-                    change=KubernetesChangeSignal(
-                        resource_kind=KubernetesResourceKind.POD,
-                        event_type=event_type,
-                        resource_name=getattr(metadata, "name", None),
-                    ),
                 )
             return KubernetesWatchResult(
                 outcome=KubernetesWatchOutcome.TIMED_OUT,
