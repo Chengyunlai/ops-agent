@@ -1,5 +1,6 @@
 import json
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import date, datetime
 from typing import TypeVar
 
@@ -9,6 +10,7 @@ from kubernetes.client import (
     BatchV1Api,
     Configuration,
     CoreV1Api,
+    DiscoveryV1Api,
     NetworkingV1Api,
 )
 from kubernetes.client.exceptions import ApiException
@@ -30,6 +32,7 @@ from ops_agent.kubernetes.models import (
     PodDetails,
     PodSummary,
     ReplicaSetSummary,
+    ServiceEndpointSummary,
     ServicePortSummary,
     ServiceSummary,
     StatefulSetSummary,
@@ -42,6 +45,13 @@ from ops_agent.settings import KubernetesSettings
 Result = TypeVar("Result")
 
 
+@dataclass
+class _ServiceEndpointCounts:
+    ready_addresses: int = 0
+    not_ready_addresses: int = 0
+    endpoint_slice_count: int = 0
+
+
 class KubernetesReader:
     def __init__(
         self,
@@ -50,12 +60,14 @@ class KubernetesReader:
         request_timeout_seconds: int,
         batch_api: BatchV1Api | None = None,
         networking_api: NetworkingV1Api | None = None,
+        discovery_api: DiscoveryV1Api | None = None,
         pod_executor: Callable[..., str] | None = None,
     ) -> None:
         self._core_api = core_api
         self._apps_api = apps_api
         self._batch_api = batch_api
         self._networking_api = networking_api
+        self._discovery_api = discovery_api
         self._request_timeout_seconds = request_timeout_seconds
         self._storage = KubernetesStorageReader(
             core_api=core_api,
@@ -232,6 +244,43 @@ class KubernetesReader:
             ),
         )
         return [_to_service_summary(service) for service in response.items]
+
+    def list_service_endpoints(
+        self,
+        namespace: str,
+    ) -> list[ServiceEndpointSummary]:
+        discovery_api = self._require_api(self._discovery_api, "DiscoveryV1Api")
+        response = self._request(
+            f"查询 namespace '{namespace}' 的 EndpointSlice 失败",
+            lambda: discovery_api.list_namespaced_endpoint_slice(
+                namespace=namespace,
+                _request_timeout=self._request_timeout_seconds,
+            ),
+        )
+        totals: dict[str, _ServiceEndpointCounts] = {}
+        for endpoint_slice in response.items:
+            labels = endpoint_slice.metadata.labels or {}
+            service_name = labels.get("kubernetes.io/service-name")
+            if not service_name:
+                continue
+            summary = totals.setdefault(service_name, _ServiceEndpointCounts())
+            summary.endpoint_slice_count += 1
+            for endpoint in endpoint_slice.endpoints or []:
+                address_count = len(endpoint.addresses or [])
+                conditions = getattr(endpoint, "conditions", None)
+                if getattr(conditions, "ready", None) is False:
+                    summary.not_ready_addresses += address_count
+                else:
+                    summary.ready_addresses += address_count
+        return [
+            ServiceEndpointSummary(
+                service_name=service_name,
+                ready_addresses=counts.ready_addresses,
+                not_ready_addresses=counts.not_ready_addresses,
+                endpoint_slice_count=counts.endpoint_slice_count,
+            )
+            for service_name, counts in sorted(totals.items())
+        ]
 
     def list_jobs(self, namespace: str) -> list[JobSummary]:
         batch_api = self._require_api(self._batch_api, "BatchV1Api")
@@ -442,6 +491,7 @@ def create_kubernetes_reader(
         apps_api=AppsV1Api(api_client),
         batch_api=BatchV1Api(api_client),
         networking_api=NetworkingV1Api(api_client),
+        discovery_api=DiscoveryV1Api(api_client),
         request_timeout_seconds=settings.request_timeout_seconds,
         pod_executor=execute_pod_command,
     )

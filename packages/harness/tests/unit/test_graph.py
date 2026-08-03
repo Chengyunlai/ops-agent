@@ -155,6 +155,7 @@ def create_test_kubernetes_tools() -> list[BaseTool]:
             "list_kubernetes_deployments",
             "list_kubernetes_events",
             "list_kubernetes_pods",
+            "list_kubernetes_service_endpoints",
             "list_kubernetes_services",
         )
     ]
@@ -164,6 +165,13 @@ def create_test_pod_tools() -> list[BaseTool]:
     return [
         create_test_kubernetes_tool("get_kubernetes_pod_details"),
         create_test_kubernetes_tool("list_kubernetes_pods"),
+    ]
+
+
+def create_test_service_tools() -> list[BaseTool]:
+    return [
+        create_test_kubernetes_tool("list_kubernetes_service_endpoints"),
+        create_test_kubernetes_tool("list_kubernetes_services"),
     ]
 
 
@@ -265,6 +273,7 @@ def test_kubernetes_scoped_session_understands_contextual_service_count(
     session = create_ops_agent(
         model,
         [
+            create_test_kubernetes_tool("list_kubernetes_service_endpoints"),
             create_test_kubernetes_tool("list_kubernetes_services"),
             create_test_kubernetes_tool(),
         ],
@@ -290,8 +299,8 @@ def test_kubernetes_scoped_session_understands_contextual_service_count(
     assert events[-1].answer == "sample namespace 中有 4 个 Service"
     assert model.bound_tool_names == [
         ["IntentProposal"],
-        ["list_kubernetes_services"],
-        ["list_kubernetes_services"],
+        ["list_kubernetes_service_endpoints", "list_kubernetes_services"],
+        ["list_kubernetes_service_endpoints", "list_kubernetes_services"],
     ]
     assert not any(
         "可信执行上下文" in content for content in model.received_message_contents[-1]
@@ -351,7 +360,7 @@ def test_kubernetes_session_accepts_json_intent_from_compatible_model(
     )
     session = create_ops_agent(
         model,
-        [create_test_kubernetes_tool("list_kubernetes_services")],
+        create_test_service_tools(),
     ).open_session(
         InteractionContext(
             channel=InteractionChannel.TUI,
@@ -390,7 +399,7 @@ def test_kubernetes_session_rejects_wrapped_or_multiple_json_intents(
     model = RecordingToolCallingModel(responses=[AIMessage(content=intent_content)])
     session = create_ops_agent(
         model,
-        [create_test_kubernetes_tool("list_kubernetes_services")],
+        create_test_service_tools(),
     ).open_session(
         InteractionContext(
             channel=InteractionChannel.TUI,
@@ -473,7 +482,7 @@ def test_kubernetes_scope_rejects_clear_non_operations_requests(
     )
     session = create_ops_agent(
         model,
-        [create_test_kubernetes_tool("list_kubernetes_services")],
+        create_test_service_tools(),
     ).open_session(
         InteractionContext(
             channel=InteractionChannel.TUI,
@@ -514,7 +523,7 @@ def test_kubernetes_scope_does_not_accept_requested_scope_override(
     )
     session = create_ops_agent(
         model,
-        [create_test_kubernetes_tool("list_kubernetes_services")],
+        create_test_service_tools(),
     ).open_session(
         InteractionContext(
             channel=InteractionChannel.TUI,
@@ -537,8 +546,8 @@ def test_kubernetes_scope_does_not_accept_requested_scope_override(
     assert confirmed_answer == "sample namespace 中有 4 个 Service"
     assert model.bound_tool_names == [
         ["IntentProposal"],
-        ["list_kubernetes_services"],
-        ["list_kubernetes_services"],
+        ["list_kubernetes_service_endpoints", "list_kubernetes_services"],
+        ["list_kubernetes_service_endpoints", "list_kubernetes_services"],
     ]
 
 
@@ -556,7 +565,7 @@ def test_kubernetes_scope_accepts_matching_chinese_environment() -> None:
     )
     session = create_ops_agent(
         model,
-        [create_test_kubernetes_tool("list_kubernetes_services")],
+        create_test_service_tools(),
     ).open_session(
         InteractionContext(
             channel=InteractionChannel.TUI,
@@ -598,7 +607,7 @@ def test_auto_scope_accepts_confirmation_with_conversation_history() -> None:
     )
     session = create_ops_agent(
         model,
-        [create_test_kubernetes_tool("list_kubernetes_services")],
+        create_test_service_tools(),
     ).open_session(InteractionContext())
 
     clarification = session.ask("现在有几个服务")
@@ -634,7 +643,7 @@ def test_referential_follow_up_keeps_previous_capability() -> None:
     )
     session = create_ops_agent(
         model,
-        [create_test_kubernetes_tool("list_kubernetes_services")],
+        create_test_service_tools(),
     ).open_session(
         InteractionContext(
             channel=InteractionChannel.TUI,
@@ -650,10 +659,10 @@ def test_referential_follow_up_keeps_previous_capability() -> None:
     assert answer == "其中 sample-api Service 需要检查"
     assert model.bound_tool_names == [
         ["IntentProposal"],
-        ["list_kubernetes_services"],
-        ["list_kubernetes_services"],
-        ["list_kubernetes_services"],
-        ["list_kubernetes_services"],
+        ["list_kubernetes_service_endpoints", "list_kubernetes_services"],
+        ["list_kubernetes_service_endpoints", "list_kubernetes_services"],
+        ["list_kubernetes_service_endpoints", "list_kubernetes_services"],
+        ["list_kubernetes_service_endpoints", "list_kubernetes_services"],
     ]
 
 
@@ -678,7 +687,7 @@ def test_auto_scope_referential_follow_up_uses_previous_capability() -> None:
     )
     session = create_ops_agent(
         model,
-        [create_test_kubernetes_tool("list_kubernetes_services")],
+        create_test_service_tools(),
     ).open_session(InteractionContext())
 
     session.ask("查看 Kubernetes Service 状态")
@@ -721,8 +730,8 @@ def test_simple_service_request_cannot_expand_to_plan_capability(
     assert answer == "当前有 4 个 Kubernetes Service"
     assert model.bound_tool_names == [
         ["IntentProposal"],
-        ["list_kubernetes_services"],
-        ["list_kubernetes_services"],
+        ["list_kubernetes_service_endpoints", "list_kubernetes_services"],
+        ["list_kubernetes_service_endpoints", "list_kubernetes_services"],
     ]
 
 

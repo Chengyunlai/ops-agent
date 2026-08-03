@@ -221,6 +221,7 @@ _CAPABILITY_BINDINGS = (
                 "list_kubernetes_deployments",
                 "list_kubernetes_events",
                 "list_kubernetes_pods",
+                "list_kubernetes_service_endpoints",
                 "list_kubernetes_services",
             }
         ),
@@ -253,7 +254,12 @@ _CAPABILITY_BINDINGS = (
     _CapabilityBinding(
         capability=CapabilityId.KUBERNETES_SERVICES_READ,
         resources=frozenset({ResourceKind.SERVICE}),
-        tool_names=frozenset({"list_kubernetes_services"}),
+        tool_names=frozenset(
+            {
+                "list_kubernetes_service_endpoints",
+                "list_kubernetes_services",
+            }
+        ),
     ),
     _CapabilityBinding(
         capability=CapabilityId.KUBERNETES_EVENTS_READ,

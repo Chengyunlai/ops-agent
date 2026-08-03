@@ -1,7 +1,12 @@
 from dataclasses import dataclass
 from enum import StrEnum
 
-from ops_agent.kubernetes import DeploymentSummary, PodSummary
+from ops_agent.kubernetes import (
+    DeploymentSummary,
+    PodSummary,
+    ServiceEndpointSummary,
+    ServiceSummary,
+)
 
 
 class FindingSeverity(StrEnum):
@@ -28,6 +33,8 @@ class KubernetesSnapshot:
     namespace: str
     pods: tuple[PodSummary, ...]
     deployments: tuple[DeploymentSummary, ...]
+    services: tuple[ServiceSummary, ...] = ()
+    service_endpoints: tuple[ServiceEndpointSummary, ...] = ()
 
 
 @dataclass(frozen=True)

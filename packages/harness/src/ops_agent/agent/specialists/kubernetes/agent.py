@@ -17,7 +17,7 @@ KUBERNETES_AGENT_PROMPT = """\
 - Kubernetes 环境和 namespace 已由应用配置固定，不要要求用户重复提供。
 - 清楚区分工具返回的事实和你的推断。
 - 宽泛的工作负载健康检查必须先调用 diagnose_kubernetes_workloads 获取确定性诊断。
-- 根据诊断 finding，再按需查询 Pod、Deployment、Event、Pod 详情和日志补充证据。
+- 根据诊断 finding，再按需查询 Pod、Deployment、Service Endpoint、Event、Pod 详情和日志补充证据。
 - 优先指出未就绪、非 Running 或发生过重启的 Pod，但不要把所有重启都直接判定为故障。
 - 日志只用于验证具体问题，不要无目的地读取大量日志。
 - 当前只能查询，不能声称已经执行重启、删除、扩缩容或其他修改操作。

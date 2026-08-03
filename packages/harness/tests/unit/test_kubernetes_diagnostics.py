@@ -6,7 +6,12 @@ from ops_agent.diagnostics import (
     KubernetesSnapshot,
     diagnose_kubernetes_snapshot,
 )
-from ops_agent.kubernetes import DeploymentSummary, PodSummary
+from ops_agent.kubernetes import (
+    DeploymentSummary,
+    PodSummary,
+    ServiceEndpointSummary,
+    ServiceSummary,
+)
 
 
 def test_diagnosis_reports_pod_outside_running_phase() -> None:
@@ -108,6 +113,92 @@ def test_diagnosis_reports_deployment_with_missing_ready_replicas() -> None:
             ),
         ),
     )
+
+
+def test_diagnosis_reports_service_without_ready_endpoints() -> None:
+    snapshot = KubernetesSnapshot(
+        namespace="sample",
+        pods=(),
+        deployments=(),
+        services=(
+            ServiceSummary(
+                name="sample-api",
+                type="ClusterIP",
+                cluster_ip="10.43.0.10",
+                ports=[],
+            ),
+        ),
+        service_endpoints=(),
+    )
+
+    report = diagnose_kubernetes_snapshot(snapshot)
+
+    assert report.findings == (
+        Finding(
+            severity=FindingSeverity.WARNING,
+            resource_kind="Service",
+            resource_name="sample-api",
+            summary="Service 没有 Ready Endpoint",
+            evidence=(
+                Evidence(
+                    source="service_endpoints",
+                    message=(
+                        "type=ClusterIP, ready_addresses=0, "
+                        "not_ready_addresses=0, endpoint_slices=0"
+                    ),
+                ),
+            ),
+        ),
+    )
+
+
+def test_diagnosis_does_not_report_service_with_ready_endpoints() -> None:
+    snapshot = KubernetesSnapshot(
+        namespace="sample",
+        pods=(),
+        deployments=(),
+        services=(
+            ServiceSummary(
+                name="sample-api",
+                type="ClusterIP",
+                cluster_ip="10.43.0.10",
+                ports=[],
+            ),
+        ),
+        service_endpoints=(
+            ServiceEndpointSummary(
+                service_name="sample-api",
+                ready_addresses=2,
+                not_ready_addresses=1,
+                endpoint_slice_count=2,
+            ),
+        ),
+    )
+
+    report = diagnose_kubernetes_snapshot(snapshot)
+
+    assert report.findings == ()
+
+
+def test_diagnosis_does_not_report_external_name_without_endpoint_slices() -> None:
+    snapshot = KubernetesSnapshot(
+        namespace="sample",
+        pods=(),
+        deployments=(),
+        services=(
+            ServiceSummary(
+                name="external-api",
+                type="ExternalName",
+                cluster_ip=None,
+                ports=[],
+            ),
+        ),
+        service_endpoints=(),
+    )
+
+    report = diagnose_kubernetes_snapshot(snapshot)
+
+    assert report.findings == ()
 
 
 def test_diagnosis_does_not_report_healthy_resources() -> None:

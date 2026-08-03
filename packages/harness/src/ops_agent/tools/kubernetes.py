@@ -12,6 +12,7 @@ from ops_agent.kubernetes import (
     KubernetesEventSummary,
     PodDetails,
     PodSummary,
+    ServiceEndpointSummary,
     ServiceSummary,
 )
 
@@ -52,6 +53,11 @@ class KubernetesOperations(Protocol):
         namespace: str,
     ) -> list[ServiceSummary]: ...
 
+    def list_service_endpoints(
+        self,
+        namespace: str,
+    ) -> list[ServiceEndpointSummary]: ...
+
 
 def create_kubernetes_tools(
     reader: KubernetesOperations,
@@ -65,11 +71,13 @@ def create_kubernetes_tools(
 
     @tool("diagnose_kubernetes_workloads")
     def diagnose_kubernetes_workloads() -> dict[str, object]:
-        """诊断已配置 namespace 的 Pod 和 Deployment 基础健康状态。"""
+        """诊断已配置 namespace 的 Pod、Deployment 和 Service 健康状态。"""
         snapshot = KubernetesSnapshot(
             namespace=namespace,
             pods=tuple(reader.list_pods(namespace)),
             deployments=tuple(reader.list_deployments(namespace)),
+            services=tuple(reader.list_services(namespace)),
+            service_endpoints=tuple(reader.list_service_endpoints(namespace)),
         )
         return asdict(diagnose_kubernetes_snapshot(snapshot))
 
@@ -131,6 +139,13 @@ def create_kubernetes_tools(
         """列出已配置 namespace 的 Service、ClusterIP 和端口。"""
         return [asdict(service) for service in reader.list_services(namespace)]
 
+    @tool("list_kubernetes_service_endpoints")
+    def list_kubernetes_service_endpoints() -> list[dict[str, object]]:
+        """列出已配置 namespace 的 Service Endpoint 就绪统计。"""
+        return [
+            asdict(endpoints) for endpoints in reader.list_service_endpoints(namespace)
+        ]
+
     return [
         list_kubernetes_pods,
         diagnose_kubernetes_workloads,
@@ -139,6 +154,7 @@ def create_kubernetes_tools(
         list_kubernetes_events,
         list_kubernetes_deployments,
         list_kubernetes_services,
+        list_kubernetes_service_endpoints,
     ]
 
 

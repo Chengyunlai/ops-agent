@@ -5,6 +5,7 @@ from ops_agent.kubernetes import (
     KubernetesEventSummary,
     PodDetails,
     PodSummary,
+    ServiceEndpointSummary,
     ServiceSummary,
 )
 from ops_agent.tools import create_kubernetes_tools
@@ -110,6 +111,20 @@ class FakeKubernetesOperations:
             )
         ]
 
+    def list_service_endpoints(
+        self,
+        namespace: str,
+    ) -> list[ServiceEndpointSummary]:
+        self.calls.append(("list_service_endpoints", namespace))
+        return [
+            ServiceEndpointSummary(
+                service_name="sample-api",
+                ready_addresses=1,
+                not_ready_addresses=0,
+                endpoint_slice_count=1,
+            )
+        ]
+
 
 def create_tools():
     operations = FakeKubernetesOperations()
@@ -134,6 +149,7 @@ def test_kubernetes_tools_expose_read_only_operations() -> None:
         "list_kubernetes_events",
         "list_kubernetes_deployments",
         "list_kubernetes_services",
+        "list_kubernetes_service_endpoints",
     }
 
 
@@ -172,6 +188,8 @@ def test_diagnosis_tool_reports_findings_from_configured_namespace() -> None:
     assert operations.calls == [
         ("list_pods", "sample"),
         ("list_deployments", "sample"),
+        ("list_services", "sample"),
+        ("list_service_endpoints", "sample"),
     ]
 
 
@@ -203,14 +221,17 @@ def test_events_deployments_and_services_tools_are_structured() -> None:
     )
     deployments = tools["list_kubernetes_deployments"].invoke({})
     services = tools["list_kubernetes_services"].invoke({})
+    endpoints = tools["list_kubernetes_service_endpoints"].invoke({})
 
     assert events[0]["reason"] == "BackOff"
     assert deployments[0]["ready_replicas"] == 2
     assert services[0]["cluster_ip"] == "10.43.0.10"
+    assert endpoints[0]["ready_addresses"] == 1
     assert operations.calls == [
         ("list_events", ("sample", "sample-api", 20)),
         ("list_deployments", "sample"),
         ("list_services", "sample"),
+        ("list_service_endpoints", "sample"),
     ]
 
 

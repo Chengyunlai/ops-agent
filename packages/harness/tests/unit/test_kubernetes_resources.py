@@ -18,6 +18,7 @@ from ops_agent.kubernetes import (
     PersistentVolumeMountSummary,
     PodDetails,
     ReplicaSetSummary,
+    ServiceEndpointSummary,
     ServicePortSummary,
     ServiceSummary,
     StatefulSetSummary,
@@ -353,6 +354,54 @@ class FakeNetworkingV1Api:
         )
 
 
+class FakeDiscoveryV1Api:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, object]]] = []
+
+    def list_namespaced_endpoint_slice(self, **kwargs):
+        self.calls.append(("list_namespaced_endpoint_slice", kwargs))
+        return SimpleNamespace(
+            items=[
+                SimpleNamespace(
+                    metadata=SimpleNamespace(
+                        labels={"kubernetes.io/service-name": "sample-api"}
+                    ),
+                    endpoints=[
+                        SimpleNamespace(
+                            addresses=["10.42.0.8"],
+                            conditions=SimpleNamespace(ready=True),
+                        ),
+                        SimpleNamespace(
+                            addresses=["10.42.0.9", "10.42.0.10"],
+                            conditions=SimpleNamespace(ready=False),
+                        ),
+                    ],
+                ),
+                SimpleNamespace(
+                    metadata=SimpleNamespace(
+                        labels={"kubernetes.io/service-name": "sample-api"}
+                    ),
+                    endpoints=[
+                        SimpleNamespace(
+                            addresses=["10.42.0.11"],
+                            conditions=SimpleNamespace(ready=None),
+                        )
+                    ],
+                ),
+                SimpleNamespace(
+                    metadata=SimpleNamespace(
+                        labels={"kubernetes.io/service-name": "another-api"}
+                    ),
+                    endpoints=[],
+                ),
+                SimpleNamespace(
+                    metadata=SimpleNamespace(labels={}),
+                    endpoints=[],
+                ),
+            ]
+        )
+
+
 def create_reader() -> tuple[
     KubernetesReader,
     FakeCoreV1Api,
@@ -492,6 +541,63 @@ def test_list_services_returns_ports() -> None:
         )
     ]
     assert core_api.calls[0][1]["namespace"] == "sample"
+
+
+def test_list_service_endpoints_aggregates_endpoint_slices() -> None:
+    discovery_api = FakeDiscoveryV1Api()
+    reader = KubernetesReader(
+        core_api=FakeCoreV1Api(),
+        apps_api=FakeAppsV1Api(),
+        discovery_api=discovery_api,
+        request_timeout_seconds=7,
+    )
+
+    endpoints = reader.list_service_endpoints("sample")
+
+    assert endpoints == [
+        ServiceEndpointSummary(
+            service_name="another-api",
+            ready_addresses=0,
+            not_ready_addresses=0,
+            endpoint_slice_count=1,
+        ),
+        ServiceEndpointSummary(
+            service_name="sample-api",
+            ready_addresses=2,
+            not_ready_addresses=2,
+            endpoint_slice_count=2,
+        ),
+    ]
+    assert discovery_api.calls == [
+        (
+            "list_namespaced_endpoint_slice",
+            {
+                "namespace": "sample",
+                "_request_timeout": 7,
+            },
+        )
+    ]
+
+
+def test_list_service_endpoints_preserves_api_permission_error() -> None:
+    class ForbiddenDiscoveryV1Api(FakeDiscoveryV1Api):
+        def list_namespaced_endpoint_slice(self, **kwargs):
+            raise ApiException(status=403, reason="endpointslices is forbidden")
+
+    reader = KubernetesReader(
+        core_api=FakeCoreV1Api(),
+        apps_api=FakeAppsV1Api(),
+        discovery_api=ForbiddenDiscoveryV1Api(),
+        request_timeout_seconds=7,
+    )
+
+    try:
+        reader.list_service_endpoints("sample")
+    except Exception as error:  # noqa: BLE001 - assert public error message
+        assert "查询 namespace 'sample' 的 EndpointSlice 失败" in str(error)
+        assert "endpointslices is forbidden" in str(error)
+    else:
+        raise AssertionError("EndpointSlice permission error should be preserved")
 
 
 def test_list_additional_workloads_returns_replica_status() -> None:

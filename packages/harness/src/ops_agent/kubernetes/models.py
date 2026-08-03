@@ -187,3 +187,11 @@ class ServiceSummary:
     type: str
     cluster_ip: str | None
     ports: list[ServicePortSummary]
+
+
+@dataclass(frozen=True)
+class ServiceEndpointSummary:
+    service_name: str
+    ready_addresses: int
+    not_ready_addresses: int
+    endpoint_slice_count: int
