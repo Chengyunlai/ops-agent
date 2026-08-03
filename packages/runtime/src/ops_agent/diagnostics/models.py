@@ -17,6 +17,8 @@ class FindingSeverity(StrEnum):
 class FindingCode(StrEnum):
     POD_CRASH_LOOP = "pod_crash_loop"
     POD_OOM_KILLED = "pod_oom_killed"
+    POD_RESOURCE_PRESSURE_EVICTION = "pod_resource_pressure_eviction"
+    POD_RESOURCE_UNSCHEDULABLE = "pod_resource_unschedulable"
 
 
 @dataclass(frozen=True)

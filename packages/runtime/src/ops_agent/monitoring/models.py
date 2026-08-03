@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 
-from ops_agent.diagnostics import FindingSeverity
+from ops_agent.diagnostics import FindingCode, FindingSeverity
 from ops_agent.kubernetes import KubernetesResourceKind, ServiceEndpointSummary
 
 
@@ -27,6 +27,7 @@ class KubernetesResourceDiagnostic:
     severity: FindingSeverity
     summary: str
     evidence: tuple[str, ...]
+    code: FindingCode | None = None
 
 
 @dataclass(frozen=True)

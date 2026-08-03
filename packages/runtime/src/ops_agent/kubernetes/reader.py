@@ -1,5 +1,5 @@
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import TypeVar
@@ -20,6 +20,8 @@ from urllib3.exceptions import HTTPError
 
 from ops_agent.kubernetes.errors import KubernetesError
 from ops_agent.kubernetes.models import (
+    ContainerResourceSummary,
+    ContainerResourceType,
     ContainerStatusSummary,
     ContainerSummary,
     ControllerReferenceSummary,
@@ -602,6 +604,7 @@ def create_kubernetes_reader(
 def _to_pod_summary(pod) -> PodSummary:
     statuses = pod.status.container_statuses or []
     containers = getattr(pod.spec, "containers", None) or []
+    init_containers = getattr(pod.spec, "init_containers", None) or []
     return PodSummary(
         name=pod.metadata.name,
         phase=pod.status.phase,
@@ -624,7 +627,59 @@ def _to_pod_summary(pod) -> PodSummary:
             for condition in (getattr(pod.status, "conditions", None) or [])
         ),
         controller=_to_controller_reference(pod.metadata),
+        status_reason=getattr(pod.status, "reason", None),
+        status_message=getattr(pod.status, "message", None),
+        qos_class=getattr(pod.status, "qos_class", None),
+        resources=tuple(
+            _to_container_resource_summary(
+                container,
+                container_type=ContainerResourceType.APP,
+            )
+            for container in containers
+            if getattr(container, "name", None)
+        )
+        + tuple(
+            _to_container_resource_summary(
+                container,
+                container_type=ContainerResourceType.INIT,
+            )
+            for container in init_containers
+            if getattr(container, "name", None)
+        ),
     )
+
+
+def _to_container_resource_summary(
+    container,
+    *,
+    container_type: ContainerResourceType,
+) -> ContainerResourceSummary:
+    resources = getattr(container, "resources", None)
+    requests = getattr(resources, "requests", None) or {}
+    limits = getattr(resources, "limits", None) or {}
+    return ContainerResourceSummary(
+        name=container.name,
+        container_type=container_type,
+        cpu_request=_resource_quantity(requests, "cpu"),
+        cpu_limit=_resource_quantity(limits, "cpu"),
+        memory_request=_resource_quantity(requests, "memory"),
+        memory_limit=_resource_quantity(limits, "memory"),
+        ephemeral_storage_request=_resource_quantity(
+            requests,
+            "ephemeral-storage",
+        ),
+        ephemeral_storage_limit=_resource_quantity(
+            limits,
+            "ephemeral-storage",
+        ),
+    )
+
+
+def _resource_quantity(values: object, name: str) -> str | None:
+    if not isinstance(values, Mapping):
+        return None
+    value = values.get(name)
+    return str(value) if value is not None else None
 
 
 def _to_controller_reference(metadata) -> ControllerReferenceSummary | None:

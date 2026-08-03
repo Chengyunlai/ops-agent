@@ -84,7 +84,7 @@ def create_kubernetes_tools(
     @tool(PODS_TOOL)
     def list_kubernetes_pods() -> list[dict[str, object]]:
         """列出已配置 namespace 的 Pod 状态、就绪数和重启次数。"""
-        return [asdict(pod) for pod in reader.list_pods(namespace)]
+        return [_pod_summary_payload(pod) for pod in reader.list_pods(namespace)]
 
     @tool(DIAGNOSTICS_TOOL)
     def diagnose_kubernetes_workloads() -> dict[str, object]:
@@ -178,6 +178,21 @@ def create_kubernetes_tools(
         list_kubernetes_services,
         list_kubernetes_service_endpoints,
     ]
+
+
+def _pod_summary_payload(pod: PodSummary) -> dict[str, object]:
+    """保持普通 Pod 清单的稳定最小载荷。"""
+    return {
+        "name": pod.name,
+        "phase": pod.phase,
+        "restart_count": pod.restart_count,
+        "ready_containers": pod.ready_containers,
+        "total_containers": pod.total_containers,
+        "created_at": pod.created_at,
+        "container_statuses": tuple(asdict(item) for item in pod.container_statuses),
+        "conditions": tuple(asdict(item) for item in pod.conditions),
+        "controller": asdict(pod.controller) if pod.controller is not None else None,
+    }
 
 
 def _require_range(

@@ -148,3 +148,48 @@ def test_collector_keeps_failed_previous_logs_distinct_from_empty_logs() -> None
         "get_kubernetes_pod_logs:Pod/sample-api/worker:previous"
     )
     assert supporting.issues[0].message == "previous logs are forbidden"
+
+
+def test_resource_pressure_finding_collects_events_without_previous_logs() -> None:
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def diagnose_workloads() -> dict[str, object]:
+        return {
+            "findings": [
+                {
+                    "code": "pod_resource_unschedulable",
+                    "resource_kind": "Pod",
+                    "resource_name": "memory-worker",
+                    "summary": "Pod 因资源不足无法调度",
+                }
+            ]
+        }
+
+    def list_events(
+        pod_name: str | None = None,
+        limit: int = 100,
+    ) -> list[object]:
+        calls.append(("events", {"pod_name": pod_name, "limit": limit}))
+        return []
+
+    collector = KubernetesEvidenceCollector(
+        [
+            StructuredTool.from_function(
+                diagnose_workloads,
+                name="diagnose_kubernetes_workloads",
+                description="diagnose",
+            ),
+            StructuredTool.from_function(
+                list_events,
+                name="list_kubernetes_events",
+                description="events",
+            ),
+        ]
+    )
+
+    health = collector.collect_workload_health()
+    supporting = collector.collect_supporting_evidence(health)
+
+    assert health.findings[0].code.value == "pod_resource_unschedulable"
+    assert supporting.issues == ()
+    assert calls == [("events", {"pod_name": "memory-worker", "limit": 100})]

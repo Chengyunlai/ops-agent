@@ -27,6 +27,11 @@ _EXPECTED_FINDINGS = {
     ("Pod", "diagnostics-crash-loop", "容器反复崩溃重启"),
     ("Pod", "diagnostics-image-pull", "容器镜像拉取失败"),
     (
+        "Pod",
+        "diagnostics-resource-pressure",
+        "Pod 因资源不足无法调度",
+    ),
+    (
         "Deployment",
         "diagnostics-rollout",
         "Deployment rollout 超过进度期限",

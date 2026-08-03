@@ -1,6 +1,7 @@
 # Kubernetes Diagnostics V2 实施规划
 
-实施状态：Slice 1 至 Slice 5 已完成；指标时间线随 Prometheus 切片实施。
+实施状态：Slice 1 至 Slice 5 已完成；指标时间线仅在已有 Metrics API 或已有
+Prometheus 被显式配置后实施，不由 Ops Agent 安装数据源。
 
 ## 目标
 
@@ -190,7 +191,7 @@ namespace 纳入身份，不提前增加全局资源抽象。
 - [x] Deployment rollout condition 与 ReplicaSet/Pod owner 拓扑；
 - [x] `d` Event/Describe、`l` Pod 日志入口；
 - [x] 自动刷新后按资源 key 保持当前选择；
-- [ ] 指标时间线（等待 Prometheus 数据源，不由模型猜测）；
+- [ ] 指标时间线（仅读取显式配置的已有数据源，不安装、不由模型猜测）；
 - [x] 保持 Monitor interface，之后可把轮询 implementation 替换为 watch。
 
 ## 安全与失败模式

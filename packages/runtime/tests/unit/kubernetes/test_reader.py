@@ -6,6 +6,8 @@ import pytest
 from kubernetes.client.exceptions import ApiException
 from kubernetes.config.config_exception import ConfigException
 from ops_agent.kubernetes import (
+    ContainerResourceSummary,
+    ContainerResourceType,
     ContainerStatusSummary,
     ControllerReferenceSummary,
     KubernetesConnectionSettings,
@@ -107,9 +109,35 @@ def test_list_pods_normalizes_container_states_and_scheduling_conditions() -> No
                 )
             ],
         ),
-        spec=SimpleNamespace(containers=[SimpleNamespace()]),
+        spec=SimpleNamespace(
+            containers=[
+                SimpleNamespace(
+                    name="api",
+                    resources=SimpleNamespace(
+                        requests={"cpu": "250m", "memory": "128Mi"},
+                        limits={
+                            "cpu": "1",
+                            "memory": "512Mi",
+                            "ephemeral-storage": "1Gi",
+                        },
+                    ),
+                )
+            ],
+            init_containers=[
+                SimpleNamespace(
+                    name="migration",
+                    resources=SimpleNamespace(
+                        requests={"cpu": "2", "memory": "1Gi"},
+                        limits={"cpu": "2", "memory": "1Gi"},
+                    ),
+                )
+            ],
+        ),
         status=SimpleNamespace(
             phase="Pending",
+            reason=None,
+            message=None,
+            qos_class="Burstable",
             container_statuses=[
                 SimpleNamespace(
                     name="api",
@@ -178,6 +206,25 @@ def test_list_pods_normalizes_container_states_and_scheduling_conditions() -> No
             controller=ControllerReferenceSummary(
                 kind="ReplicaSet",
                 name="sample-api-7f8",
+            ),
+            qos_class="Burstable",
+            resources=(
+                ContainerResourceSummary(
+                    name="api",
+                    cpu_request="250m",
+                    cpu_limit="1",
+                    memory_request="128Mi",
+                    memory_limit="512Mi",
+                    ephemeral_storage_limit="1Gi",
+                ),
+                ContainerResourceSummary(
+                    name="migration",
+                    container_type=ContainerResourceType.INIT,
+                    cpu_request="2",
+                    cpu_limit="2",
+                    memory_request="1Gi",
+                    memory_limit="1Gi",
+                ),
             ),
         )
     ]

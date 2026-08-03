@@ -37,6 +37,16 @@ def test_fixed_failures_produce_grounded_diagnostics(
         "容器镜像拉取失败",
     ) in findings
 
+    resource_pressure = findings[
+        (
+            "Pod",
+            "diagnostics-resource-pressure",
+            "Pod 因资源不足无法调度",
+        )
+    ]
+    assert "insufficient cpu" in resource_pressure.evidence[0].message.casefold()
+    assert "requests(cpu=100k, memory=128Mi" in resource_pressure.evidence[1].message
+
     rollout = findings[
         (
             "Deployment",
