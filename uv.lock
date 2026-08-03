@@ -862,7 +862,7 @@ wheels = [
 
 [[package]]
 name = "ops-agent"
-version = "0.1.7"
+version = "0.1.8"
 source = { virtual = "." }
 dependencies = [
     { name = "ops-agent-cli" },
@@ -911,7 +911,7 @@ requires-dist = [
 
 [[package]]
 name = "ops-agent-runtime"
-version = "0.1.7"
+version = "0.1.8"
 source = { editable = "packages/runtime" }
 dependencies = [
     { name = "kubernetes" },
