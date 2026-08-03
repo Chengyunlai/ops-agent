@@ -1,8 +1,13 @@
+import time
 from collections.abc import Callable
 
 import pytest
 from ops_agent.diagnostics import DiagnosisReport
-from ops_agent.kubernetes import KubernetesError, KubernetesReader
+from ops_agent.kubernetes import (
+    KubernetesError,
+    KubernetesReader,
+    ServiceEndpointSource,
+)
 
 pytestmark = pytest.mark.kubernetes_integration
 
@@ -58,3 +63,44 @@ def test_endpoint_slice_rbac_failure_remains_an_explicit_error(
         match=r"(?s)EndpointSlice.*endpointslices.*forbidden",
     ):
         restricted_reader.list_service_endpoints("ops-agent-diagnostics-e2e")
+
+
+def test_endpoint_slice_preserves_service_to_pod_topology(
+    cluster_reader: KubernetesReader,
+) -> None:
+    endpoint = _eventually_ready_endpoint(cluster_reader)
+
+    assert endpoint.source is ServiceEndpointSource.ENDPOINT_SLICE
+    assert any(
+        target.ready
+        and target.target_kind == "Pod"
+        and target.target_name == "diagnostics-ready"
+        for target in endpoint.targets
+    )
+
+
+def test_endpoint_slice_404_falls_back_to_live_core_v1_endpoints(
+    legacy_fallback_reader: KubernetesReader,
+) -> None:
+    endpoint = _eventually_ready_endpoint(legacy_fallback_reader)
+
+    assert endpoint.source is ServiceEndpointSource.ENDPOINTS
+    assert endpoint.ready_addresses >= 1
+    assert any(target.target_name == "diagnostics-ready" for target in endpoint.targets)
+
+
+def _eventually_ready_endpoint(reader: KubernetesReader):
+    deadline = time.monotonic() + 120
+    while time.monotonic() < deadline:
+        endpoint = next(
+            (
+                item
+                for item in reader.list_service_endpoints("ops-agent-diagnostics-e2e")
+                if item.service_name == "diagnostics-ready"
+            ),
+            None,
+        )
+        if endpoint is not None and endpoint.ready_addresses >= 1:
+            return endpoint
+        time.sleep(2)
+    raise AssertionError("timed out waiting for diagnostics-ready endpoint")

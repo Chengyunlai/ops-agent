@@ -18,6 +18,7 @@ from pydantic import Field
 class RecordingToolCallingModel(FakeMessagesListChatModel):
     bound_tool_names: list[list[str]] = Field(default_factory=list)
     received_message_contents: list[list[str]] = Field(default_factory=list)
+    received_message_records: list[list[tuple[str, str]]] = Field(default_factory=list)
 
     def _generate(
         self,
@@ -29,6 +30,13 @@ class RecordingToolCallingModel(FakeMessagesListChatModel):
         self.received_message_contents.append(
             [
                 message.content
+                for message in messages
+                if isinstance(message.content, str)
+            ]
+        )
+        self.received_message_records.append(
+            [
+                (type(message).__name__, message.content)
                 for message in messages
                 if isinstance(message.content, str)
             ]
@@ -138,6 +146,16 @@ def kubernetes_tool_response(
 def create_test_kubernetes_tool(
     name: str = "diagnose_kubernetes_workloads",
 ) -> BaseTool:
+    if name == "diagnose_kubernetes_workloads":
+        return StructuredTool.from_function(
+            lambda resource=None: {
+                "namespace": "sample",
+                "resource": resource,
+                "findings": [],
+            },
+            name=name,
+            description="读取 Kubernetes 诊断证据",
+        )
     return StructuredTool.from_function(
         lambda resource: f"{resource}: evidence",
         name=name,
@@ -918,6 +936,103 @@ def test_complex_kubernetes_request_executes_validated_plan() -> None:
         diagnostic_tool_names,
         diagnostic_tool_names,
     ]
+
+
+def test_plan_collects_required_pod_evidence_without_model_tool_choice() -> None:
+    evidence_calls: list[tuple[str, object]] = []
+
+    def diagnose_workloads() -> dict[str, object]:
+        evidence_calls.append(("diagnostics", None))
+        return {
+            "namespace": "sample",
+            "findings": [
+                {
+                    "severity": "warning",
+                    "code": "pod_crash_loop",
+                    "resource_kind": "Pod",
+                    "resource_name": "checkout-api",
+                    "summary": "display text can change independently",
+                    "container_name": "api",
+                    "evidence": [],
+                }
+            ],
+        }
+
+    def list_events(
+        pod_name: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, object]]:
+        evidence_calls.append(("events", (pod_name, limit)))
+        return [{"reason": "BackOff", "object_name": pod_name}]
+
+    def get_logs(
+        pod_name: str,
+        container: str | None = None,
+        tail_lines: int = 200,
+        previous: bool = False,
+    ) -> dict[str, object]:
+        evidence_calls.append(("logs", (pod_name, container, tail_lines, previous)))
+        return {"logs": "previous instance failed", "previous": previous}
+
+    tools = [
+        StructuredTool.from_function(
+            diagnose_workloads,
+            name="diagnose_kubernetes_workloads",
+            description="diagnose",
+        ),
+        StructuredTool.from_function(
+            get_logs,
+            name="get_kubernetes_pod_logs",
+            description="logs",
+        ),
+        StructuredTool.from_function(
+            list_events,
+            name="list_kubernetes_events",
+            description="events",
+        ),
+        *[
+            create_test_kubernetes_tool(name)
+            for name in (
+                "get_kubernetes_pod_details",
+                "list_kubernetes_deployments",
+                "list_kubernetes_pods",
+                "list_kubernetes_service_endpoints",
+                "list_kubernetes_services",
+            )
+        ],
+    ]
+    model = RecordingToolCallingModel(
+        responses=[
+            route_response(execution_mode="plan"),
+            plan_response("workload_health"),
+            AIMessage(content="checkout-api 正在 CrashLoopBackOff"),
+        ]
+    )
+
+    answer = create_ops_agent(model, tools).ask(
+        "完整分析 Kubernetes checkout 发布失败原因"
+    )
+
+    assert answer == (
+        "诊断计划执行完成：\n"
+        "1. 收集相关工作负载健康状态：checkout-api 正在 CrashLoopBackOff"
+    )
+    assert evidence_calls == [
+        ("diagnostics", None),
+        ("events", ("checkout-api", 100)),
+        ("logs", ("checkout-api", "api", 200, True)),
+    ]
+    assert any(
+        message_type == "ToolMessage" and "previous instance failed" in content
+        for message_batch in model.received_message_records
+        for message_type, content in message_batch
+    )
+    assert all(
+        "CONTROLLED_EVIDENCE" not in content
+        for message_batch in model.received_message_records
+        for message_type, content in message_batch
+        if message_type == "HumanMessage"
+    )
 
 
 def test_plan_with_free_form_tool_instruction_is_rejected() -> None:

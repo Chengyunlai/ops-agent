@@ -1,6 +1,6 @@
 import json
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import TypeVar
 
@@ -36,7 +36,9 @@ from ops_agent.kubernetes.models import (
     PodDetails,
     PodSummary,
     ReplicaSetSummary,
+    ServiceEndpointSource,
     ServiceEndpointSummary,
+    ServiceEndpointTargetSummary,
     ServicePortSummary,
     ServiceSummary,
     StatefulSetSummary,
@@ -54,6 +56,7 @@ class _ServiceEndpointCounts:
     ready_addresses: int = 0
     not_ready_addresses: int = 0
     endpoint_slice_count: int = 0
+    targets: list[ServiceEndpointTargetSummary] = field(default_factory=list)
 
 
 class KubernetesReader:
@@ -302,18 +305,32 @@ class KubernetesReader:
             summary = totals.setdefault(service_name, _ServiceEndpointCounts())
             summary.endpoint_slice_count += 1
             for endpoint in endpoint_slice.endpoints or []:
-                address_count = len(endpoint.addresses or [])
+                addresses = endpoint.addresses or []
+                address_count = len(addresses)
                 conditions = getattr(endpoint, "conditions", None)
-                if getattr(conditions, "ready", None) is False:
+                ready = getattr(conditions, "ready", None) is not False
+                if not ready:
                     summary.not_ready_addresses += address_count
                 else:
                     summary.ready_addresses += address_count
+                target_ref = getattr(endpoint, "target_ref", None)
+                summary.targets.extend(
+                    ServiceEndpointTargetSummary(
+                        address=address,
+                        ready=ready,
+                        target_kind=getattr(target_ref, "kind", None),
+                        target_name=getattr(target_ref, "name", None),
+                    )
+                    for address in addresses
+                )
         return [
             ServiceEndpointSummary(
                 service_name=service_name,
                 ready_addresses=counts.ready_addresses,
                 not_ready_addresses=counts.not_ready_addresses,
                 endpoint_slice_count=counts.endpoint_slice_count,
+                source=ServiceEndpointSource.ENDPOINT_SLICE,
+                targets=tuple(counts.targets),
             )
             for service_name, counts in sorted(totals.items())
         ]
@@ -340,6 +357,29 @@ class KubernetesReader:
                     for subset in (endpoints.subsets or [])
                 ),
                 endpoint_slice_count=0,
+                source=ServiceEndpointSource.ENDPOINTS,
+                targets=tuple(
+                    ServiceEndpointTargetSummary(
+                        address=address.ip,
+                        ready=ready,
+                        target_kind=getattr(
+                            getattr(address, "target_ref", None),
+                            "kind",
+                            None,
+                        ),
+                        target_name=getattr(
+                            getattr(address, "target_ref", None),
+                            "name",
+                            None,
+                        ),
+                    )
+                    for subset in (endpoints.subsets or [])
+                    for ready, addresses in (
+                        (True, subset.addresses or []),
+                        (False, subset.not_ready_addresses or []),
+                    )
+                    for address in addresses
+                ),
             )
             for endpoints in sorted(response.items, key=lambda item: item.metadata.name)
         ]

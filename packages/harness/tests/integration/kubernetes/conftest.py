@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 import pytest
 from kubernetes import client as kubernetes_client
 from kubernetes import config as kubernetes_config
+from kubernetes.client.exceptions import ApiException
 from ops_agent.diagnostics import (
     DiagnosisReport,
     KubernetesSnapshot,
@@ -157,6 +158,32 @@ def restricted_reader(kind_test_target: _KindTestTarget) -> KubernetesReader:
         core_api=kubernetes_client.CoreV1Api(api_client),
         apps_api=kubernetes_client.AppsV1Api(api_client),
         discovery_api=kubernetes_client.DiscoveryV1Api(api_client),
+        request_timeout_seconds=10,
+    )
+
+
+@pytest.fixture
+def cluster_reader(kind_test_target: _KindTestTarget) -> KubernetesReader:
+    return kind_test_target.reader
+
+
+@pytest.fixture
+def legacy_fallback_reader(kind_test_target: _KindTestTarget) -> KubernetesReader:
+    class UnavailableDiscoveryV1Api:
+        def list_namespaced_endpoint_slice(self, **_: object) -> None:
+            raise ApiException(
+                status=404,
+                reason="EndpointSlice API unavailable for integration test",
+            )
+
+    api_client = kubernetes_config.new_client_from_config(
+        config_file=str(kind_test_target.kubeconfig_path),
+        persist_config=False,
+    )
+    return KubernetesReader(
+        core_api=kubernetes_client.CoreV1Api(api_client),
+        apps_api=kubernetes_client.AppsV1Api(api_client),
+        discovery_api=UnavailableDiscoveryV1Api(),
         request_timeout_seconds=10,
     )
 

@@ -21,6 +21,7 @@ from ops_agent.kubernetes import (
     PodDetails,
     ReplicaSetSummary,
     ServiceEndpointSummary,
+    ServiceEndpointTargetSummary,
     ServicePortSummary,
     ServiceSummary,
     StatefulSetSummary,
@@ -395,6 +396,10 @@ class FakeDiscoveryV1Api:
                         SimpleNamespace(
                             addresses=["10.42.0.8"],
                             conditions=SimpleNamespace(ready=True),
+                            target_ref=SimpleNamespace(
+                                kind="Pod",
+                                name="sample-api-7f8-x1",
+                            ),
                         ),
                         SimpleNamespace(
                             addresses=["10.42.0.9", "10.42.0.10"],
@@ -604,6 +609,27 @@ def test_list_service_endpoints_aggregates_endpoint_slices() -> None:
             ready_addresses=2,
             not_ready_addresses=2,
             endpoint_slice_count=2,
+            source="EndpointSlice",
+            targets=(
+                ServiceEndpointTargetSummary(
+                    address="10.42.0.8",
+                    ready=True,
+                    target_kind="Pod",
+                    target_name="sample-api-7f8-x1",
+                ),
+                ServiceEndpointTargetSummary(
+                    address="10.42.0.9",
+                    ready=False,
+                ),
+                ServiceEndpointTargetSummary(
+                    address="10.42.0.10",
+                    ready=False,
+                ),
+                ServiceEndpointTargetSummary(
+                    address="10.42.0.11",
+                    ready=True,
+                ),
+            ),
         ),
     ]
     assert discovery_api.calls == [
@@ -680,6 +706,21 @@ def test_list_service_endpoints_falls_back_when_discovery_api_is_unavailable() -
             ready_addresses=2,
             not_ready_addresses=1,
             endpoint_slice_count=0,
+            source="Endpoints",
+            targets=(
+                ServiceEndpointTargetSummary(
+                    address="10.42.0.8",
+                    ready=True,
+                ),
+                ServiceEndpointTargetSummary(
+                    address="10.42.0.9",
+                    ready=False,
+                ),
+                ServiceEndpointTargetSummary(
+                    address="10.42.0.10",
+                    ready=True,
+                ),
+            ),
         )
     ]
     assert core_api.calls == [

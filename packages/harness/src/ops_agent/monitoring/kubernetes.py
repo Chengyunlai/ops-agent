@@ -1,10 +1,8 @@
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol, TypeVar
 
 from ops_agent.diagnostics import (
-    Finding,
     KubernetesSnapshot,
     diagnose_kubernetes_snapshot,
 )
@@ -25,6 +23,28 @@ from ops_agent.kubernetes import (
     StatefulSetSummary,
     VolumeDirectory,
     VolumeFilePreview,
+)
+from ops_agent.monitoring.diagnostics import (
+    deployment_topologies as _deployment_topologies,
+)
+from ops_agent.monitoring.diagnostics import (
+    format_resource_diagnostics as _format_resource_diagnostics,
+)
+from ops_agent.monitoring.diagnostics import (
+    health_reasons_by_resource as _health_reasons_by_resource,
+)
+from ops_agent.monitoring.diagnostics import (
+    to_monitor_diagnostic as _to_monitor_diagnostic,
+)
+from ops_agent.monitoring.diagnostics import (
+    with_health_reasons as _with_health_reasons,
+)
+from ops_agent.monitoring.models import (
+    KubernetesMonitorSnapshot,
+    KubernetesResourceCollection,
+    KubernetesResourceContent,
+    KubernetesResourceRef,
+    KubernetesResourceRow,
 )
 
 
@@ -110,114 +130,6 @@ class KubernetesMonitoringSource(Protocol):
         path: str,
         max_bytes: int,
     ) -> VolumeFilePreview: ...
-
-
-@dataclass(frozen=True)
-class KubernetesResourceRef:
-    kind: KubernetesResourceKind
-    name: str
-
-
-@dataclass(frozen=True)
-class KubernetesResourceRow:
-    ref: KubernetesResourceRef
-    values: tuple[str, ...]
-    healthy: bool | None
-    health_reasons: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
-class KubernetesResourceDiagnostic:
-    ref: KubernetesResourceRef
-    severity: str
-    summary: str
-    evidence: tuple[str, ...]
-
-
-@dataclass(frozen=True)
-class KubernetesPodTopology:
-    name: str
-    owner_name: str
-    phase: str
-
-
-@dataclass(frozen=True)
-class KubernetesReplicaSetTopology:
-    name: str
-    desired_replicas: int
-    ready_replicas: int
-    revision: str | None
-    pods: tuple[KubernetesPodTopology, ...]
-
-
-@dataclass(frozen=True)
-class KubernetesDeploymentTopology:
-    ref: KubernetesResourceRef
-    generation: int | None
-    observed_generation: int | None
-    revision: str | None
-    conditions: tuple[str, ...]
-    replica_sets: tuple[KubernetesReplicaSetTopology, ...]
-
-
-@dataclass(frozen=True)
-class KubernetesResourceCollection:
-    kind: KubernetesResourceKind
-    label: str
-    shortcut: str | None
-    columns: tuple[str, ...]
-    rows: tuple[KubernetesResourceRow, ...]
-    error: str | None = None
-
-
-@dataclass(frozen=True)
-class KubernetesResourceContent:
-    title: str
-    content: str
-
-
-@dataclass(frozen=True)
-class KubernetesMonitorSnapshot:
-    namespace: str
-    observed_at: datetime
-    resources: tuple[KubernetesResourceCollection, ...]
-    diagnostics: tuple[KubernetesResourceDiagnostic, ...] = ()
-    deployment_topologies: tuple[KubernetesDeploymentTopology, ...] = ()
-    diagnostic_errors: tuple[str, ...] = ()
-
-    @property
-    def finding_count(self) -> int:
-        return len(self.diagnostics)
-
-    def collection(
-        self,
-        kind: KubernetesResourceKind,
-    ) -> KubernetesResourceCollection | None:
-        return next(
-            (resource for resource in self.resources if resource.kind is kind),
-            None,
-        )
-
-    def diagnostics_for(
-        self,
-        resource: KubernetesResourceRef,
-    ) -> tuple[KubernetesResourceDiagnostic, ...]:
-        return tuple(
-            diagnostic for diagnostic in self.diagnostics if diagnostic.ref == resource
-        )
-
-    def deployment_topology(
-        self,
-        resource: KubernetesResourceRef,
-    ) -> KubernetesDeploymentTopology | None:
-        return next(
-            (
-                topology
-                for topology in self.deployment_topologies
-                if topology.ref == resource
-            ),
-            None,
-        )
 
 
 Summary = TypeVar("Summary")
@@ -357,6 +269,7 @@ class KubernetesMonitor:
                 replica_sets=replica_set_items,
                 pods=pod_items,
             ),
+            service_endpoints=endpoint_items,
             diagnostic_errors=(
                 (f"Service Endpoint 诊断不可用：{endpoint_error}",)
                 if endpoint_error is not None
@@ -563,178 +476,6 @@ class KubernetesMonitor:
             return tuple(self._source.list_service_endpoints(self._namespace)), None
         except Exception as error:  # noqa: BLE001 - 清单仍可展示，诊断明确降级
             return (), str(error)
-
-
-def _to_monitor_diagnostic(finding: Finding) -> KubernetesResourceDiagnostic:
-    resource_kind = KubernetesResourceKind(finding.resource_kind)
-    return KubernetesResourceDiagnostic(
-        ref=KubernetesResourceRef(
-            kind=resource_kind,
-            name=finding.resource_name,
-        ),
-        severity=str(finding.severity),
-        summary=finding.summary,
-        evidence=tuple(f"{item.source}: {item.message}" for item in finding.evidence),
-    )
-
-
-def _health_reasons_by_resource(
-    diagnostics: tuple[KubernetesResourceDiagnostic, ...],
-) -> dict[KubernetesResourceRef, tuple[str, ...]]:
-    reasons: dict[KubernetesResourceRef, list[str]] = {}
-    for diagnostic in diagnostics:
-        summaries = reasons.setdefault(diagnostic.ref, [])
-        if diagnostic.summary not in summaries:
-            summaries.append(diagnostic.summary)
-    return {resource: tuple(items) for resource, items in reasons.items()}
-
-
-def _with_health_reasons(
-    collection: KubernetesResourceCollection,
-    reasons: dict[KubernetesResourceRef, tuple[str, ...]],
-) -> KubernetesResourceCollection:
-    return KubernetesResourceCollection(
-        kind=collection.kind,
-        label=collection.label,
-        shortcut=collection.shortcut,
-        columns=collection.columns,
-        rows=tuple(
-            KubernetesResourceRow(
-                ref=row.ref,
-                values=row.values,
-                healthy=False if reasons.get(row.ref) else row.healthy,
-                health_reasons=reasons.get(row.ref, ()),
-            )
-            for row in collection.rows
-        ),
-        error=collection.error,
-    )
-
-
-def _deployment_topologies(
-    *,
-    deployments: tuple[DeploymentSummary, ...],
-    replica_sets: tuple[ReplicaSetSummary, ...],
-    pods: tuple[PodSummary, ...],
-) -> tuple[KubernetesDeploymentTopology, ...]:
-    return tuple(
-        _deployment_topology(
-            deployment,
-            replica_sets=replica_sets,
-            pods=pods,
-        )
-        for deployment in deployments
-    )
-
-
-def _deployment_topology(
-    deployment: DeploymentSummary,
-    *,
-    replica_sets: tuple[ReplicaSetSummary, ...],
-    pods: tuple[PodSummary, ...],
-) -> KubernetesDeploymentTopology:
-    owned_replica_sets = sorted(
-        (
-            replica_set
-            for replica_set in replica_sets
-            if replica_set.controller is not None
-            and replica_set.controller.kind == "Deployment"
-            and replica_set.controller.name == deployment.name
-        ),
-        key=lambda item: item.name,
-    )
-    return KubernetesDeploymentTopology(
-        ref=_ref(KubernetesResourceKind.DEPLOYMENT, deployment.name),
-        generation=deployment.generation,
-        observed_generation=deployment.observed_generation,
-        revision=deployment.revision,
-        conditions=tuple(
-            (
-                f"{condition.type}={condition.status}"
-                f" · {condition.reason or '-'}"
-                f" · {condition.message or '-'}"
-            )
-            for condition in deployment.conditions
-        ),
-        replica_sets=tuple(
-            KubernetesReplicaSetTopology(
-                name=replica_set.name,
-                desired_replicas=replica_set.desired_replicas,
-                ready_replicas=replica_set.ready_replicas,
-                revision=replica_set.revision,
-                pods=tuple(
-                    KubernetesPodTopology(
-                        name=pod.name,
-                        owner_name=replica_set.name,
-                        phase=pod.phase,
-                    )
-                    for pod in sorted(pods, key=lambda item: item.name)
-                    if pod.controller is not None
-                    and pod.controller.kind == "ReplicaSet"
-                    and pod.controller.name == replica_set.name
-                ),
-            )
-            for replica_set in owned_replica_sets
-        ),
-    )
-
-
-def _format_resource_diagnostics(
-    snapshot: KubernetesMonitorSnapshot,
-    resource: KubernetesResourceRef,
-) -> str:
-    diagnostics = snapshot.diagnostics_for(resource)
-    lines = [f"Resource: {resource.kind}/{resource.name}", ""]
-    if diagnostics:
-        lines.append(f"Findings ({len(diagnostics)}):")
-        for diagnostic in diagnostics:
-            lines.append(f"  ! {diagnostic.summary}")
-            lines.extend(f"      {evidence}" for evidence in diagnostic.evidence)
-    else:
-        lines.append("Findings: No deterministic warning in the latest snapshot")
-
-    topology = snapshot.deployment_topology(resource)
-    if topology is not None:
-        lines.extend(
-            (
-                "",
-                "Rollout:",
-                "  Generation: {} · Observed: {} · Revision: {}".format(
-                    topology.generation or "-",
-                    topology.observed_generation or "-",
-                    topology.revision or "-",
-                ),
-                "  Conditions:",
-            )
-        )
-        lines.extend(
-            (f"    {condition}" for condition in topology.conditions)
-            if topology.conditions
-            else ("    none",)
-        )
-        lines.append("  Topology:")
-        if not topology.replica_sets:
-            lines.append("    no controller-owned ReplicaSet observed")
-        for replica_set in topology.replica_sets:
-            lines.append(
-                f"    ReplicaSet/{replica_set.name}"
-                f" · desired {replica_set.desired_replicas}"
-                f" · ready {replica_set.ready_replicas}"
-                f" · revision {replica_set.revision or '-'}"
-            )
-            lines.extend(
-                (
-                    f"      Pod/{pod.name} · owner {pod.owner_name} · phase {pod.phase}"
-                    for pod in replica_set.pods
-                )
-                if replica_set.pods
-                else ("      no controller-owned Pod observed",)
-            )
-
-    if snapshot.diagnostic_errors:
-        lines.extend(("", "Partial diagnostics:"))
-        lines.extend(f"  {error}" for error in snapshot.diagnostic_errors)
-    return "\n".join(lines)
 
 
 def _ref(kind: KubernetesResourceKind, name: str) -> KubernetesResourceRef:

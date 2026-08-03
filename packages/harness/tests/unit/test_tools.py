@@ -192,6 +192,8 @@ def test_diagnosis_tool_reports_findings_from_configured_namespace() -> None:
                 "resource_kind": "Deployment",
                 "resource_name": "sample-api",
                 "summary": "Deployment 就绪副本少于期望副本",
+                "container_name": None,
+                "code": None,
                 "evidence": (
                     {
                         "source": "deployment_status",

@@ -29,6 +29,17 @@ Successful real-world observations returned by a Capability and used to
 ground an answer.
 _Avoid_: Model reasoning, assumption
 
+**Controlled Evidence Collection**:
+Deterministic code selection of required read-only observations from a
+structured Finding. The model explains the resulting Evidence but does not
+decide whether mandatory Event or previous-log collection happens.
+_Avoid_: Prompt-directed evidence, model-selected mandatory tool
+
+**Finding Code**:
+A stable machine-readable identifier that selects controlled follow-up
+collection independently from the human-facing Finding summary.
+_Avoid_: Summary matching, translated rule name
+
 **Conversation Session**:
 A sequence of related user turns sharing immutable Interaction Context and
 prior conversational references.

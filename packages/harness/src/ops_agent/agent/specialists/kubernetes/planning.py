@@ -9,6 +9,10 @@ from langchain_core.language_models import BaseChatModel
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ops_agent.agent.specialists.kubernetes.agent import KubernetesAgent
+from ops_agent.agent.specialists.kubernetes.evidence import (
+    KubernetesEvidence,
+    KubernetesEvidenceCollector,
+)
 
 PLANNER_PROMPT = """\
 你是 Kubernetes 只读诊断计划器，只返回 ExecutionPlan，不回答用户问题。
@@ -107,8 +111,13 @@ class KubernetesDiagnosticPlanner:
 class KubernetesPlanExecutor:
     """顺序执行受控诊断目标，遇到无工具证据立即停止。"""
 
-    def __init__(self, agent: KubernetesAgent) -> None:
+    def __init__(
+        self,
+        agent: KubernetesAgent,
+        evidence_collector: KubernetesEvidenceCollector,
+    ) -> None:
         self._agent = agent
+        self._evidence_collector = evidence_collector
 
     def execute(
         self,
@@ -117,11 +126,21 @@ class KubernetesPlanExecutor:
     ) -> PlanExecutionResult:
         summaries: list[tuple[DiagnosticObjective, str]] = []
         evidence_count = 0
+        cumulative_evidence = KubernetesEvidence()
         for step in plan.steps:
+            if step.objective is DiagnosticObjective.WORKLOAD_HEALTH:
+                workload_health = self._evidence_collector.collect_workload_health()
+                if workload_health.evidence_count == 0:
+                    return PlanExecutionResult(evidence_count=0)
+                supporting = self._evidence_collector.collect_supporting_evidence(
+                    workload_health
+                )
+                cumulative_evidence = workload_health.merge(supporting)
             result = self._agent.diagnose(
-                _format_step_request(question, step, summaries)
+                _format_step_request(question, step, summaries),
+                evidence=cumulative_evidence,
             )
-            evidence_count += result.evidence_count
+            evidence_count = max(evidence_count, result.evidence_count)
             if not result.is_grounded or result.answer is None:
                 return PlanExecutionResult(evidence_count=evidence_count)
             summaries.append((step.objective, result.answer))

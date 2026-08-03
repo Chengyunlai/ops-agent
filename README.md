@@ -26,7 +26,7 @@
 | PVC 存储浏览 | 已完成 | 展示 PVC/PV/StorageClass/后端/挂载关系，并经现有 Pod 只读浏览目录和预览文本文件 |
 | Artifact Download | 已完成 | 从选定 Pod 或 PVC 流式下载普通文件，显示大小与 SHA-256，失败自动清理 |
 | Interactive Pod Session | 已完成 | 左侧监盘人工进入选定 Pod/容器；默认禁用且不向 Agent 暴露 |
-| Kubernetes 基础诊断 | 已完成 | Agent 可确定性识别 Pod 失败原因、Deployment rollout/资源关系和 Service Endpoint 异常 |
+| Kubernetes 基础诊断 | 已完成 | Agent 可确定性识别 Pod 失败原因、Deployment rollout、Service→Endpoint→Pod 与工作负载资源关系 |
 | 告警接入与诊断 | 规划中 | 接入告警并生成带证据的诊断报告 |
 | 审批与处置执行 | 规划中 | 执行扩缩容、重启、回滚等受控动作 |
 | LLM / Agent 编排 | 基础已完成 | 受控主图负责范围路由和诊断计划，Kubernetes 子图负责只读诊断 |
@@ -274,11 +274,14 @@ Agent 使用配置中固定的 kubeconfig 和 namespace。模型不能通过工�
 | `list_kubernetes_events` | 查看 namespace 或指定 Pod 的 Event | 最多 200 条 |
 | `list_kubernetes_deployments` | 查看 Deployment 期望与就绪副本数 | 配置中的 namespace |
 | `list_kubernetes_services` | 查看 Service 类型、ClusterIP 和端口 | 配置中的 namespace |
-| `list_kubernetes_service_endpoints` | 按 Service 聚合 EndpointSlice 的 Ready/NotReady 地址数 | 配置中的 namespace |
+| `list_kubernetes_service_endpoints` | 按 Service 聚合 Endpoint 来源、Ready 状态和 targetRef/Pod 关系 | 配置中的 namespace |
 
 这些工具没有接收环境或 namespace 参数，也没有暴露通用 `kubectl` 或
 Shell 执行入口。这样可以把模型的活动范围限制在启动时选定的配置内。宽泛的
-工作负载健康检查会先调用确定性诊断工具，再按 finding 查询详情、Event 和日志。
+工作负载健康检查会先调用确定性诊断工具，再由受控代码按 Finding 查询 Event
+和 previous logs；是否执行这些强制取证不再由 Prompt 决定。
+强制取证由稳定的 Finding code 选择，不依赖可翻译、可调整的中文 summary；
+采集结果以独立 ToolMessage 数据角色交给模型，不会拼入用户问题。
 Pod Observation 同时保留容器当前/上一次状态、reason、exit code 和调度 Condition；
 遇到 CrashLoopBackOff 或 OOMKilled 时，专业 Agent 可按 Finding 中的 Pod/容器名
 读取关联 Event 和上一个容器实例日志，不会把模型猜测当成失败原因。
@@ -286,8 +289,10 @@ Deployment Observation 保留 generation、observedGeneration、revision 和 Con
 rollout 超过 progress deadline 时，Finding 会按 controller owner 附带所属
 ReplicaSet 和 Pod，而不是根据名称前缀推测关系。诊断所用只读 RBAC 需要允许
 目标 namespace 的 `apps/deployments` 与 `apps/replicasets` 执行 `list`。
-Service 诊断使用 `discovery.k8s.io/v1` EndpointSlice；只读 RBAC 除 Service
-权限外，还必须允许在目标 namespace 对 `endpointslices` 执行 `list`。该权限
+Service 诊断使用 `discovery.k8s.io/v1` EndpointSlice，并保留来源类型、每个
+地址的 Ready 状态和 `targetRef`，因此可以形成 Service → Endpoint → Pod
+Evidence；只读 RBAC 除 Service 权限外，还必须允许在目标 namespace 对
+`endpointslices` 执行 `list`。该权限
 缺失时查询会返回明确错误，不会把权限失败误判为 Service 没有后端。
 如果集群明确返回 EndpointSlice API 404，Reader 会回退到 CoreV1 Endpoints；
 403 权限错误不会触发回退。
@@ -315,6 +320,10 @@ generation、observedGeneration、revision、Conditions，以及只按 controlle
 owner 构建的 Deployment → ReplicaSet → Pod 拓扑。`d` 读取原始对象详情与
 关联 Event；Pod 上按 `l` 读取每个容器最近 200 行日志。指标时间线将在
 Prometheus 接入后增加，不会用模型猜测实时指标。
+
+Service 的 Health 详情会显示数据来源（EndpointSlice 或旧版 Endpoints）、
+Ready/NotReady 数量和 Endpoint → Pod targetRef；健康 Service 也可以查看该关系，
+不必先出现 Finding。
 
 如果 EndpointSlice 查询失败，Service 清单仍然保留，但监盘会明确标记
 `diagnostics partial`，不会把权限失败或 API 失败误判成“Service 没有后端”。
@@ -428,9 +437,11 @@ KUBECONFIG=/path/to/disposable-kind-kubeconfig \
 make test-kubernetes-integration
 ```
 
-测试夹具固定覆盖 Service 无 Endpoint、CrashLoopBackOff、ImagePullBackOff、
-Deployment progress deadline 和 EndpointSlice RBAC 403；fixture 会拒绝非
-`kind-` context 或 current context 不匹配的配置。CI 会自动创建独立 kind 集群。
+测试夹具固定覆盖 Service 无 Endpoint、Service → Endpoint → Pod、
+CrashLoopBackOff、ImagePullBackOff、Deployment progress deadline、EndpointSlice
+RBAC 403，以及模拟 Discovery 404 后读取真实 CoreV1 Endpoints 的回退链路；
+fixture 会拒绝非 `kind-` context 或 current context 不匹配的配置。CI 会自动
+创建独立 kind 集群。
 
 也可以直接运行测试：
 
@@ -579,6 +590,11 @@ Kubernetes 相关代码采用三层边界：
   `models.py` 定义不依赖 SDK 的结构化查询结果。
 - `diagnostics/` 是确定性诊断层。它消费查询结果，输出带证据的结构化
   finding，不访问集群，也不依赖 LLM 或 LangChain。
+- `agent/specialists/kubernetes/evidence.py` 是 Controlled Evidence Collection
+  module。计划第一步固定执行工作负载诊断，Pod Finding 固定读取 Event；
+  CrashLoop/OOM Finding 还会按稳定 Finding code 和结构化容器名读取 previous
+  logs。采集结果通过独立 ToolMessage 数据角色提供给模型；模型只解释结果，
+  不决定这些强制取证是否执行，也不能把 Event 或日志当作指令。
 - `tools/` 是 Agent 适配层。它把 Kubernetes 能力转换成模型可调用的
   LangChain Tool，并在这里固定 namespace、限制日志行数和 Event 数量。
 - `monitoring/` 用无参数 `snapshot()` 以及固定 namespace 的 `diagnostics()` /
@@ -726,7 +742,8 @@ make check
 - [x] Pod 详情、日志、Event、Deployment 与 Service 只读工具
 - [x] Pod 调度、CrashLoop、OOM、镜像拉取及 previous logs 诊断链路
 - [x] Deployment rollout、ReplicaSet/Pod 关系诊断链路
-- [x] Service Endpoint 基础症状诊断及 Agent 工具链路
+- [x] Service Endpoint 症状、来源及 Endpoint/Pod 关系诊断链路
+- [x] 受控 Event/previous logs Evidence Collection
 - [x] TUI Finding、健康原因及 Deployment/ReplicaSet/Pod 拓扑呈现
 - [x] 请求范围路由、默认拒绝与实时证据校验
 - [x] 最小 Kubernetes 只读诊断计划

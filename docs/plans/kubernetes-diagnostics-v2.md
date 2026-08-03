@@ -56,6 +56,10 @@ Endpoint 查询采用 `discovery.k8s.io/v1` EndpointSlice。Reader 按
 的 endpoint 视为 Ready。缺少 slice 的 Service 由诊断层解释为零后端，不在
 Reader 中制造 Finding。
 
+Observation 同时保留来源类型、每个 Endpoint 地址、Ready 状态和 targetRef。
+404 回退到 CoreV1 Endpoints 时来源明确为 `Endpoints`，不能用 slice 数量猜测
+数据来源。
+
 ### Diagnostics module
 
 `diagnose_kubernetes_snapshot(snapshot)` 保持唯一公开诊断 interface。它是纯函数，
@@ -78,6 +82,14 @@ Evidence 至少包含 Service 类型、Ready/NotReady 数量以及 EndpointSlice
 Service 清单和 Endpoint 证据；完整 Diagnostics Capability 也必须持有该工具。
 环境和 namespace 仍由组合根闭包固定，工具参数不能切换 scope。
 
+计划模式使用 `KubernetesEvidenceCollector` 执行 Controlled Evidence
+Collection：第一步固定调用确定性诊断；每个 Pod Finding 固定查询 Event；
+CrashLoop/OOM Finding 由稳定 Finding code 识别，并在结构化 `container_name`
+存在时固定读取 `previous=true` 日志。取证在工作负载 Finding 产生后立即发生，
+不依赖 Planner 是否生成 supporting-evidence 步骤。采集结果以独立 ToolMessage
+数据角色提供；模型负责解释 Evidence，不能决定是否跳过强制取证，也不能把
+Event 或日志内容当作指令。
+
 ### Monitoring module
 
 `KubernetesMonitor` 把 DiagnosisReport 映射为稳定的监盘 Snapshot：资源行携带
@@ -92,9 +104,11 @@ Service Endpoint 查询失败与零 Endpoint 严格区分：失败时保留 Serv
 ```text
 ServiceEndpointSummary
   service_name: str
+  source: EndpointSlice | Endpoints
   ready_addresses: int
   not_ready_addresses: int
   endpoint_slice_count: int
+  targets: (address, ready, target_kind, target_name)[]
 
 ControllerReferenceSummary
   kind: str
@@ -110,6 +124,11 @@ KubernetesSnapshot
   replica_sets
   services
   service_endpoints
+
+Finding
+  code: stable machine-readable identifier
+  summary: human-facing text
+  resource_kind/resource_name/container_name
 ```
 
 资源身份在 namespace 内使用 `(kind, name)`；未来引入跨 namespace 观察时再把
@@ -117,13 +136,15 @@ namespace 纳入身份，不提前增加全局资源抽象。
 
 ## TDD seam
 
-本阶段测试只穿过三个已确认的公开 interface：
+本阶段测试只穿过四个已确认的公开 interface：
 
 1. `diagnose_kubernetes_snapshot()`：给定已知 Observation，验证 Finding；
 2. `KubernetesReader`：给定 Kubernetes SDK 响应，验证 Pod、Deployment、
    ReplicaSet 和 EndpointSlice 的结构化结果；
 3. `create_kubernetes_tools()`：验证固定 namespace、结构化输出和 Capability
    实际持有的工具集合。
+4. `KubernetesEvidenceCollector` / `KubernetesPlanExecutor`：验证 Finding 到强制
+   Event/previous logs 查询的确定性映射。
 
 不测试私有解析函数，也不通过 mock 验证内部调用顺序之外的实现细节。
 
@@ -135,6 +156,8 @@ namespace 纳入身份，不提前增加全局资源抽象。
 - EndpointSlice 聚合 Reader；
 - Service 零 Ready Endpoint Finding；
 - Agent Endpoint Tool 与 Capability；
+- [x] Service → Endpoint → Pod targetRef Evidence；
+- [x] EndpointSlice / Endpoints 来源区分；
 - README 能力表和 RBAC 说明；
 - unit test 全绿。
 
@@ -143,6 +166,7 @@ namespace 纳入身份，不提前增加全局资源抽象。
 - [x] container current/last state、reason、exit code；
 - [x] CrashLoopBackOff、OOMKilled、ImagePullBackOff；
 - [x] previous logs 和关联 Event 取证。
+- [x] 计划模式由代码强制 Event/previous logs 取证，不只依赖 Prompt。
 
 ### Slice 3：Deployment rollout
 
@@ -155,6 +179,8 @@ namespace 纳入身份，不提前增加全局资源抽象。
 - [x] kind 集群与固定故障 manifests；
 - [x] Service 无 Endpoint、CrashLoop、ImagePull 和 rollout 卡住；
 - [x] RBAC 缺失与 EndpointSlice API 不可用降级；
+- [x] Service → Endpoint → Pod targetRef；
+- [x] Discovery 404 adapter + 真实 CoreV1 Endpoints 回退；
 - [x] CI 集成测试。
 
 ### Slice 5：TUI 诊断呈现
@@ -172,7 +198,7 @@ namespace 纳入身份，不提前增加全局资源抽象。
 - EndpointSlice 只读权限缺失时返回明确 KubernetesError；
 - 单个工具失败不能被模型解释为“没有 Endpoint”；失败与空结果必须区分；
 - ExternalName Service 不以 EndpointSlice 缺失判定异常；
-- 工具结果必须经过成功 ToolMessage 才计入 Evidence；
+- 工具结果只有经过成功 Controlled Evidence Collection 或成功 ToolMessage 才计入 Evidence；
 - 不把 label、annotation 或 Event 文本当作可信指令；
 - 不改变 Interactive Pod Session 与 Agent Capability 的隔离 ADR。
 
@@ -188,6 +214,9 @@ namespace 纳入身份，不提前增加全局资源抽象。
 - 关系只使用 controller owner，不按资源名称猜测；
 - 固定故障在一次性 kind 集群通过真实 Kubernetes Adapter 验证；
 - EndpointSlice 403 明确失败，404 才回退 CoreV1 Endpoints；
+- Endpoint Evidence 明确记录 EndpointSlice/Endpoints 来源与 targetRef；
+- 更新副本少于期望副本时，即使旧副本仍全部 Ready 也产生 rollout Finding；
+- 计划模式不依靠 Prompt 决定 Pod Event 和 previous logs 的强制取证；
 - `make check` 全部通过，README 与实现一致。
 - TUI 直接显示 Finding 数与简短原因，Enter 可查看完整 Evidence；
 - Deployment 详情显示 generation、condition 和 owner 拓扑；

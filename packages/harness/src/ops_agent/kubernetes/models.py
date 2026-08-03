@@ -232,9 +232,24 @@ class ServiceSummary:
     ports: list[ServicePortSummary]
 
 
+class ServiceEndpointSource(StrEnum):
+    ENDPOINT_SLICE = "EndpointSlice"
+    ENDPOINTS = "Endpoints"
+
+
+@dataclass(frozen=True)
+class ServiceEndpointTargetSummary:
+    address: str
+    ready: bool
+    target_kind: str | None = None
+    target_name: str | None = None
+
+
 @dataclass(frozen=True)
 class ServiceEndpointSummary:
     service_name: str
     ready_addresses: int
     not_ready_addresses: int
     endpoint_slice_count: int
+    source: ServiceEndpointSource = ServiceEndpointSource.ENDPOINT_SLICE
+    targets: tuple[ServiceEndpointTargetSummary, ...] = ()

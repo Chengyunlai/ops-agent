@@ -2,6 +2,7 @@ from ops_agent.diagnostics import (
     DiagnosisReport,
     Evidence,
     Finding,
+    FindingCode,
     FindingSeverity,
     KubernetesSnapshot,
     diagnose_kubernetes_snapshot,
@@ -14,7 +15,9 @@ from ops_agent.kubernetes import (
     PodConditionSummary,
     PodSummary,
     ReplicaSetSummary,
+    ServiceEndpointSource,
     ServiceEndpointSummary,
+    ServiceEndpointTargetSummary,
     ServiceSummary,
 )
 
@@ -122,6 +125,8 @@ def test_diagnosis_reports_crash_loop_with_previous_exit_evidence() -> None:
             resource_kind="Pod",
             resource_name="sample-api",
             summary="容器反复崩溃重启",
+            container_name="api",
+            code=FindingCode.POD_CRASH_LOOP,
             evidence=(
                 Evidence(
                     source="container_status",
@@ -171,6 +176,8 @@ def test_diagnosis_reports_previous_oom_termination() -> None:
             resource_kind="Pod",
             resource_name="memory-worker",
             summary="容器因内存不足被终止",
+            container_name="worker",
+            code=FindingCode.POD_OOM_KILLED,
             evidence=(
                 Evidence(
                     source="container_status",
@@ -217,6 +224,8 @@ def test_diagnosis_reports_current_oom_termination() -> None:
             resource_kind="Pod",
             resource_name="memory-job",
             summary="容器因内存不足被终止",
+            container_name="worker",
+            code=FindingCode.POD_OOM_KILLED,
             evidence=(
                 Evidence(
                     source="container_status",
@@ -266,6 +275,7 @@ def test_diagnosis_reports_image_pull_backoff() -> None:
             resource_kind="Pod",
             resource_name="sample-api",
             summary="容器镜像拉取失败",
+            container_name="api",
             evidence=(
                 Evidence(
                     source="container_status",
@@ -444,6 +454,45 @@ def test_diagnosis_reports_rollout_deadline_with_owned_resources() -> None:
     )
 
 
+def test_diagnosis_reports_deployment_updated_replicas_stalled() -> None:
+    snapshot = KubernetesSnapshot(
+        namespace="sample",
+        pods=(),
+        deployments=(
+            DeploymentSummary(
+                name="sample-api",
+                desired_replicas=3,
+                ready_replicas=3,
+                available_replicas=3,
+                updated_replicas=1,
+                generation=8,
+                observed_generation=8,
+                revision="5",
+            ),
+        ),
+    )
+
+    report = diagnose_kubernetes_snapshot(snapshot)
+
+    assert report.findings == (
+        Finding(
+            severity=FindingSeverity.WARNING,
+            resource_kind="Deployment",
+            resource_name="sample-api",
+            summary="Deployment 更新副本少于期望副本",
+            evidence=(
+                Evidence(
+                    source="deployment_status",
+                    message=(
+                        "desired_replicas=3, updated_replicas=1, "
+                        "ready_replicas=3, available_replicas=3, revision=5"
+                    ),
+                ),
+            ),
+        ),
+    )
+
+
 def test_diagnosis_reports_unobserved_deployment_generation() -> None:
     snapshot = KubernetesSnapshot(
         namespace="sample",
@@ -538,11 +587,61 @@ def test_diagnosis_reports_service_without_ready_endpoints() -> None:
                 Evidence(
                     source="service_endpoints",
                     message=(
-                        "type=ClusterIP, ready_addresses=0, "
+                        "source=none, type=ClusterIP, ready_addresses=0, "
                         "not_ready_addresses=0, endpoint_slices=0"
                     ),
                 ),
             ),
+        ),
+    )
+
+
+def test_diagnosis_explains_service_endpoint_source_and_pod_topology() -> None:
+    snapshot = KubernetesSnapshot(
+        namespace="sample",
+        pods=(),
+        deployments=(),
+        services=(
+            ServiceSummary(
+                name="sample-api",
+                type="ClusterIP",
+                cluster_ip="10.43.0.10",
+                ports=[],
+            ),
+        ),
+        service_endpoints=(
+            ServiceEndpointSummary(
+                service_name="sample-api",
+                ready_addresses=0,
+                not_ready_addresses=1,
+                endpoint_slice_count=0,
+                source=ServiceEndpointSource.ENDPOINTS,
+                targets=(
+                    ServiceEndpointTargetSummary(
+                        address="10.42.0.8",
+                        ready=False,
+                        target_kind="Pod",
+                        target_name="sample-api-7f8-x1",
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    report = diagnose_kubernetes_snapshot(snapshot)
+
+    finding = report.findings[0]
+    assert finding.evidence == (
+        Evidence(
+            source="service_endpoints",
+            message=(
+                "source=Endpoints, type=ClusterIP, ready_addresses=0, "
+                "not_ready_addresses=1, endpoint_slices=0"
+            ),
+        ),
+        Evidence(
+            source="service_topology",
+            message="10.42.0.8 -> Pod/sample-api-7f8-x1 (not-ready)",
         ),
     )
 

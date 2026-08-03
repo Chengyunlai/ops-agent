@@ -2,6 +2,7 @@ from ops_agent.diagnostics.models import (
     DiagnosisReport,
     Evidence,
     Finding,
+    FindingCode,
     FindingSeverity,
     KubernetesSnapshot,
 )
@@ -53,6 +54,8 @@ def diagnose_kubernetes_snapshot(
                         resource_kind="Pod",
                         resource_name=pod.name,
                         summary="容器反复崩溃重启",
+                        container_name=container.name,
+                        code=FindingCode.POD_CRASH_LOOP,
                         evidence=(
                             Evidence(
                                 source="container_status",
@@ -76,6 +79,8 @@ def diagnose_kubernetes_snapshot(
                         resource_kind="Pod",
                         resource_name=pod.name,
                         summary="容器因内存不足被终止",
+                        container_name=container.name,
+                        code=FindingCode.POD_OOM_KILLED,
                         evidence=(
                             Evidence(
                                 source="container_status",
@@ -96,6 +101,8 @@ def diagnose_kubernetes_snapshot(
                         resource_kind="Pod",
                         resource_name=pod.name,
                         summary="容器因内存不足被终止",
+                        container_name=container.name,
+                        code=FindingCode.POD_OOM_KILLED,
                         evidence=(
                             Evidence(
                                 source="container_status",
@@ -117,6 +124,7 @@ def diagnose_kubernetes_snapshot(
                         resource_kind="Pod",
                         resource_name=pod.name,
                         summary="容器镜像拉取失败",
+                        container_name=container.name,
                         evidence=(
                             Evidence(
                                 source="container_status",
@@ -168,6 +176,30 @@ def diagnose_kubernetes_snapshot(
                                 f"{deployment.desired_replicas}, "
                                 "ready_replicas="
                                 f"{deployment.ready_replicas}"
+                            ),
+                        ),
+                    ),
+                )
+            )
+        if deployment.updated_replicas < deployment.desired_replicas:
+            findings.append(
+                Finding(
+                    severity=FindingSeverity.WARNING,
+                    resource_kind="Deployment",
+                    resource_name=deployment.name,
+                    summary="Deployment 更新副本少于期望副本",
+                    evidence=(
+                        Evidence(
+                            source="deployment_status",
+                            message=(
+                                "desired_replicas="
+                                f"{deployment.desired_replicas}, "
+                                "updated_replicas="
+                                f"{deployment.updated_replicas}, "
+                                f"ready_replicas={deployment.ready_replicas}, "
+                                "available_replicas="
+                                f"{deployment.available_replicas}, "
+                                f"revision={deployment.revision}"
                             ),
                         ),
                     ),
@@ -257,23 +289,41 @@ def diagnose_kubernetes_snapshot(
         endpoint_slice_count = (
             endpoints.endpoint_slice_count if endpoints is not None else 0
         )
+        endpoint_source = endpoints.source.value if endpoints is not None else "none"
+        evidence = [
+            Evidence(
+                source="service_endpoints",
+                message=(
+                    f"source={endpoint_source}, "
+                    f"type={service.type}, "
+                    f"ready_addresses={ready_addresses}, "
+                    f"not_ready_addresses={not_ready_addresses}, "
+                    f"endpoint_slices={endpoint_slice_count}"
+                ),
+            )
+        ]
+        if endpoints is not None and endpoints.targets:
+            evidence.append(
+                Evidence(
+                    source="service_topology",
+                    message="; ".join(
+                        (
+                            f"{target.address} -> "
+                            f"{target.target_kind or 'unknown'}/"
+                            f"{target.target_name or 'unknown'} "
+                            f"({'ready' if target.ready else 'not-ready'})"
+                        )
+                        for target in endpoints.targets
+                    ),
+                )
+            )
         findings.append(
             Finding(
                 severity=FindingSeverity.WARNING,
                 resource_kind="Service",
                 resource_name=service.name,
                 summary="Service 没有 Ready Endpoint",
-                evidence=(
-                    Evidence(
-                        source="service_endpoints",
-                        message=(
-                            f"type={service.type}, "
-                            f"ready_addresses={ready_addresses}, "
-                            f"not_ready_addresses={not_ready_addresses}, "
-                            f"endpoint_slices={endpoint_slice_count}"
-                        ),
-                    ),
-                ),
+                evidence=tuple(evidence),
             )
         )
 

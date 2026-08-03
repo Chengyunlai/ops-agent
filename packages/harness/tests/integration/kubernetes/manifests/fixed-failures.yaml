@@ -56,6 +56,36 @@ spec:
 apiVersion: v1
 kind: Pod
 metadata:
+  name: diagnostics-ready
+  namespace: ops-agent-diagnostics-e2e
+  labels:
+    app.kubernetes.io/name: diagnostics-ready
+spec:
+  containers:
+    - name: ready
+      image: busybox:1.36.1
+      imagePullPolicy: IfNotPresent
+      command:
+        - /bin/sh
+        - -c
+        - sleep 3600
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: diagnostics-ready
+  namespace: ops-agent-diagnostics-e2e
+spec:
+  selector:
+    app.kubernetes.io/name: diagnostics-ready
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+---
+apiVersion: v1
+kind: Pod
+metadata:
   name: diagnostics-crash-loop
   namespace: ops-agent-diagnostics-e2e
 spec:

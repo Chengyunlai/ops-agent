@@ -6,6 +6,7 @@ from enum import Enum
 from pathlib import Path
 
 from ops_agent.agent import AgentEvent, AgentStage
+from ops_agent.diagnostics import FindingSeverity
 from ops_agent.kubernetes import KubernetesResourceKind
 from ops_agent.monitoring import (
     KubernetesMonitorSnapshot,
@@ -222,7 +223,7 @@ def _demo_snapshot() -> KubernetesMonitorSnapshot:
         diagnostics=(
             KubernetesResourceDiagnostic(
                 ref=KubernetesResourceRef(kind=pod, name="worker-0"),
-                severity="warning",
+                severity=FindingSeverity.WARNING,
                 summary="Pod 无法调度",
                 evidence=("pod_condition: PodScheduled=False, reason=Unschedulable",),
             ),

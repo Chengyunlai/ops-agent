@@ -28,6 +28,7 @@ from ops_agent.agent.specialists.kubernetes import (
     ExecutionPlan,
     KubernetesAgent,
     KubernetesDiagnosticPlanner,
+    KubernetesEvidenceCollector,
     KubernetesPlanExecutor,
 )
 
@@ -80,7 +81,10 @@ def create_ops_agent(
             KubernetesAgent(
                 model,
                 [tools_by_name[tool_name] for tool_name in sorted(plan_tool_names)],
-            )
+            ),
+            KubernetesEvidenceCollector(
+                [tools_by_name[tool_name] for tool_name in sorted(plan_tool_names)]
+            ),
         )
         if capabilities.supports(CapabilityId.KUBERNETES_DIAGNOSTICS_READ)
         else None

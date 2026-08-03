@@ -14,6 +14,11 @@ class FindingSeverity(StrEnum):
     WARNING = "warning"
 
 
+class FindingCode(StrEnum):
+    POD_CRASH_LOOP = "pod_crash_loop"
+    POD_OOM_KILLED = "pod_oom_killed"
+
+
 @dataclass(frozen=True)
 class Evidence:
     source: str
@@ -27,6 +32,8 @@ class Finding:
     resource_name: str
     summary: str
     evidence: tuple[Evidence, ...]
+    container_name: str | None = None
+    code: FindingCode | None = None
 
 
 @dataclass(frozen=True)

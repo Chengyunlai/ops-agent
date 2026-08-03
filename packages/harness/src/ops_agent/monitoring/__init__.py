@@ -4,9 +4,9 @@ from ops_agent.kubernetes import (
     VolumeEntry,
     VolumeEntryKind,
 )
-from ops_agent.monitoring.kubernetes import (
+from ops_agent.monitoring.kubernetes import KubernetesMonitor
+from ops_agent.monitoring.models import (
     KubernetesDeploymentTopology,
-    KubernetesMonitor,
     KubernetesMonitorSnapshot,
     KubernetesPodTopology,
     KubernetesReplicaSetTopology,

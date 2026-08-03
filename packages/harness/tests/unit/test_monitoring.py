@@ -12,7 +12,9 @@ from ops_agent.kubernetes import (
     PersistentVolumeMountSummary,
     PodSummary,
     ReplicaSetSummary,
+    ServiceEndpointSource,
     ServiceEndpointSummary,
+    ServiceEndpointTargetSummary,
     ServicePortSummary,
     ServiceSummary,
     StatefulSetSummary,
@@ -588,3 +590,42 @@ def test_monitor_marks_endpoint_diagnostics_partial_without_guessing_no_backends
     assert snapshot.diagnostic_errors == (
         "Service Endpoint 诊断不可用：endpointslices is forbidden",
     )
+
+
+def test_monitor_shows_healthy_service_endpoint_to_pod_topology() -> None:
+    class HealthyTopologySource(FakeKubernetesSource):
+        def list_service_endpoints(
+            self,
+            namespace: str,
+        ) -> list[ServiceEndpointSummary]:
+            self.calls.append(("service_endpoints", namespace))
+            return [
+                ServiceEndpointSummary(
+                    service_name="sample-api",
+                    ready_addresses=1,
+                    not_ready_addresses=0,
+                    endpoint_slice_count=1,
+                    source=ServiceEndpointSource.ENDPOINT_SLICE,
+                    targets=(
+                        ServiceEndpointTargetSummary(
+                            address="10.42.0.8",
+                            ready=True,
+                            target_kind="Pod",
+                            target_name="sample-api-7f8-x1",
+                        ),
+                    ),
+                )
+            ]
+
+    monitor = KubernetesMonitor(HealthyTopologySource(), namespace="sample")
+    monitor.snapshot()
+
+    details = monitor.diagnostics(
+        KubernetesResourceRef(
+            kind=KubernetesResourceKind.SERVICE,
+            name="sample-api",
+        )
+    )
+
+    assert "Source: EndpointSlice · Ready: 1 · NotReady: 0" in details.content
+    assert "10.42.0.8 -> Pod/sample-api-7f8-x1 · ready" in details.content

@@ -153,7 +153,7 @@ def create_kubernetes_tools(
 
     @tool("list_kubernetes_service_endpoints")
     def list_kubernetes_service_endpoints() -> list[dict[str, object]]:
-        """列出已配置 namespace 的 Service Endpoint 就绪统计。"""
+        """列出 Service Endpoint 来源、就绪统计和 targetRef 关系。"""
         return [
             asdict(endpoints) for endpoints in reader.list_service_endpoints(namespace)
         ]
