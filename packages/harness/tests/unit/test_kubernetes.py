@@ -7,6 +7,7 @@ from kubernetes.client.exceptions import ApiException
 from kubernetes.config.config_exception import ConfigException
 from ops_agent.kubernetes import (
     ContainerStatusSummary,
+    ControllerReferenceSummary,
     KubernetesError,
     KubernetesReader,
     PodConditionSummary,
@@ -98,6 +99,13 @@ def test_list_pods_normalizes_container_states_and_scheduling_conditions() -> No
         metadata=SimpleNamespace(
             name="sample-api",
             creation_timestamp=None,
+            owner_references=[
+                SimpleNamespace(
+                    kind="ReplicaSet",
+                    name="sample-api-7f8",
+                    controller=True,
+                )
+            ],
         ),
         spec=SimpleNamespace(containers=[SimpleNamespace()]),
         status=SimpleNamespace(
@@ -166,6 +174,10 @@ def test_list_pods_normalizes_container_states_and_scheduling_conditions() -> No
                     reason="Unschedulable",
                     message="0/3 nodes are available: insufficient cpu",
                 ),
+            ),
+            controller=ControllerReferenceSummary(
+                kind="ReplicaSet",
+                name="sample-api-7f8",
             ),
         )
     ]

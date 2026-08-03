@@ -8,9 +8,12 @@ from ops_agent.diagnostics import (
 )
 from ops_agent.kubernetes import (
     ContainerStatusSummary,
+    ControllerReferenceSummary,
+    DeploymentConditionSummary,
     DeploymentSummary,
     PodConditionSummary,
     PodSummary,
+    ReplicaSetSummary,
     ServiceEndpointSummary,
     ServiceSummary,
 )
@@ -353,6 +356,160 @@ def test_diagnosis_reports_deployment_with_missing_ready_replicas() -> None:
     )
 
 
+def test_diagnosis_reports_rollout_deadline_with_owned_resources() -> None:
+    snapshot = KubernetesSnapshot(
+        namespace="sample",
+        pods=(
+            PodSummary(
+                name="sample-api-7f8-abc",
+                phase="Pending",
+                restart_count=0,
+                controller=ControllerReferenceSummary(
+                    kind="ReplicaSet",
+                    name="sample-api-7f8",
+                ),
+            ),
+        ),
+        deployments=(
+            DeploymentSummary(
+                name="sample-api",
+                desired_replicas=3,
+                ready_replicas=1,
+                available_replicas=1,
+                updated_replicas=1,
+                generation=7,
+                observed_generation=7,
+                revision="4",
+                conditions=(
+                    DeploymentConditionSummary(
+                        type="Progressing",
+                        status="False",
+                        reason="ProgressDeadlineExceeded",
+                        message="ReplicaSet sample-api-7f8 has timed out progressing",
+                    ),
+                ),
+            ),
+        ),
+        replica_sets=(
+            ReplicaSetSummary(
+                name="sample-api-7f8",
+                desired_replicas=3,
+                current_replicas=1,
+                ready_replicas=1,
+                revision="4",
+                controller=ControllerReferenceSummary(
+                    kind="Deployment",
+                    name="sample-api",
+                ),
+            ),
+        ),
+    )
+
+    report = diagnose_kubernetes_snapshot(snapshot)
+
+    assert (
+        Finding(
+            severity=FindingSeverity.WARNING,
+            resource_kind="Deployment",
+            resource_name="sample-api",
+            summary="Deployment rollout 超过进度期限",
+            evidence=(
+                Evidence(
+                    source="deployment_status",
+                    message=(
+                        "desired_replicas=3, updated_replicas=1, "
+                        "ready_replicas=1, available_replicas=1"
+                    ),
+                ),
+                Evidence(
+                    source="deployment_condition",
+                    message=(
+                        "generation=7, observed_generation=7, revision=4, "
+                        "condition=Progressing, status=False, "
+                        "reason=ProgressDeadlineExceeded, message=ReplicaSet "
+                        "sample-api-7f8 has timed out progressing"
+                    ),
+                ),
+                Evidence(
+                    source="deployment_topology",
+                    message=(
+                        "replica_sets=sample-api-7f8(revision=4, desired=3, "
+                        "ready=1); pods=sample-api-7f8-abc"
+                        "(owner=sample-api-7f8, phase=Pending)"
+                    ),
+                ),
+            ),
+        )
+        in report.findings
+    )
+
+
+def test_diagnosis_reports_unobserved_deployment_generation() -> None:
+    snapshot = KubernetesSnapshot(
+        namespace="sample",
+        pods=(),
+        deployments=(
+            DeploymentSummary(
+                name="sample-api",
+                desired_replicas=3,
+                ready_replicas=3,
+                available_replicas=3,
+                updated_replicas=3,
+                generation=8,
+                observed_generation=7,
+                revision="5",
+            ),
+        ),
+    )
+
+    report = diagnose_kubernetes_snapshot(snapshot)
+
+    assert report.findings == (
+        Finding(
+            severity=FindingSeverity.WARNING,
+            resource_kind="Deployment",
+            resource_name="sample-api",
+            summary="Deployment 控制器尚未观察到最新版本",
+            evidence=(
+                Evidence(
+                    source="deployment_status",
+                    message="generation=8, observed_generation=7, revision=5",
+                ),
+            ),
+        ),
+    )
+
+
+def test_diagnosis_ignores_inactive_progress_deadline_condition() -> None:
+    snapshot = KubernetesSnapshot(
+        namespace="sample",
+        pods=(),
+        deployments=(
+            DeploymentSummary(
+                name="sample-api",
+                desired_replicas=3,
+                ready_replicas=3,
+                available_replicas=3,
+                updated_replicas=3,
+                generation=8,
+                observed_generation=8,
+                revision="5",
+                conditions=(
+                    DeploymentConditionSummary(
+                        type="Progressing",
+                        status="True",
+                        reason="ProgressDeadlineExceeded",
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    report = diagnose_kubernetes_snapshot(snapshot)
+
+    assert report.findings == ()
+
+
 def test_diagnosis_reports_service_without_ready_endpoints() -> None:
     snapshot = KubernetesSnapshot(
         namespace="sample",
@@ -458,6 +615,16 @@ def test_diagnosis_does_not_report_healthy_resources() -> None:
                 ready_replicas=3,
                 available_replicas=3,
                 updated_replicas=3,
+                generation=7,
+                observed_generation=7,
+                revision="4",
+                conditions=(
+                    DeploymentConditionSummary(
+                        type="Progressing",
+                        status="True",
+                        reason="NewReplicaSetAvailable",
+                    ),
+                ),
             ),
         ),
     )

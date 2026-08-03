@@ -4,6 +4,7 @@ from enum import StrEnum
 from ops_agent.kubernetes import (
     DeploymentSummary,
     PodSummary,
+    ReplicaSetSummary,
     ServiceEndpointSummary,
     ServiceSummary,
 )
@@ -33,6 +34,7 @@ class KubernetesSnapshot:
     namespace: str
     pods: tuple[PodSummary, ...]
     deployments: tuple[DeploymentSummary, ...]
+    replica_sets: tuple[ReplicaSetSummary, ...] = ()
     services: tuple[ServiceSummary, ...] = ()
     service_endpoints: tuple[ServiceEndpointSummary, ...] = ()
 

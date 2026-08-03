@@ -173,6 +173,73 @@ def diagnose_kubernetes_snapshot(
                     ),
                 )
             )
+        if (
+            deployment.generation is not None
+            and deployment.observed_generation is not None
+            and deployment.observed_generation < deployment.generation
+        ):
+            findings.append(
+                Finding(
+                    severity=FindingSeverity.WARNING,
+                    resource_kind="Deployment",
+                    resource_name=deployment.name,
+                    summary="Deployment 控制器尚未观察到最新版本",
+                    evidence=(
+                        Evidence(
+                            source="deployment_status",
+                            message=(
+                                f"generation={deployment.generation}, "
+                                "observed_generation="
+                                f"{deployment.observed_generation}, "
+                                f"revision={deployment.revision}"
+                            ),
+                        ),
+                    ),
+                )
+            )
+        for condition in deployment.conditions:
+            if not (
+                condition.type == "Progressing"
+                and condition.status == "False"
+                and condition.reason == "ProgressDeadlineExceeded"
+            ):
+                continue
+            findings.append(
+                Finding(
+                    severity=FindingSeverity.WARNING,
+                    resource_kind="Deployment",
+                    resource_name=deployment.name,
+                    summary="Deployment rollout 超过进度期限",
+                    evidence=(
+                        Evidence(
+                            source="deployment_status",
+                            message=(
+                                "desired_replicas="
+                                f"{deployment.desired_replicas}, "
+                                "updated_replicas="
+                                f"{deployment.updated_replicas}, "
+                                f"ready_replicas={deployment.ready_replicas}, "
+                                "available_replicas="
+                                f"{deployment.available_replicas}"
+                            ),
+                        ),
+                        Evidence(
+                            source="deployment_condition",
+                            message=(
+                                f"generation={deployment.generation}, "
+                                "observed_generation="
+                                f"{deployment.observed_generation}, "
+                                f"revision={deployment.revision}, "
+                                f"condition={condition.type}, "
+                                f"status={condition.status}, "
+                                f"reason={condition.reason}, "
+                                f"message={condition.message}"
+                            ),
+                        ),
+                        _deployment_topology_evidence(snapshot, deployment.name),
+                    ),
+                )
+            )
 
     endpoints_by_service = {
         endpoints.service_name: endpoints for endpoints in snapshot.service_endpoints
@@ -213,4 +280,52 @@ def diagnose_kubernetes_snapshot(
     return DiagnosisReport(
         namespace=snapshot.namespace,
         findings=tuple(findings),
+    )
+
+
+def _deployment_topology_evidence(
+    snapshot: KubernetesSnapshot,
+    deployment_name: str,
+) -> Evidence:
+    replica_sets = sorted(
+        (
+            replica_set
+            for replica_set in snapshot.replica_sets
+            if replica_set.controller is not None
+            and replica_set.controller.kind == "Deployment"
+            and replica_set.controller.name == deployment_name
+        ),
+        key=lambda replica_set: replica_set.name,
+    )
+    replica_set_names = {replica_set.name for replica_set in replica_sets}
+    pods = sorted(
+        (
+            pod
+            for pod in snapshot.pods
+            if pod.controller is not None
+            and pod.controller.kind == "ReplicaSet"
+            and pod.controller.name in replica_set_names
+        ),
+        key=lambda pod: pod.name,
+    )
+    replica_set_evidence = (
+        ", ".join(
+            f"{replica_set.name}(revision={replica_set.revision}, "
+            f"desired={replica_set.desired_replicas}, "
+            f"ready={replica_set.ready_replicas})"
+            for replica_set in replica_sets
+        )
+        or "none"
+    )
+    pod_evidence = (
+        ", ".join(
+            f"{pod.name}(owner={pod.controller.name}, phase={pod.phase})"
+            for pod in pods
+            if pod.controller is not None
+        )
+        or "none"
+    )
+    return Evidence(
+        source="deployment_topology",
+        message=f"replica_sets={replica_set_evidence}; pods={pod_evidence}",
     )

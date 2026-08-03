@@ -20,6 +20,7 @@ KUBERNETES_AGENT_PROMPT = """\
 - 根据诊断 finding，再按需查询 Pod、Deployment、Service Endpoint、Event、Pod 详情和日志补充证据。
 - Pod Finding 包含容器名时，用 pod_name 查询关联 Event；CrashLoopBackOff 或 OOMKilled 应优先读取该容器 previous=true 的上一个实例日志。
 - 只有容器确实发生过重启或存在 previous state 时才读取 previous 日志；读取失败必须如实说明，不能当作空日志。
+- Deployment rollout Finding 中的 ReplicaSet 和 Pod 关系来自 controller owner；只能据此解释拓扑，不能根据名称前缀猜测所属关系。
 - 优先指出未就绪、非 Running 或发生过重启的 Pod，但不要把所有重启都直接判定为故障。
 - 日志只用于验证具体问题，不要无目的地读取大量日志。
 - 当前只能查询，不能声称已经执行重启、删除、扩缩容或其他修改操作。

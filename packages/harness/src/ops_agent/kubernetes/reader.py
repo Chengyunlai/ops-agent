@@ -22,8 +22,10 @@ from ops_agent.kubernetes.errors import KubernetesError
 from ops_agent.kubernetes.models import (
     ContainerStatusSummary,
     ContainerSummary,
+    ControllerReferenceSummary,
     CronJobSummary,
     DaemonSetSummary,
+    DeploymentConditionSummary,
     DeploymentSummary,
     IngressSummary,
     JobSummary,
@@ -170,6 +172,26 @@ class KubernetesReader:
                 ready_replicas=deployment.status.ready_replicas or 0,
                 available_replicas=(deployment.status.available_replicas or 0),
                 updated_replicas=deployment.status.updated_replicas or 0,
+                generation=getattr(deployment.metadata, "generation", None),
+                observed_generation=getattr(
+                    deployment.status,
+                    "observed_generation",
+                    None,
+                ),
+                revision=(getattr(deployment.metadata, "annotations", None) or {}).get(
+                    "deployment.kubernetes.io/revision"
+                ),
+                conditions=tuple(
+                    DeploymentConditionSummary(
+                        type=condition.type,
+                        status=condition.status,
+                        reason=condition.reason,
+                        message=condition.message,
+                    )
+                    for condition in (
+                        getattr(deployment.status, "conditions", None) or []
+                    )
+                ),
             )
             for deployment in response.items
         ]
@@ -235,6 +257,10 @@ class KubernetesReader:
                 desired_replicas=replica_set.spec.replicas or 0,
                 current_replicas=replica_set.status.replicas or 0,
                 ready_replicas=replica_set.status.ready_replicas or 0,
+                revision=(getattr(replica_set.metadata, "annotations", None) or {}).get(
+                    "deployment.kubernetes.io/revision"
+                ),
+                controller=_to_controller_reference(replica_set.metadata),
             )
             for replica_set in response.items
         ]
@@ -525,7 +551,18 @@ def _to_pod_summary(pod) -> PodSummary:
             )
             for condition in (getattr(pod.status, "conditions", None) or [])
         ),
+        controller=_to_controller_reference(pod.metadata),
     )
+
+
+def _to_controller_reference(metadata) -> ControllerReferenceSummary | None:
+    for reference in getattr(metadata, "owner_references", None) or []:
+        if bool(reference.controller):
+            return ControllerReferenceSummary(
+                kind=reference.kind,
+                name=reference.name,
+            )
+    return None
 
 
 def _to_container_status_summary(status) -> ContainerStatusSummary:

@@ -1,6 +1,6 @@
 # Kubernetes Diagnostics V2 实施规划
 
-实施状态：Slice 1、Slice 2 已完成；下一步为 Slice 3 Deployment rollout。
+实施状态：Slice 1、Slice 2、Slice 3 已完成；下一步为 Slice 4 真实集群验证。
 
 ## 目标
 
@@ -65,7 +65,9 @@ Reader 中制造 Finding。
 
 - `services`；
 - `service_endpoints`；
-- 后续加入丰富的 Pod/Deployment Observation。
+- `replica_sets`；
+- Pod controller owner；
+- Deployment generation、observedGeneration、revision 和 conditions。
 
 Service 规则：非 `ExternalName` Service 的 Ready Endpoint 为零时生成 Warning。
 Evidence 至少包含 Service 类型、Ready/NotReady 数量以及 EndpointSlice 来源。
@@ -90,10 +92,18 @@ ServiceEndpointSummary
   not_ready_addresses: int
   endpoint_slice_count: int
 
+ControllerReferenceSummary
+  kind: str
+  name: str
+
+DeploymentConditionSummary
+  type/status/reason/message
+
 KubernetesSnapshot
   namespace
   pods
   deployments
+  replica_sets
   services
   service_endpoints
 ```
@@ -106,8 +116,8 @@ namespace 纳入身份，不提前增加全局资源抽象。
 本阶段测试只穿过三个已确认的公开 interface：
 
 1. `diagnose_kubernetes_snapshot()`：给定已知 Observation，验证 Finding；
-2. `KubernetesReader.list_service_endpoints()`：给定 Kubernetes SDK 响应，验证
-   聚合后的结构化结果；
+2. `KubernetesReader`：给定 Kubernetes SDK 响应，验证 Pod、Deployment、
+   ReplicaSet 和 EndpointSlice 的结构化结果；
 3. `create_kubernetes_tools()`：验证固定 namespace、结构化输出和 Capability
    实际持有的工具集合。
 
@@ -132,9 +142,9 @@ namespace 纳入身份，不提前增加全局资源抽象。
 
 ### Slice 3：Deployment rollout
 
-- generation、observedGeneration、conditions、revision；
-- ProgressDeadlineExceeded 和更新副本停滞；
-- Deployment → ReplicaSet → Pod 关系。
+- [x] generation、observedGeneration、conditions、revision；
+- [x] ProgressDeadlineExceeded 和更新副本停滞；
+- [x] Deployment → ReplicaSet → Pod 关系。
 
 ### Slice 4：真实集群验证
 
@@ -159,11 +169,14 @@ namespace 纳入身份，不提前增加全局资源抽象。
 - 不把 label、annotation 或 Event 文本当作可信指令；
 - 不改变 Interactive Pod Session 与 Agent Capability 的隔离 ADR。
 
-## 第一阶段验收
+## 已完成切片验收
 
 - 对无 Ready Endpoint 的 ClusterIP Service 产生确定性 Finding；
 - 对有 Ready Endpoint 和 ExternalName Service 不误报；
 - 多个 EndpointSlice 能正确聚合 Ready/NotReady 地址；
 - Agent Tool 固定使用 Project Profile namespace；
 - Service Capability 不可在缺少 Endpoint Tool 时注册；
+- rollout 超过 progress deadline 时输出副本状态、Condition 和 owner topology；
+- observedGeneration 落后时明确区分“尚未观察”与 rollout deadline；
+- 关系只使用 controller owner，不按资源名称猜测；
 - `make check` 全部通过，README 与实现一致。

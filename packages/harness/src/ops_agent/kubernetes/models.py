@@ -17,6 +17,12 @@ class KubernetesResourceKind(StrEnum):
 
 
 @dataclass(frozen=True)
+class ControllerReferenceSummary:
+    kind: str
+    name: str
+
+
+@dataclass(frozen=True)
 class ContainerStatusSummary:
     name: str
     ready: bool
@@ -46,6 +52,7 @@ class PodSummary:
     created_at: datetime | None = None
     container_statuses: tuple[ContainerStatusSummary, ...] = ()
     conditions: tuple[PodConditionSummary, ...] = ()
+    controller: ControllerReferenceSummary | None = None
 
 
 @dataclass(frozen=True)
@@ -78,12 +85,24 @@ class KubernetesEventSummary:
 
 
 @dataclass(frozen=True)
+class DeploymentConditionSummary:
+    type: str
+    status: str
+    reason: str | None = None
+    message: str | None = None
+
+
+@dataclass(frozen=True)
 class DeploymentSummary:
     name: str
     desired_replicas: int
     ready_replicas: int
     available_replicas: int
     updated_replicas: int
+    generation: int | None = None
+    observed_generation: int | None = None
+    revision: str | None = None
+    conditions: tuple[DeploymentConditionSummary, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -110,6 +129,8 @@ class ReplicaSetSummary:
     desired_replicas: int
     current_replicas: int
     ready_replicas: int
+    revision: str | None = None
+    controller: ControllerReferenceSummary | None = None
 
 
 @dataclass(frozen=True)

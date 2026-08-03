@@ -12,6 +12,7 @@ from ops_agent.kubernetes import (
     KubernetesEventSummary,
     PodDetails,
     PodSummary,
+    ReplicaSetSummary,
     ServiceEndpointSummary,
     ServiceSummary,
 )
@@ -49,6 +50,11 @@ class KubernetesOperations(Protocol):
         namespace: str,
     ) -> list[DeploymentSummary]: ...
 
+    def list_replica_sets(
+        self,
+        namespace: str,
+    ) -> list[ReplicaSetSummary]: ...
+
     def list_services(
         self,
         namespace: str,
@@ -72,11 +78,12 @@ def create_kubernetes_tools(
 
     @tool("diagnose_kubernetes_workloads")
     def diagnose_kubernetes_workloads() -> dict[str, object]:
-        """诊断已配置 namespace 的 Pod、Deployment 和 Service 健康状态。"""
+        """诊断 Pod、Deployment rollout、所属 ReplicaSet 和 Service 健康状态。"""
         snapshot = KubernetesSnapshot(
             namespace=namespace,
             pods=tuple(reader.list_pods(namespace)),
             deployments=tuple(reader.list_deployments(namespace)),
+            replica_sets=tuple(reader.list_replica_sets(namespace)),
             services=tuple(reader.list_services(namespace)),
             service_endpoints=tuple(reader.list_service_endpoints(namespace)),
         )

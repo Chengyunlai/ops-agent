@@ -26,7 +26,7 @@
 | PVC 存储浏览 | 已完成 | 展示 PVC/PV/StorageClass/后端/挂载关系，并经现有 Pod 只读浏览目录和预览文本文件 |
 | Artifact Download | 已完成 | 从选定 Pod 或 PVC 流式下载普通文件，显示大小与 SHA-256，失败自动清理 |
 | Interactive Pod Session | 已完成 | 左侧监盘人工进入选定 Pod/容器；默认禁用且不向 Agent 暴露 |
-| Kubernetes 基础诊断 | 已完成 | Agent 可确定性识别 Pod 调度、CrashLoop、OOM、镜像拉取、Deployment 副本和 Service Endpoint 异常 |
+| Kubernetes 基础诊断 | 已完成 | Agent 可确定性识别 Pod 失败原因、Deployment rollout/资源关系和 Service Endpoint 异常 |
 | 告警接入与诊断 | 规划中 | 接入告警并生成带证据的诊断报告 |
 | 审批与处置执行 | 规划中 | 执行扩缩容、重启、回滚等受控动作 |
 | LLM / Agent 编排 | 基础已完成 | 受控主图负责范围路由和诊断计划，Kubernetes 子图负责只读诊断 |
@@ -267,7 +267,7 @@ Agent 使用配置中固定的 kubeconfig 和 namespace。模型不能通过工�
 
 | 工具 | 用途 | 查询边界 |
 | --- | --- | --- |
-| `diagnose_kubernetes_workloads` | 确定性诊断 Pod、容器、Deployment 和 Service 基础健康状态 | 配置中的 namespace |
+| `diagnose_kubernetes_workloads` | 确定性诊断 Pod、Deployment rollout/所属 ReplicaSet 与 Pod、Service Endpoint | 配置中的 namespace |
 | `list_kubernetes_pods` | 查看 Pod 阶段、就绪容器数和重启数 | 配置中的 namespace |
 | `get_kubernetes_pod_details` | 查看 Pod 节点、IP、镜像和容器状态 | 指定 Pod |
 | `get_kubernetes_pod_logs` | 读取 Pod 当前或上一个容器实例日志（`previous=true`） | 最多 1000 行 |
@@ -282,6 +282,10 @@ Shell 执行入口。这样可以把模型的活动范围限制在启动时选�
 Pod Observation 同时保留容器当前/上一次状态、reason、exit code 和调度 Condition；
 遇到 CrashLoopBackOff 或 OOMKilled 时，专业 Agent 可按 Finding 中的 Pod/容器名
 读取关联 Event 和上一个容器实例日志，不会把模型猜测当成失败原因。
+Deployment Observation 保留 generation、observedGeneration、revision 和 Conditions；
+rollout 超过 progress deadline 时，Finding 会按 controller owner 附带所属
+ReplicaSet 和 Pod，而不是根据名称前缀推测关系。诊断所用只读 RBAC 需要允许
+目标 namespace 的 `apps/deployments` 与 `apps/replicasets` 执行 `list`。
 Service 诊断使用 `discovery.k8s.io/v1` EndpointSlice；只读 RBAC 除 Service
 权限外，还必须允许在目标 namespace 对 `endpointslices` 执行 `list`。该权限
 缺失时查询会返回明确错误，不会把权限失败误判为 Service 没有后端。
@@ -696,7 +700,8 @@ make check
 - [x] Kubernetes 客户端与 Pod 只读查询
 - [x] Pod 详情、日志、Event、Deployment 与 Service 只读工具
 - [x] Pod 调度、CrashLoop、OOM、镜像拉取及 previous logs 诊断链路
-- [x] Deployment 和 Service Endpoint 基础症状诊断及 Agent 工具链路
+- [x] Deployment rollout、ReplicaSet/Pod 关系诊断链路
+- [x] Service Endpoint 基础症状诊断及 Agent 工具链路
 - [x] 请求范围路由、默认拒绝与实时证据校验
 - [x] 最小 Kubernetes 只读诊断计划
 - [ ] 发布失败根因和资源压力诊断

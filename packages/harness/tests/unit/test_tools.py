@@ -5,6 +5,7 @@ from ops_agent.kubernetes import (
     KubernetesEventSummary,
     PodDetails,
     PodSummary,
+    ReplicaSetSummary,
     ServiceEndpointSummary,
     ServiceSummary,
 )
@@ -101,6 +102,20 @@ class FakeKubernetesOperations:
             )
         ]
 
+    def list_replica_sets(
+        self,
+        namespace: str,
+    ) -> list[ReplicaSetSummary]:
+        self.calls.append(("list_replica_sets", namespace))
+        return [
+            ReplicaSetSummary(
+                name="sample-api-7f8",
+                desired_replicas=3,
+                current_replicas=2,
+                ready_replicas=2,
+            )
+        ]
+
     def list_services(self, namespace: str) -> list[ServiceSummary]:
         self.calls.append(("list_services", namespace))
         return [
@@ -189,6 +204,7 @@ def test_diagnosis_tool_reports_findings_from_configured_namespace() -> None:
     assert operations.calls == [
         ("list_pods", "sample"),
         ("list_deployments", "sample"),
+        ("list_replica_sets", "sample"),
         ("list_services", "sample"),
         ("list_service_endpoints", "sample"),
     ]

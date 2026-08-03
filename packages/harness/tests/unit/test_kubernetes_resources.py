@@ -6,8 +6,10 @@ from types import SimpleNamespace
 from kubernetes.client.exceptions import ApiException
 from ops_agent.kubernetes import (
     ContainerSummary,
+    ControllerReferenceSummary,
     CronJobSummary,
     DaemonSetSummary,
+    DeploymentConditionSummary,
     DeploymentSummary,
     IngressSummary,
     JobSummary,
@@ -227,12 +229,25 @@ class FakeAppsV1Api:
         return SimpleNamespace(
             items=[
                 SimpleNamespace(
-                    metadata=SimpleNamespace(name="sample-api"),
+                    metadata=SimpleNamespace(
+                        name="sample-api",
+                        generation=7,
+                        annotations={"deployment.kubernetes.io/revision": "4"},
+                    ),
                     spec=SimpleNamespace(replicas=3),
                     status=SimpleNamespace(
                         ready_replicas=2,
                         available_replicas=2,
                         updated_replicas=3,
+                        observed_generation=7,
+                        conditions=[
+                            SimpleNamespace(
+                                type="Progressing",
+                                status="True",
+                                reason="NewReplicaSetAvailable",
+                                message="ReplicaSet rollout completed",
+                            )
+                        ],
                     ),
                 )
             ]
@@ -275,7 +290,17 @@ class FakeAppsV1Api:
         return SimpleNamespace(
             items=[
                 SimpleNamespace(
-                    metadata=SimpleNamespace(name="sample-api-7f8"),
+                    metadata=SimpleNamespace(
+                        name="sample-api-7f8",
+                        annotations={"deployment.kubernetes.io/revision": "4"},
+                        owner_references=[
+                            SimpleNamespace(
+                                kind="Deployment",
+                                name="sample-api",
+                                controller=True,
+                            )
+                        ],
+                    ),
                     spec=SimpleNamespace(replicas=2),
                     status=SimpleNamespace(
                         replicas=2,
@@ -517,6 +542,17 @@ def test_list_deployments_returns_replica_status() -> None:
             ready_replicas=2,
             available_replicas=2,
             updated_replicas=3,
+            generation=7,
+            observed_generation=7,
+            revision="4",
+            conditions=(
+                DeploymentConditionSummary(
+                    type="Progressing",
+                    status="True",
+                    reason="NewReplicaSetAvailable",
+                    message="ReplicaSet rollout completed",
+                ),
+            ),
         )
     ]
     assert apps_api.calls[0][1]["namespace"] == "sample"
@@ -633,6 +669,11 @@ def test_list_additional_workloads_returns_replica_status() -> None:
             desired_replicas=2,
             current_replicas=2,
             ready_replicas=2,
+            revision="4",
+            controller=ControllerReferenceSummary(
+                kind="Deployment",
+                name="sample-api",
+            ),
         )
     ]
     assert [call[0] for call in apps_api.calls] == [

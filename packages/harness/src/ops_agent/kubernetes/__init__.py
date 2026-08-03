@@ -2,8 +2,10 @@ from ops_agent.kubernetes.errors import KubernetesError
 from ops_agent.kubernetes.models import (
     ContainerStatusSummary,
     ContainerSummary,
+    ControllerReferenceSummary,
     CronJobSummary,
     DaemonSetSummary,
+    DeploymentConditionSummary,
     DeploymentSummary,
     IngressSummary,
     JobSummary,
@@ -29,8 +31,10 @@ from ops_agent.kubernetes.reader import KubernetesReader, create_kubernetes_read
 __all__ = [
     "ContainerStatusSummary",
     "ContainerSummary",
+    "ControllerReferenceSummary",
     "CronJobSummary",
     "DaemonSetSummary",
+    "DeploymentConditionSummary",
     "DeploymentSummary",
     "IngressSummary",
     "JobSummary",
