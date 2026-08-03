@@ -6,8 +6,10 @@ import pytest
 from kubernetes.client.exceptions import ApiException
 from kubernetes.config.config_exception import ConfigException
 from ops_agent.kubernetes import (
+    ContainerStatusSummary,
     KubernetesError,
     KubernetesReader,
+    PodConditionSummary,
     PodSummary,
     create_kubernetes_reader,
 )
@@ -89,6 +91,84 @@ def test_list_pods_returns_summaries_from_api() -> None:
         )
     ]
     assert api.calls == [("sample", 7)]
+
+
+def test_list_pods_normalizes_container_states_and_scheduling_conditions() -> None:
+    pod = SimpleNamespace(
+        metadata=SimpleNamespace(
+            name="sample-api",
+            creation_timestamp=None,
+        ),
+        spec=SimpleNamespace(containers=[SimpleNamespace()]),
+        status=SimpleNamespace(
+            phase="Pending",
+            container_statuses=[
+                SimpleNamespace(
+                    name="api",
+                    restart_count=4,
+                    ready=False,
+                    state=SimpleNamespace(
+                        running=None,
+                        waiting=SimpleNamespace(reason="CrashLoopBackOff"),
+                        terminated=None,
+                    ),
+                    last_state=SimpleNamespace(
+                        running=None,
+                        waiting=None,
+                        terminated=SimpleNamespace(
+                            reason="OOMKilled",
+                            exit_code=137,
+                        ),
+                    ),
+                )
+            ],
+            conditions=[
+                SimpleNamespace(
+                    type="PodScheduled",
+                    status="False",
+                    reason="Unschedulable",
+                    message="0/3 nodes are available: insufficient cpu",
+                )
+            ],
+        ),
+    )
+    reader = KubernetesReader(
+        core_api=FakeCoreV1Api([pod]),
+        apps_api=object(),
+        request_timeout_seconds=7,
+    )
+
+    pods = reader.list_pods(namespace="sample")
+
+    assert pods == [
+        PodSummary(
+            name="sample-api",
+            phase="Pending",
+            restart_count=4,
+            ready_containers=0,
+            total_containers=1,
+            container_statuses=(
+                ContainerStatusSummary(
+                    name="api",
+                    ready=False,
+                    restart_count=4,
+                    state="waiting",
+                    reason="CrashLoopBackOff",
+                    exit_code=None,
+                    previous_reason="OOMKilled",
+                    previous_exit_code=137,
+                ),
+            ),
+            conditions=(
+                PodConditionSummary(
+                    type="PodScheduled",
+                    status="False",
+                    reason="Unschedulable",
+                    message="0/3 nodes are available: insufficient cpu",
+                ),
+            ),
+        )
+    ]
 
 
 def test_list_pods_uses_zero_restarts_before_containers_start() -> None:

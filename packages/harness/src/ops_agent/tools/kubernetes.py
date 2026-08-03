@@ -33,6 +33,7 @@ class KubernetesOperations(Protocol):
         *,
         container: str | None,
         tail_lines: int,
+        previous: bool,
     ) -> str: ...
 
     def list_events(
@@ -93,10 +94,12 @@ def create_kubernetes_tools(
         pod_name: str,
         container: str | None = None,
         tail_lines: int = 200,
+        previous: bool = False,
     ) -> dict[str, object]:
         """读取指定 Pod 最近的日志。
 
-        tail_lines 必须在 1 到 1000 之间。多容器 Pod 可指定 container。
+        tail_lines 必须在 1 到 1000 之间。多容器 Pod 可指定 container；
+        previous=true 可读取上一个已终止容器实例的日志。
         """
         _require_range(tail_lines, "tail_lines", minimum=1, maximum=1000)
         logs = reader.get_pod_logs(
@@ -104,11 +107,13 @@ def create_kubernetes_tools(
             pod_name,
             container=container,
             tail_lines=tail_lines,
+            previous=previous,
         )
         return {
             "pod_name": pod_name,
             "container": container,
             "tail_lines": tail_lines,
+            "previous": previous,
             "logs": logs,
         }
 

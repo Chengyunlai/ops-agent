@@ -449,7 +449,7 @@ def test_get_pod_details_returns_container_status() -> None:
     ]
 
 
-def test_get_pod_logs_applies_container_and_tail_limit() -> None:
+def test_get_pod_logs_applies_container_tail_and_previous_instance() -> None:
     reader, core_api, _ = create_reader()
 
     logs = reader.get_pod_logs(
@@ -457,6 +457,7 @@ def test_get_pod_logs_applies_container_and_tail_limit() -> None:
         "sample-api",
         container="api",
         tail_lines=200,
+        previous=True,
     )
 
     assert logs == (
@@ -471,6 +472,7 @@ def test_get_pod_logs_applies_container_and_tail_limit() -> None:
                 "container": "api",
                 "tail_lines": 200,
                 "timestamps": True,
+                "previous": True,
                 "_request_timeout": 7,
                 "_preload_content": False,
             },

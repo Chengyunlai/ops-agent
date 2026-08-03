@@ -20,6 +20,7 @@ from urllib3.exceptions import HTTPError
 
 from ops_agent.kubernetes.errors import KubernetesError
 from ops_agent.kubernetes.models import (
+    ContainerStatusSummary,
     ContainerSummary,
     CronJobSummary,
     DaemonSetSummary,
@@ -29,6 +30,7 @@ from ops_agent.kubernetes.models import (
     KubernetesEventSummary,
     KubernetesResourceKind,
     PersistentVolumeClaimSummary,
+    PodConditionSummary,
     PodDetails,
     PodSummary,
     ReplicaSetSummary,
@@ -107,6 +109,7 @@ class KubernetesReader:
         *,
         container: str | None,
         tail_lines: int,
+        previous: bool = False,
     ) -> str:
         response = self._request(
             f"查询 Pod '{pod_name}' 日志失败",
@@ -116,6 +119,7 @@ class KubernetesReader:
                 container=container,
                 tail_lines=tail_lines,
                 timestamps=True,
+                previous=previous,
                 _request_timeout=self._request_timeout_seconds,
                 _preload_content=False,
             ),
@@ -507,7 +511,52 @@ def _to_pod_summary(pod) -> PodSummary:
         ready_containers=sum(bool(status.ready) for status in statuses),
         total_containers=len(containers),
         created_at=pod.metadata.creation_timestamp,
+        container_statuses=tuple(
+            _to_container_status_summary(status)
+            for status in statuses
+            if getattr(status, "name", None)
+        ),
+        conditions=tuple(
+            PodConditionSummary(
+                type=condition.type,
+                status=condition.status,
+                reason=condition.reason,
+                message=condition.message,
+            )
+            for condition in (getattr(pod.status, "conditions", None) or [])
+        ),
     )
+
+
+def _to_container_status_summary(status) -> ContainerStatusSummary:
+    state, reason, exit_code = _container_state_observation(status.state)
+    _, previous_reason, previous_exit_code = _container_state_observation(
+        getattr(status, "last_state", None)
+    )
+    return ContainerStatusSummary(
+        name=status.name,
+        ready=bool(status.ready),
+        restart_count=status.restart_count or 0,
+        state=state,
+        reason=reason,
+        exit_code=exit_code,
+        previous_reason=previous_reason,
+        previous_exit_code=previous_exit_code,
+    )
+
+
+def _container_state_observation(state) -> tuple[str, str | None, int | None]:
+    if state is None:
+        return "unknown", None, None
+    if getattr(state, "running", None) is not None:
+        return "running", None, None
+    waiting = getattr(state, "waiting", None)
+    if waiting is not None:
+        return "waiting", waiting.reason, None
+    terminated = getattr(state, "terminated", None)
+    if terminated is not None:
+        return "terminated", terminated.reason, terminated.exit_code
+    return "unknown", None, None
 
 
 def _to_pod_details(pod) -> PodDetails:

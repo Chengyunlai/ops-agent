@@ -56,11 +56,12 @@ class FakeKubernetesOperations:
         *,
         container: str | None,
         tail_lines: int,
+        previous: bool,
     ) -> str:
         self.calls.append(
             (
                 "get_pod_logs",
-                (namespace, pod_name, container, tail_lines),
+                (namespace, pod_name, container, tail_lines, previous),
             )
         )
         return "server started"
@@ -209,7 +210,25 @@ def test_pod_details_and_logs_tools_use_configured_namespace() -> None:
     assert logs["logs"] == "server started"
     assert operations.calls == [
         ("get_pod_details", ("sample", "sample-api")),
-        ("get_pod_logs", ("sample", "sample-api", "api", 50)),
+        ("get_pod_logs", ("sample", "sample-api", "api", 50, False)),
+    ]
+
+
+def test_logs_tool_can_read_previous_container_instance() -> None:
+    operations, tools = create_tools()
+
+    logs = tools["get_kubernetes_pod_logs"].invoke(
+        {
+            "pod_name": "sample-api",
+            "container": "api",
+            "tail_lines": 80,
+            "previous": True,
+        }
+    )
+
+    assert logs["previous"] is True
+    assert operations.calls == [
+        ("get_pod_logs", ("sample", "sample-api", "api", 80, True))
     ]
 
 

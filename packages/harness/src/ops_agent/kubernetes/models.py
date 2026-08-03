@@ -17,6 +17,26 @@ class KubernetesResourceKind(StrEnum):
 
 
 @dataclass(frozen=True)
+class ContainerStatusSummary:
+    name: str
+    ready: bool
+    restart_count: int
+    state: str
+    reason: str | None = None
+    exit_code: int | None = None
+    previous_reason: str | None = None
+    previous_exit_code: int | None = None
+
+
+@dataclass(frozen=True)
+class PodConditionSummary:
+    type: str
+    status: str
+    reason: str | None = None
+    message: str | None = None
+
+
+@dataclass(frozen=True)
 class PodSummary:
     name: str
     phase: str
@@ -24,6 +44,8 @@ class PodSummary:
     ready_containers: int = 0
     total_containers: int = 0
     created_at: datetime | None = None
+    container_statuses: tuple[ContainerStatusSummary, ...] = ()
+    conditions: tuple[PodConditionSummary, ...] = ()
 
 
 @dataclass(frozen=True)

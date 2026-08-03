@@ -1,5 +1,7 @@
 # Kubernetes Diagnostics V2 实施规划
 
+实施状态：Slice 1、Slice 2 已完成；下一步为 Slice 3 Deployment rollout。
+
 ## 目标
 
 在不扩大 Agent 写权限、不改变固定 Project Profile scope 的前提下，把当前
@@ -124,9 +126,9 @@ namespace 纳入身份，不提前增加全局资源抽象。
 
 ### Slice 2：Pod 失败原因
 
-- container current/last state、reason、exit code；
-- CrashLoopBackOff、OOMKilled、ImagePullBackOff；
-- previous logs 和关联 Event 取证。
+- [x] container current/last state、reason、exit code；
+- [x] CrashLoopBackOff、OOMKilled、ImagePullBackOff；
+- [x] previous logs 和关联 Event 取证。
 
 ### Slice 3：Deployment rollout
 

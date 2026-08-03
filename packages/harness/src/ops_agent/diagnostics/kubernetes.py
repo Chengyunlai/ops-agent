@@ -45,6 +45,112 @@ def diagnose_kubernetes_snapshot(
                     ),
                 )
             )
+        for container in pod.container_statuses:
+            if container.reason == "CrashLoopBackOff":
+                findings.append(
+                    Finding(
+                        severity=FindingSeverity.WARNING,
+                        resource_kind="Pod",
+                        resource_name=pod.name,
+                        summary="容器反复崩溃重启",
+                        evidence=(
+                            Evidence(
+                                source="container_status",
+                                message=(
+                                    f"container={container.name}, "
+                                    f"reason={container.reason}, "
+                                    f"restart_count={container.restart_count}, "
+                                    "previous_reason="
+                                    f"{container.previous_reason}, "
+                                    "previous_exit_code="
+                                    f"{container.previous_exit_code}"
+                                ),
+                            ),
+                        ),
+                    )
+                )
+            if container.reason == "OOMKilled":
+                findings.append(
+                    Finding(
+                        severity=FindingSeverity.WARNING,
+                        resource_kind="Pod",
+                        resource_name=pod.name,
+                        summary="容器因内存不足被终止",
+                        evidence=(
+                            Evidence(
+                                source="container_status",
+                                message=(
+                                    f"container={container.name}, "
+                                    "reason=OOMKilled, "
+                                    f"exit_code={container.exit_code}, "
+                                    f"restart_count={container.restart_count}"
+                                ),
+                            ),
+                        ),
+                    )
+                )
+            elif container.previous_reason == "OOMKilled":
+                findings.append(
+                    Finding(
+                        severity=FindingSeverity.WARNING,
+                        resource_kind="Pod",
+                        resource_name=pod.name,
+                        summary="容器因内存不足被终止",
+                        evidence=(
+                            Evidence(
+                                source="container_status",
+                                message=(
+                                    f"container={container.name}, "
+                                    "previous_reason=OOMKilled, "
+                                    "previous_exit_code="
+                                    f"{container.previous_exit_code}, "
+                                    f"restart_count={container.restart_count}"
+                                ),
+                            ),
+                        ),
+                    )
+                )
+            if container.reason == "ImagePullBackOff":
+                findings.append(
+                    Finding(
+                        severity=FindingSeverity.WARNING,
+                        resource_kind="Pod",
+                        resource_name=pod.name,
+                        summary="容器镜像拉取失败",
+                        evidence=(
+                            Evidence(
+                                source="container_status",
+                                message=(
+                                    f"container={container.name}, "
+                                    f"state={container.state}, "
+                                    f"reason={container.reason}"
+                                ),
+                            ),
+                        ),
+                    )
+                )
+        for condition in pod.conditions:
+            if condition.type != "PodScheduled" or condition.status != "False":
+                continue
+            findings.append(
+                Finding(
+                    severity=FindingSeverity.WARNING,
+                    resource_kind="Pod",
+                    resource_name=pod.name,
+                    summary="Pod 无法调度",
+                    evidence=(
+                        Evidence(
+                            source="pod_condition",
+                            message=(
+                                f"condition={condition.type}, "
+                                f"status={condition.status}, "
+                                f"reason={condition.reason}, "
+                                f"message={condition.message}"
+                            ),
+                        ),
+                    ),
+                )
+            )
 
     for deployment in snapshot.deployments:
         if deployment.ready_replicas < deployment.desired_replicas:

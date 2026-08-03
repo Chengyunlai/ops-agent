@@ -1,5 +1,6 @@
 from ops_agent.kubernetes.errors import KubernetesError
 from ops_agent.kubernetes.models import (
+    ContainerStatusSummary,
     ContainerSummary,
     CronJobSummary,
     DaemonSetSummary,
@@ -10,6 +11,7 @@ from ops_agent.kubernetes.models import (
     KubernetesResourceKind,
     PersistentVolumeClaimSummary,
     PersistentVolumeMountSummary,
+    PodConditionSummary,
     PodDetails,
     PodSummary,
     ReplicaSetSummary,
@@ -25,6 +27,7 @@ from ops_agent.kubernetes.models import (
 from ops_agent.kubernetes.reader import KubernetesReader, create_kubernetes_reader
 
 __all__ = [
+    "ContainerStatusSummary",
     "ContainerSummary",
     "CronJobSummary",
     "DaemonSetSummary",
@@ -37,6 +40,7 @@ __all__ = [
     "KubernetesResourceKind",
     "PersistentVolumeClaimSummary",
     "PersistentVolumeMountSummary",
+    "PodConditionSummary",
     "PodDetails",
     "PodSummary",
     "ReplicaSetSummary",
