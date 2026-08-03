@@ -15,7 +15,7 @@ build = [
 dev = [
     "pyyaml>=6.0.3,<7",
     "pytest>=9.1.1",
-    "ruff>=0.16.0",
+    "ruff>=0.16.1",
 ]
 
 [tool.uv]
