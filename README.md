@@ -424,8 +424,17 @@ make package
 make release TARGET=darwin-arm64
 ```
 
-`make format` 自动修复 Ruff 问题并格式化代码，`make check` 运行静态检查、
-格式检查和不依赖外部集群的全量测试。
+`make format` 自动修复 Ruff 问题并格式化代码，`make check` 检查 GitHub Action
+是否固定到完整 commit SHA，并运行静态检查、格式检查和不依赖外部集群的
+全量测试。
+
+`main` 只接受 Pull Request。PR 必须通过仓库策略、依赖审查、Python 3.12 / 3.14
+测试、Secret scan、构建和 kind 集成测试，并完成 CODEOWNER 审核与讨论处理后
+才能合并。
+机器人检查只提供可重复的策略与测试结论；架构、安全边界、权限变化和发布
+仍由维护者审核。当前未配置 AI Reviewer；未来若启用，也只能发表评论，不能
+批准、合并、推送或发布。完整规则见 [CONTRIBUTING.md](CONTRIBUTING.md)，安全问题使用
+[私密报告流程](SECURITY.md)。
 
 Kubernetes 集成测试只允许显式选择的临时 kind context，并会创建后删除
 `ops-agent-diagnostics-e2e` namespace。它不会在普通 `make check` 中运行：
@@ -454,14 +463,16 @@ uv run pytest
 应用版本由 `ops_agent_cli.__version__` 提供，CLI wheel 通过 Hatch 从同一
 位置读取；`make bump-version VERSION=x.y.z` 是唯一版本升级入口，会同步
 workspace 发行元数据并更新 lockfile，测试也会校验它们没有漂移。推送
-`v<version>` 标签后，`.github/workflows/release.yml` 会：
+位于 `main` 的 `v<version>` 标签后，`.github/workflows/release.yml` 会：
 
-1. 在 macOS arm64、macOS amd64 和 Linux amd64 原生 Runner 构建；
-2. 验证标签版本与 `ops-agent --version` 完全一致；
-3. 对独立应用包执行配置初始化和 OpenAI-compatible Provider 加载冒烟测试；
-4. 生成包含目录式运行时、配置示例、README 和 Apache-2.0 LICENSE 的
+1. 验证 SemVer 标签属于 `main`，并重新运行完整检查；
+2. 在 macOS arm64、macOS amd64 和 Linux amd64 原生 Runner 构建；
+3. 验证标签版本与 `ops-agent --version` 完全一致；
+4. 对独立应用包执行配置初始化和 OpenAI-compatible Provider 加载冒烟测试；
+5. 生成包含目录式运行时、配置示例、README 和 Apache-2.0 LICENSE 的
    `tar.gz`；
-5. 汇总 `SHA256SUMS`、生成 GitHub provenance 并创建 Release。
+6. 等待 `release` Environment 的人工批准；
+7. 汇总 `SHA256SUMS`、生成 GitHub provenance 并创建 Release。
 
 本机可以使用 `make package` 构建 `dist/ops-agent`；使用
 `make release TARGET=<platform-arch>` 生成与 GitHub 相同结构的压缩包。

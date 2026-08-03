@@ -874,6 +874,7 @@ build = [
 ]
 dev = [
     { name = "pytest" },
+    { name = "pyyaml" },
     { name = "ruff" },
 ]
 
@@ -884,6 +885,7 @@ requires-dist = [{ name = "ops-agent-cli", editable = "apps/cli" }]
 build = [{ name = "pyinstaller", specifier = ">=6.16,<7" }]
 dev = [
     { name = "pytest", specifier = ">=9.1.1" },
+    { name = "pyyaml", specifier = ">=6.0.3,<7" },
     { name = "ruff", specifier = ">=0.16.0" },
 ]
 
