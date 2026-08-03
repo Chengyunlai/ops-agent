@@ -6,7 +6,7 @@ requires-python = ">=3.12"
 dependencies = [
     "kubernetes>=36.0.3",
     "langchain>=1.0,<2",
-    "langgraph>=1.0,<2",
+    "langgraph>=1.2.10,<2",
     "pydantic>=2.13,<3",
     "urllib3",
 ]
