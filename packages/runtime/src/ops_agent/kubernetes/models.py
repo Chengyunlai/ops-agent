@@ -16,6 +16,11 @@ class KubernetesResourceKind(StrEnum):
     PERSISTENT_VOLUME_CLAIM = "PersistentVolumeClaim"
 
 
+class ContainerResourceType(StrEnum):
+    APP = "app"
+    INIT = "init"
+
+
 @dataclass(frozen=True)
 class ControllerReferenceSummary:
     kind: str
@@ -32,6 +37,20 @@ class ContainerStatusSummary:
     exit_code: int | None = None
     previous_reason: str | None = None
     previous_exit_code: int | None = None
+
+
+@dataclass(frozen=True)
+class ContainerResourceSummary:
+    """Pod spec 中一个容器声明的原生 Kubernetes 资源约束。"""
+
+    name: str
+    container_type: ContainerResourceType = ContainerResourceType.APP
+    cpu_request: str | None = None
+    cpu_limit: str | None = None
+    memory_request: str | None = None
+    memory_limit: str | None = None
+    ephemeral_storage_request: str | None = None
+    ephemeral_storage_limit: str | None = None
 
 
 @dataclass(frozen=True)
@@ -53,6 +72,10 @@ class PodSummary:
     container_statuses: tuple[ContainerStatusSummary, ...] = ()
     conditions: tuple[PodConditionSummary, ...] = ()
     controller: ControllerReferenceSummary | None = None
+    status_reason: str | None = None
+    status_message: str | None = None
+    qos_class: str | None = None
+    resources: tuple[ContainerResourceSummary, ...] = ()
 
 
 @dataclass(frozen=True)

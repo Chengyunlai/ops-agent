@@ -29,17 +29,32 @@ def to_monitor_diagnostic(finding: Finding) -> KubernetesResourceDiagnostic:
         severity=finding.severity,
         summary=finding.summary,
         evidence=tuple(f"{item.source}: {item.message}" for item in finding.evidence),
+        code=finding.code,
     )
 
 
 def health_reasons_by_resource(
     diagnostics: tuple[KubernetesResourceDiagnostic, ...],
+    *,
+    deployment_topologies: tuple[KubernetesDeploymentTopology, ...] = (),
 ) -> dict[KubernetesResourceRef, tuple[str, ...]]:
     reasons: dict[KubernetesResourceRef, list[str]] = {}
     for diagnostic in diagnostics:
         summaries = reasons.setdefault(diagnostic.ref, [])
         if diagnostic.summary not in summaries:
             summaries.append(diagnostic.summary)
+    for topology in deployment_topologies:
+        deployment_reasons = reasons.setdefault(topology.ref, [])
+        for replica_set in topology.replica_sets:
+            for pod in replica_set.pods:
+                pod_ref = KubernetesResourceRef(
+                    kind=KubernetesResourceKind.POD,
+                    name=pod.name,
+                )
+                for summary in reasons.get(pod_ref, ()):
+                    child_reason = f"Pod/{pod.name}: {summary}"
+                    if child_reason not in deployment_reasons:
+                        deployment_reasons.append(child_reason)
     return {resource: tuple(items) for resource, items in reasons.items()}
 
 
@@ -145,8 +160,7 @@ def format_resource_diagnostics(
     if diagnostics:
         lines.append(f"Findings ({len(diagnostics)}):")
         for diagnostic in diagnostics:
-            lines.append(f"  ! {diagnostic.summary}")
-            lines.extend(f"      {evidence}" for evidence in diagnostic.evidence)
+            _append_diagnostic(lines, diagnostic, indentation="  ")
     else:
         lines.append("Findings: No deterministic warning in the latest snapshot")
 
@@ -179,14 +193,21 @@ def format_resource_diagnostics(
                 f" · ready {replica_set.ready_replicas}"
                 f" · revision {replica_set.revision or '-'}"
             )
-            lines.extend(
-                (
+            if not replica_set.pods:
+                lines.append("      no controller-owned Pod observed")
+                continue
+            for pod in replica_set.pods:
+                lines.append(
                     f"      Pod/{pod.name} · owner {pod.owner_name} · phase {pod.phase}"
-                    for pod in replica_set.pods
                 )
-                if replica_set.pods
-                else ("      no controller-owned Pod observed",)
-            )
+                pod_diagnostics = snapshot.diagnostics_for(
+                    KubernetesResourceRef(
+                        kind=KubernetesResourceKind.POD,
+                        name=pod.name,
+                    )
+                )
+                for diagnostic in pod_diagnostics:
+                    _append_diagnostic(lines, diagnostic, indentation="        ")
 
     service_endpoint = snapshot.service_endpoint(resource)
     if service_endpoint is not None:
@@ -213,3 +234,17 @@ def format_resource_diagnostics(
         lines.extend(("", "Partial diagnostics:"))
         lines.extend(f"  {error}" for error in snapshot.diagnostic_errors)
     return "\n".join(lines)
+
+
+def _append_diagnostic(
+    lines: list[str],
+    diagnostic: KubernetesResourceDiagnostic,
+    *,
+    indentation: str,
+) -> None:
+    code = f"[{diagnostic.code}] " if diagnostic.code is not None else ""
+    lines.append(f"{indentation}! {code}{diagnostic.summary}")
+    evidence_indentation = f"{indentation}    "
+    lines.extend(
+        f"{evidence_indentation}{evidence}" for evidence in diagnostic.evidence
+    )

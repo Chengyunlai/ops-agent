@@ -8,6 +8,7 @@ from ops_agent.diagnostics import (
     diagnose_kubernetes_snapshot,
 )
 from ops_agent.kubernetes import (
+    ContainerResourceSummary,
     ContainerStatusSummary,
     ControllerReferenceSummary,
     DeploymentConditionSummary,
@@ -151,6 +152,14 @@ def test_diagnosis_reports_previous_oom_termination() -> None:
                 restart_count=1,
                 ready_containers=1,
                 total_containers=1,
+                qos_class="Burstable",
+                resources=(
+                    ContainerResourceSummary(
+                        name="worker",
+                        memory_request="256Mi",
+                        memory_limit="512Mi",
+                    ),
+                ),
                 container_statuses=(
                     ContainerStatusSummary(
                         name="worker",
@@ -184,6 +193,15 @@ def test_diagnosis_reports_previous_oom_termination() -> None:
                     message=(
                         "container=worker, previous_reason=OOMKilled, "
                         "previous_exit_code=137, restart_count=1"
+                    ),
+                ),
+                Evidence(
+                    source="pod_resources",
+                    message=(
+                        "qos_class=Burstable; container=worker, "
+                        "requests(cpu=unset, memory=256Mi, "
+                        "ephemeral-storage=unset), limits(cpu=unset, "
+                        "memory=512Mi, ephemeral-storage=unset)"
                     ),
                 ),
             ),
@@ -297,6 +315,16 @@ def test_diagnosis_reports_unschedulable_pending_pod() -> None:
                 restart_count=0,
                 ready_containers=0,
                 total_containers=1,
+                qos_class="Burstable",
+                resources=(
+                    ContainerResourceSummary(
+                        name="worker",
+                        cpu_request="2",
+                        cpu_limit="2",
+                        memory_request="1Gi",
+                        memory_limit="1Gi",
+                    ),
+                ),
                 conditions=(
                     PodConditionSummary(
                         type="PodScheduled",
@@ -317,7 +345,8 @@ def test_diagnosis_reports_unschedulable_pending_pod() -> None:
             severity=FindingSeverity.WARNING,
             resource_kind="Pod",
             resource_name="sample-worker",
-            summary="Pod 无法调度",
+            summary="Pod 因资源不足无法调度",
+            code=FindingCode.POD_RESOURCE_UNSCHEDULABLE,
             evidence=(
                 Evidence(
                     source="pod_condition",
@@ -327,9 +356,197 @@ def test_diagnosis_reports_unschedulable_pending_pod() -> None:
                         "insufficient cpu"
                     ),
                 ),
+                Evidence(
+                    source="pod_resources",
+                    message=(
+                        "qos_class=Burstable; container=worker, "
+                        "requests(cpu=2, memory=1Gi, ephemeral-storage=unset), "
+                        "limits(cpu=2, memory=1Gi, ephemeral-storage=unset)"
+                    ),
+                ),
             ),
         )
         in report.findings
+    )
+
+
+def test_diagnosis_reports_resource_pressure_eviction() -> None:
+    snapshot = KubernetesSnapshot(
+        namespace="sample",
+        pods=(
+            PodSummary(
+                name="cache-worker",
+                phase="Failed",
+                restart_count=0,
+                status_reason="Evicted",
+                status_message=(
+                    "The node was low on resource: ephemeral-storage. "
+                    "Threshold quantity: 1Gi."
+                ),
+                qos_class="BestEffort",
+                resources=(ContainerResourceSummary(name="worker"),),
+            ),
+        ),
+        deployments=(),
+    )
+
+    report = diagnose_kubernetes_snapshot(snapshot)
+
+    assert (
+        Finding(
+            severity=FindingSeverity.WARNING,
+            resource_kind="Pod",
+            resource_name="cache-worker",
+            summary="Pod 因节点资源压力被驱逐",
+            code=FindingCode.POD_RESOURCE_PRESSURE_EVICTION,
+            evidence=(
+                Evidence(
+                    source="pod_status",
+                    message=(
+                        "phase=Failed, reason=Evicted, message=The node was low "
+                        "on resource: ephemeral-storage. Threshold quantity: 1Gi."
+                    ),
+                ),
+                Evidence(
+                    source="pod_resources",
+                    message=(
+                        "qos_class=BestEffort; container=worker, "
+                        "requests(cpu=unset, memory=unset, "
+                        "ephemeral-storage=unset), limits(cpu=unset, "
+                        "memory=unset, ephemeral-storage=unset)"
+                    ),
+                ),
+            ),
+        )
+        in report.findings
+    )
+
+
+def test_diagnosis_reports_container_ephemeral_storage_limit_eviction() -> None:
+    snapshot = KubernetesSnapshot(
+        namespace="sample",
+        pods=(
+            PodSummary(
+                name="cache-worker",
+                phase="Failed",
+                restart_count=0,
+                status_reason="Evicted",
+                status_message=(
+                    'Container cache exceeded its local ephemeral storage limit "1Gi".'
+                ),
+            ),
+        ),
+        deployments=(),
+    )
+
+    report = diagnose_kubernetes_snapshot(snapshot)
+
+    assert any(
+        finding.code is FindingCode.POD_RESOURCE_PRESSURE_EVICTION
+        for finding in report.findings
+    )
+
+
+def test_diagnosis_reports_empty_dir_limit_eviction() -> None:
+    snapshot = KubernetesSnapshot(
+        namespace="sample",
+        pods=(
+            PodSummary(
+                name="cache-worker",
+                phase="Failed",
+                restart_count=0,
+                status_reason="Evicted",
+                status_message=(
+                    'Usage of EmptyDir volume "cache" exceeds the limit "1Gi".'
+                ),
+            ),
+        ),
+        deployments=(),
+    )
+
+    report = diagnose_kubernetes_snapshot(snapshot)
+
+    assert any(
+        finding.code is FindingCode.POD_RESOURCE_PRESSURE_EVICTION
+        for finding in report.findings
+    )
+
+
+def test_diagnosis_does_not_mislabel_manual_eviction_as_resource_pressure() -> None:
+    snapshot = KubernetesSnapshot(
+        namespace="sample",
+        pods=(
+            PodSummary(
+                name="api-worker",
+                phase="Failed",
+                restart_count=0,
+                status_reason="Evicted",
+                status_message=(
+                    "Manual eviction after disk pressure investigation; "
+                    "Container cache exceeded its local ephemeral storage limit "
+                    "during a prior test"
+                ),
+            ),
+        ),
+        deployments=(),
+    )
+
+    report = diagnose_kubernetes_snapshot(snapshot)
+
+    assert all(
+        finding.code is not FindingCode.POD_RESOURCE_PRESSURE_EVICTION
+        for finding in report.findings
+    )
+    assert report.findings == (
+        Finding(
+            severity=FindingSeverity.WARNING,
+            resource_kind="Pod",
+            resource_name="api-worker",
+            summary="Pod 未处于 Running 状态",
+            evidence=(
+                Evidence(
+                    source="pod_status",
+                    message=(
+                        "phase=Failed, reason=Evicted, message=Manual eviction "
+                        "after disk pressure investigation; Container cache "
+                        "exceeded its local ephemeral storage limit during a "
+                        "prior test"
+                    ),
+                ),
+            ),
+        ),
+    )
+
+
+def test_diagnosis_keeps_non_resource_scheduling_failure_generic() -> None:
+    snapshot = KubernetesSnapshot(
+        namespace="sample",
+        pods=(
+            PodSummary(
+                name="dedicated-worker",
+                phase="Pending",
+                restart_count=0,
+                conditions=(
+                    PodConditionSummary(
+                        type="PodScheduled",
+                        status="False",
+                        reason="Unschedulable",
+                        message=(
+                            "0/3 nodes are available: 3 node(s) had untolerated "
+                            "taint {dedicated: batch}"
+                        ),
+                    ),
+                ),
+            ),
+        ),
+        deployments=(),
+    )
+
+    report = diagnose_kubernetes_snapshot(snapshot)
+
+    assert any(
+        finding.summary == "Pod 无法调度" and finding.code is None
+        for finding in report.findings
     )
 
 

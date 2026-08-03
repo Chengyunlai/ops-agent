@@ -6,6 +6,24 @@ from ops_agent.diagnostics.models import (
     FindingSeverity,
     KubernetesSnapshot,
 )
+from ops_agent.kubernetes import ContainerResourceType, PodSummary
+
+_SCHEDULING_RESOURCE_MARKERS = (
+    "insufficient cpu",
+    "insufficient memory",
+    "insufficient ephemeral-storage",
+    "too many pods",
+    "memory-pressure",
+    "disk-pressure",
+    "pid-pressure",
+)
+_EVICTION_RESOURCE_MARKERS = (
+    "the node was low on resource:",
+    "the node had condition: [memorypressure]",
+    "the node had condition: [diskpressure]",
+    "the node had condition: [pidpressure]",
+    "ephemeral local storage usage exceeds",
+)
 
 
 def diagnose_kubernetes_snapshot(
@@ -20,10 +38,25 @@ def diagnose_kubernetes_snapshot(
                     resource_kind="Pod",
                     resource_name=pod.name,
                     summary="Pod 未处于 Running 状态",
-                    evidence=(
+                    evidence=(_pod_status_evidence(pod),),
+                )
+            )
+        if _is_resource_pressure_eviction(pod.status_reason, pod.status_message):
+            findings.append(
+                Finding(
+                    severity=FindingSeverity.WARNING,
+                    resource_kind="Pod",
+                    resource_name=pod.name,
+                    summary="Pod 因节点资源压力被驱逐",
+                    code=FindingCode.POD_RESOURCE_PRESSURE_EVICTION,
+                    evidence=_with_pod_resources(
+                        pod,
                         Evidence(
                             source="pod_status",
-                            message=f"phase={pod.phase}",
+                            message=(
+                                f"phase={pod.phase}, reason={pod.status_reason}, "
+                                f"message={pod.status_message}"
+                            ),
                         ),
                     ),
                 )
@@ -56,7 +89,8 @@ def diagnose_kubernetes_snapshot(
                         summary="容器反复崩溃重启",
                         container_name=container.name,
                         code=FindingCode.POD_CRASH_LOOP,
-                        evidence=(
+                        evidence=_with_pod_resources(
+                            pod,
                             Evidence(
                                 source="container_status",
                                 message=(
@@ -81,7 +115,8 @@ def diagnose_kubernetes_snapshot(
                         summary="容器因内存不足被终止",
                         container_name=container.name,
                         code=FindingCode.POD_OOM_KILLED,
-                        evidence=(
+                        evidence=_with_pod_resources(
+                            pod,
                             Evidence(
                                 source="container_status",
                                 message=(
@@ -103,7 +138,8 @@ def diagnose_kubernetes_snapshot(
                         summary="容器因内存不足被终止",
                         container_name=container.name,
                         code=FindingCode.POD_OOM_KILLED,
-                        evidence=(
+                        evidence=_with_pod_resources(
+                            pod,
                             Evidence(
                                 source="container_status",
                                 message=(
@@ -140,13 +176,27 @@ def diagnose_kubernetes_snapshot(
         for condition in pod.conditions:
             if condition.type != "PodScheduled" or condition.status != "False":
                 continue
+            resource_shortage = _contains_marker(
+                condition.message,
+                _SCHEDULING_RESOURCE_MARKERS,
+            )
             findings.append(
                 Finding(
                     severity=FindingSeverity.WARNING,
                     resource_kind="Pod",
                     resource_name=pod.name,
-                    summary="Pod 无法调度",
-                    evidence=(
+                    summary=(
+                        "Pod 因资源不足无法调度"
+                        if resource_shortage
+                        else "Pod 无法调度"
+                    ),
+                    code=(
+                        FindingCode.POD_RESOURCE_UNSCHEDULABLE
+                        if resource_shortage
+                        else None
+                    ),
+                    evidence=_with_pod_resources(
+                        pod,
                         Evidence(
                             source="pod_condition",
                             message=(
@@ -379,3 +429,75 @@ def _deployment_topology_evidence(
         source="deployment_topology",
         message=f"replica_sets={replica_set_evidence}; pods={pod_evidence}",
     )
+
+
+def _is_resource_pressure_eviction(
+    reason: str | None,
+    message: str | None,
+) -> bool:
+    normalized = (message or "").casefold().lstrip()
+    storage_limit_eviction = (
+        normalized.startswith("container ")
+        and " exceeded its local ephemeral storage limit" in normalized
+    ) or (
+        normalized.startswith("usage of emptydir volume ")
+        and " exceeds the limit" in normalized
+    )
+    return reason == "Evicted" and (
+        _contains_marker(normalized, _EVICTION_RESOURCE_MARKERS)
+        or storage_limit_eviction
+    )
+
+
+def _contains_marker(message: str | None, markers: tuple[str, ...]) -> bool:
+    normalized = (message or "").casefold()
+    return any(marker in normalized for marker in markers)
+
+
+def _pod_status_evidence(pod: PodSummary) -> Evidence:
+    details = [f"phase={pod.phase}"]
+    if pod.status_reason is not None:
+        details.append(f"reason={pod.status_reason}")
+    if pod.status_message is not None:
+        details.append(f"message={pod.status_message}")
+    return Evidence(source="pod_status", message=", ".join(details))
+
+
+def _with_pod_resources(
+    pod: PodSummary,
+    evidence: Evidence,
+) -> tuple[Evidence, ...]:
+    resource_evidence = _pod_resource_evidence(pod)
+    return (
+        (evidence, resource_evidence) if resource_evidence is not None else (evidence,)
+    )
+
+
+def _pod_resource_evidence(pod: PodSummary) -> Evidence | None:
+    if pod.qos_class is None and not pod.resources:
+        return None
+    container_resources = "; ".join(
+        (
+            (
+                "init_container="
+                if resource.container_type is ContainerResourceType.INIT
+                else "container="
+            )
+            + f"{resource.name}, "
+            "requests("
+            f"cpu={resource.cpu_request or 'unset'}, "
+            f"memory={resource.memory_request or 'unset'}, "
+            "ephemeral-storage="
+            f"{resource.ephemeral_storage_request or 'unset'}), "
+            "limits("
+            f"cpu={resource.cpu_limit or 'unset'}, "
+            f"memory={resource.memory_limit or 'unset'}, "
+            "ephemeral-storage="
+            f"{resource.ephemeral_storage_limit or 'unset'})"
+        )
+        for resource in pod.resources
+    )
+    message = f"qos_class={pod.qos_class or 'unset'}"
+    if container_resources:
+        message += f"; {container_resources}"
+    return Evidence(source="pod_resources", message=message)

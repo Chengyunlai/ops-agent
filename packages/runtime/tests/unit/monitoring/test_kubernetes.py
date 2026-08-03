@@ -1,6 +1,8 @@
 from datetime import UTC, datetime
 
+from ops_agent.diagnostics import FindingCode
 from ops_agent.kubernetes import (
+    ContainerResourceSummary,
     ContainerSummary,
     ControllerReferenceSummary,
     CronJobSummary,
@@ -10,6 +12,7 @@ from ops_agent.kubernetes import (
     JobSummary,
     PersistentVolumeClaimSummary,
     PersistentVolumeMountSummary,
+    PodConditionSummary,
     PodSummary,
     ReplicaSetSummary,
     ServiceEndpointSource,
@@ -488,6 +491,22 @@ def test_monitor_exposes_deterministic_findings_as_resource_health_reasons() -> 
                         kind="ReplicaSet",
                         name="sample-api-7f8",
                     ),
+                    qos_class="Burstable",
+                    resources=(
+                        ContainerResourceSummary(
+                            name="api",
+                            cpu_request="2",
+                            memory_request="1Gi",
+                        ),
+                    ),
+                    conditions=(
+                        PodConditionSummary(
+                            type="PodScheduled",
+                            status="False",
+                            reason="Unschedulable",
+                            message="0/3 nodes are available: Insufficient cpu",
+                        ),
+                    ),
                 )
             ]
 
@@ -546,10 +565,16 @@ def test_monitor_exposes_deterministic_findings_as_resource_health_reasons() -> 
     assert pod.health_reasons == (
         "Pod 未处于 Running 状态",
         "Pod 容器未全部就绪",
+        "Pod 因资源不足无法调度",
     )
-    assert deployment.health_reasons == ("Deployment 就绪副本少于期望副本",)
+    assert deployment.health_reasons == (
+        "Deployment 就绪副本少于期望副本",
+        "Pod/sample-api-7f8-x1: Pod 未处于 Running 状态",
+        "Pod/sample-api-7f8-x1: Pod 容器未全部就绪",
+        "Pod/sample-api-7f8-x1: Pod 因资源不足无法调度",
+    )
     assert service.health_reasons == ("Service 没有 Ready Endpoint",)
-    assert snapshot.finding_count == 4
+    assert snapshot.finding_count == 5
 
     details = monitor.diagnostics(
         KubernetesResourceRef(
@@ -564,6 +589,16 @@ def test_monitor_exposes_deterministic_findings_as_resource_health_reasons() -> 
     )
     assert "Pod/sample-api-7f8-x1 · owner sample-api-7f8 · phase Pending" in (
         details.content
+    )
+    assert "! [pod_resource_unschedulable] Pod 因资源不足无法调度" in details.content
+    assert "requests(cpu=2, memory=1Gi" in details.content
+    assert (
+        next(
+            diagnostic
+            for diagnostic in snapshot.diagnostics
+            if diagnostic.summary == "Pod 因资源不足无法调度"
+        ).code
+        is FindingCode.POD_RESOURCE_UNSCHEDULABLE
     )
 
 

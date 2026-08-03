@@ -1,5 +1,7 @@
 from ops_agent.kubernetes.errors import KubernetesError
 from ops_agent.kubernetes.models import (
+    ContainerResourceSummary,
+    ContainerResourceType,
     ContainerStatusSummary,
     ContainerSummary,
     ControllerReferenceSummary,
@@ -32,6 +34,8 @@ from ops_agent.kubernetes.reader import KubernetesReader, create_kubernetes_read
 from ops_agent.kubernetes.settings import KubernetesConnectionSettings
 
 __all__ = [
+    "ContainerResourceSummary",
+    "ContainerResourceType",
     "ContainerStatusSummary",
     "ContainerSummary",
     "ControllerReferenceSummary",

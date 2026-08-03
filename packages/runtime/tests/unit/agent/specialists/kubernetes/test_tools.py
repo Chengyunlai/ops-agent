@@ -1,6 +1,7 @@
 import pytest
 from ops_agent.agent.specialists.kubernetes import create_kubernetes_tools
 from ops_agent.kubernetes import (
+    ContainerResourceSummary,
     ContainerSummary,
     DeploymentSummary,
     KubernetesEventSummary,
@@ -25,6 +26,16 @@ class FakeKubernetesOperations:
                 restart_count=2,
                 ready_containers=1,
                 total_containers=1,
+                status_reason="Evicted",
+                status_message="sensitive scheduler detail",
+                qos_class="Burstable",
+                resources=(
+                    ContainerResourceSummary(
+                        name="api",
+                        cpu_request="250m",
+                        memory_limit="512Mi",
+                    ),
+                ),
             )
         ]
 
@@ -177,6 +188,10 @@ def test_list_pods_tool_uses_configured_namespace() -> None:
     assert operations.calls == [("list_pods", "sample")]
     assert result[0]["name"] == "sample-api"
     assert result[0]["ready_containers"] == 1
+    assert "status_reason" not in result[0]
+    assert "status_message" not in result[0]
+    assert "qos_class" not in result[0]
+    assert "resources" not in result[0]
 
 
 def test_diagnosis_tool_reports_findings_from_configured_namespace() -> None:

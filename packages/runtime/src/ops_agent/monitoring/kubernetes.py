@@ -196,7 +196,15 @@ class KubernetesMonitor:
             )
         )
         diagnostics = tuple(_to_monitor_diagnostic(item) for item in report.findings)
-        reasons = _health_reasons_by_resource(diagnostics)
+        topologies = _deployment_topologies(
+            deployments=deployment_items,
+            replica_sets=replica_set_items,
+            pods=pod_items,
+        )
+        reasons = _health_reasons_by_resource(
+            diagnostics,
+            deployment_topologies=topologies,
+        )
         snapshot = KubernetesMonitorSnapshot(
             namespace=self._namespace,
             observed_at=observed_at,
@@ -264,11 +272,7 @@ class KubernetesMonitor:
                 ),
             ),
             diagnostics=diagnostics,
-            deployment_topologies=_deployment_topologies(
-                deployments=deployment_items,
-                replica_sets=replica_set_items,
-                pods=pod_items,
-            ),
+            deployment_topologies=topologies,
             service_endpoints=endpoint_items,
             diagnostic_errors=(
                 (f"Service Endpoint 诊断不可用：{endpoint_error}",)

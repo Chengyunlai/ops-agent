@@ -7,6 +7,11 @@
 > 八项 Kubernetes 只读工具、LangGraph 主/子 Agent 和 CLI 自然语言查询链路；
 > 指标、告警接入和自动处置等能力仍在规划中。
 
+> [!NOTE]
+> Ops Agent 始终作为本地终端监控工具运行，不向目标集群安装 Operator、CRD、
+> DaemonSet、Exporter、metrics-server、Prometheus 或其他工作负载。可选数据源
+> 只读取环境中已经存在的接口；缺失或无权限时显示 `Unavailable` 并降级运行。
+
 ## 项目目标
 
 - **统一运维入口**：通过自然语言查询集群、工作负载、事件和告警。
@@ -26,7 +31,7 @@
 | PVC 存储浏览 | 已完成 | 展示 PVC/PV/StorageClass/后端/挂载关系，并经现有 Pod 只读浏览目录和预览文本文件 |
 | Artifact Download | 已完成 | 从选定 Pod 或 PVC 流式下载普通文件，显示大小与 SHA-256，失败自动清理 |
 | Interactive Pod Session | 已完成 | 左侧监盘人工进入选定 Pod/容器；默认禁用且不向 Agent 暴露 |
-| Kubernetes 基础诊断 | 已完成 | Agent 可确定性识别 Pod 失败原因、Deployment rollout、Service→Endpoint→Pod 与工作负载资源关系 |
+| Kubernetes 基础诊断 | 已完成 | Agent 可确定性识别 Pod 失败原因、资源不足调度、资源压力驱逐、Deployment rollout、Service→Endpoint→Pod 与工作负载资源关系 |
 | 告警接入与诊断 | 规划中 | 接入告警并生成带证据的诊断报告 |
 | 审批与处置执行 | 规划中 | 执行扩缩容、重启、回滚等受控动作 |
 | LLM / Agent 编排 | 基础已完成 | 受控主图负责范围路由和诊断计划，Kubernetes 子图负责只读诊断 |
@@ -267,7 +272,7 @@ Agent 使用配置中固定的 kubeconfig 和 namespace。模型不能通过工�
 
 | 工具 | 用途 | 查询边界 |
 | --- | --- | --- |
-| `diagnose_kubernetes_workloads` | 确定性诊断 Pod、Deployment rollout/所属 ReplicaSet 与 Pod、Service Endpoint | 配置中的 namespace |
+| `diagnose_kubernetes_workloads` | 确定性诊断 Pod 资源压力、Deployment rollout/所属 ReplicaSet 与 Pod、Service Endpoint | 配置中的 namespace |
 | `list_kubernetes_pods` | 查看 Pod 阶段、就绪容器数和重启数 | 配置中的 namespace |
 | `get_kubernetes_pod_details` | 查看 Pod 节点、IP、镜像和容器状态 | 指定 Pod |
 | `get_kubernetes_pod_logs` | 读取 Pod 当前或上一个容器实例日志（`previous=true`） | 最多 1000 行 |
@@ -285,6 +290,11 @@ Shell 执行入口。这样可以把模型的活动范围限制在启动时选�
 Pod Observation 同时保留容器当前/上一次状态、reason、exit code 和调度 Condition；
 遇到 CrashLoopBackOff 或 OOMKilled 时，专业 Agent 可按 Finding 中的 Pod/容器名
 读取关联 Event 和上一个容器实例日志，不会把模型猜测当成失败原因。
+Pod Observation 还保留 status reason/message、QoS class 和每个容器声明的
+CPU、内存及 ephemeral-storage requests/limits。调度器明确报告
+`insufficient cpu`、`insufficient memory`、`insufficient ephemeral-storage`
+或节点明确报告资源压力驱逐时，会生成稳定 Finding；人工维护驱逐不会被误判。
+这些值来自现有 Pod spec/status，不代表实时使用率，也不需要 Metrics API。
 Deployment Observation 保留 generation、observedGeneration、revision 和 Conditions；
 rollout 超过 progress deadline 时，Finding 会按 controller owner 附带所属
 ReplicaSet 和 Pod，而不是根据名称前缀推测关系。诊断所用只读 RBAC 需要允许
@@ -318,8 +328,9 @@ Overview 中可用方向键和 `Enter` 进入任意资源类型。选中资源�
 `Enter` 或 `h` 打开最新确定性 Finding 和 Evidence；Deployment 还会显示
 generation、observedGeneration、revision、Conditions，以及只按 controller
 owner 构建的 Deployment → ReplicaSet → Pod 拓扑。`d` 读取原始对象详情与
-关联 Event；Pod 上按 `l` 读取每个容器最近 200 行日志。指标时间线将在
-Prometheus 接入后增加，不会用模型猜测实时指标。
+关联 Event；Pod 上按 `l` 读取每个容器最近 200 行日志。指标时间线只会在
+已有 Metrics API 或已有 Prometheus 被显式配置后增加，不会自动安装数据源，
+也不会用模型猜测实时指标。
 
 Service 的 Health 详情会显示数据来源（EndpointSlice 或旧版 Endpoints）、
 Ready/NotReady 数量和 Endpoint → Pod targetRef；健康 Service 也可以查看该关系，
@@ -547,8 +558,9 @@ ops_agent/
 │       │       └── test_release_artifact.py
 │       └── pyproject.toml
 ├── docs/
-│   └── research/
-│       └── terminal-tui-options.md
+│   ├── adr/                       # 已接受的架构决策
+│   ├── plans/                     # 功能实施计划与验收记录
+│   └── research/                  # 方案调研
 ├── packages/
 │   └── runtime/
 │       ├── src/
@@ -733,7 +745,7 @@ Agent 编排层 ──► 上下文与运维知识
 推荐优先实现只读诊断闭环，再逐步开放可写操作：
 
 1. 连接 Kubernetes，并提供资源、事件和日志的只读查询。
-2. 接入 Prometheus、日志平台或告警系统，统一诊断上下文。
+2. 可选只读接入已有 Prometheus、日志平台或告警系统，统一诊断上下文。
 3. 输出引用原始证据的诊断结论，不把模型推断当作事实。
 4. 引入操作白名单、风险分级、人工审批和 dry-run。
 5. 增加变更后验证、失败回滚、审计日志和可观测性。
@@ -743,6 +755,8 @@ Agent 编排层 ──► 上下文与运维知识
 运维 Agent 会接触生产基础设施，开发和部署时应至少遵循以下原则：
 
 - 使用 Kubernetes RBAC 和独立 ServiceAccount，默认只读、最小权限。
+- 不在目标集群自动安装监控、Agent、辅助工作负载或提升权限；可选数据源缺失时
+  明确降级。
 - 不在代码、配置文件、日志或模型上下文中保存 Token、证书等密钥。
 - 生产环境的写操作默认关闭；开启后必须经过策略校验和明确审批。
 - Interactive Pod Session 是独立的人工 break-glass 入口，默认关闭；它不
@@ -776,15 +790,16 @@ make check
 - [x] TUI Finding、健康原因及 Deployment/ReplicaSet/Pod 拓扑呈现
 - [x] 请求范围路由、默认拒绝与实时证据校验
 - [x] 最小 Kubernetes 只读诊断计划
-- [ ] 发布失败根因和资源压力诊断
-- [ ] Prometheus、日志与告警平台接入
+- [x] Kubernetes 原生资源压力证据（requests/limits、OOM、调度不足与驱逐）
+- [ ] 发布失败根因闭环与可选实时资源指标
+- [ ] 已有 Prometheus、日志与告警平台的可选只读接入
 - [x] LLM 工具调用与基础 Agent 编排
 - [x] CLI 自然语言查询入口
-- [ ] Agent 会话状态与持久化
+- [ ] 可选本地 JSONL 会话历史（默认关闭，无数据库）
 - [ ] 风险策略、人工审批和 dry-run
 - [ ] 自动处置、结果验证与回滚
 - [ ] 审计日志、Tracing 和运行指标
-- [ ] CLI / API 服务与容器化部署
+- [x] 本地终端应用、独立安装包与 Homebrew 分发
 
 ## 贡献
 

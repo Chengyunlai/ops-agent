@@ -72,3 +72,9 @@ supported read-only transfer adapter. Runtime callers and the Agent do not
 probe container tools or depend on adapter details; Settings may expose the
 validated strategy names for operator diagnostics.
 _Avoid_: Shell fallback, model-selected transport
+
+**Cluster Footprint**:
+Persistent workloads, controllers, CRDs, exporters, or other infrastructure
+installed into a target cluster by Ops Agent. The supported footprint is zero;
+optional data sources must already exist and degrade to unavailable when absent.
+_Avoid_: Embedded monitoring stack, automatic metrics installation
