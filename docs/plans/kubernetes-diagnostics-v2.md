@@ -1,6 +1,6 @@
 # Kubernetes Diagnostics V2 实施规划
 
-实施状态：Slice 1、Slice 2、Slice 3 已完成；下一步为 Slice 4 真实集群验证。
+实施状态：Slice 1 至 Slice 4 已完成；下一步为 Slice 5 TUI 诊断呈现。
 
 ## 目标
 
@@ -148,10 +148,10 @@ namespace 纳入身份，不提前增加全局资源抽象。
 
 ### Slice 4：真实集群验证
 
-- kind 集群与固定故障 manifests；
-- Service 无 Endpoint、CrashLoop、ImagePull 和 rollout 卡住；
-- RBAC 缺失与 EndpointSlice API 不可用降级；
-- CI 集成测试。
+- [x] kind 集群与固定故障 manifests；
+- [x] Service 无 Endpoint、CrashLoop、ImagePull 和 rollout 卡住；
+- [x] RBAC 缺失与 EndpointSlice API 不可用降级；
+- [x] CI 集成测试。
 
 ### Slice 5：TUI 诊断呈现
 
@@ -179,4 +179,6 @@ namespace 纳入身份，不提前增加全局资源抽象。
 - rollout 超过 progress deadline 时输出副本状态、Condition 和 owner topology；
 - observedGeneration 落后时明确区分“尚未观察”与 rollout deadline；
 - 关系只使用 controller owner，不按资源名称猜测；
+- 固定故障在一次性 kind 集群通过真实 Kubernetes Adapter 验证；
+- EndpointSlice 403 明确失败，404 才回退 CoreV1 Endpoints；
 - `make check` 全部通过，README 与实现一致。

@@ -6,7 +6,7 @@ ARGS ?=
 TARGET ?= local
 RELEASE_DIR ?= release
 
-.PHONY: help sync lint format format-check test test-cli test-harness check cli tui bump-version package release
+.PHONY: help sync lint format format-check test test-cli test-harness test-kubernetes-integration check cli tui bump-version package release
 
 help: ## 显示可用的开发命令
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z_-]+:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -24,14 +24,19 @@ format: ## 使用 Ruff 自动修复并格式化代码
 format-check: ## 检查代码格式但不修改文件
 	$(UV) run ruff format --check .
 
-test: ## 运行全部测试
-	$(UV) run pytest -q
+test: ## 运行不依赖外部集群的测试
+	$(UV) run pytest -q -m "not kubernetes_integration"
 
 test-cli: ## 运行 CLI 测试
 	$(UV) run pytest apps/cli/tests -q
 
 test-harness: ## 运行 harness 测试
 	$(UV) run pytest packages/harness/tests -q
+
+test-kubernetes-integration: ## 在显式选择的临时 kind 集群运行诊断集成测试
+	@test "$$OPS_AGENT_KUBERNETES_INTEGRATION" = "1" || (echo "OPS_AGENT_KUBERNETES_INTEGRATION=1 is required" >&2; exit 2)
+	@test -n "$$OPS_AGENT_KUBERNETES_CONTEXT" || (echo "OPS_AGENT_KUBERNETES_CONTEXT is required" >&2; exit 2)
+	$(UV) run pytest packages/harness/tests/integration/kubernetes -q -m kubernetes_integration
 
 check: lint format-check test ## 运行提交前完整检查
 

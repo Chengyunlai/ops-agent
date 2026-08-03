@@ -34,3 +34,6 @@ testpaths = [
     "apps",
     "packages",
 ]
+markers = [
+    "kubernetes_integration: requires an explicitly selected disposable kind cluster",
+]

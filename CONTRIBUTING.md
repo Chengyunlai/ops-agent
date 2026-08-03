@@ -83,6 +83,10 @@ Issue、日志、截图和附件中不得包含：
 make check
 ```
 
+修改 Kubernetes 诊断 Reader、规则或资源关系时，还应在一次性 kind 集群运行
+`make test-kubernetes-integration`。所需环境变量和安全限制见 README；禁止把
+该测试指向开发、测试或生产等共享集群。
+
 ### 提交与 PR 标题
 
 提交信息和 PR 标题使用以下格式：

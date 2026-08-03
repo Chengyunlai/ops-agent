@@ -638,6 +638,58 @@ def test_list_service_endpoints_preserves_api_permission_error() -> None:
         raise AssertionError("EndpointSlice permission error should be preserved")
 
 
+def test_list_service_endpoints_falls_back_when_discovery_api_is_unavailable() -> None:
+    class UnavailableDiscoveryV1Api(FakeDiscoveryV1Api):
+        def list_namespaced_endpoint_slice(self, **kwargs):
+            raise ApiException(status=404, reason="the server could not find resource")
+
+    class LegacyEndpointsCoreV1Api(FakeCoreV1Api):
+        def list_namespaced_endpoints(self, **kwargs):
+            self.calls.append(("list_namespaced_endpoints", kwargs))
+            return SimpleNamespace(
+                items=[
+                    SimpleNamespace(
+                        metadata=SimpleNamespace(name="sample-api"),
+                        subsets=[
+                            SimpleNamespace(
+                                addresses=[SimpleNamespace(ip="10.42.0.8")],
+                                not_ready_addresses=[SimpleNamespace(ip="10.42.0.9")],
+                            ),
+                            SimpleNamespace(
+                                addresses=[SimpleNamespace(ip="10.42.0.10")],
+                                not_ready_addresses=[],
+                            ),
+                        ],
+                    )
+                ]
+            )
+
+    core_api = LegacyEndpointsCoreV1Api()
+    reader = KubernetesReader(
+        core_api=core_api,
+        apps_api=FakeAppsV1Api(),
+        discovery_api=UnavailableDiscoveryV1Api(),
+        request_timeout_seconds=7,
+    )
+
+    endpoints = reader.list_service_endpoints("sample")
+
+    assert endpoints == [
+        ServiceEndpointSummary(
+            service_name="sample-api",
+            ready_addresses=2,
+            not_ready_addresses=1,
+            endpoint_slice_count=0,
+        )
+    ]
+    assert core_api.calls == [
+        (
+            "list_namespaced_endpoints",
+            {"namespace": "sample", "_request_timeout": 7},
+        )
+    ]
+
+
 def test_list_additional_workloads_returns_replica_status() -> None:
     reader, _, apps_api = create_reader()
 

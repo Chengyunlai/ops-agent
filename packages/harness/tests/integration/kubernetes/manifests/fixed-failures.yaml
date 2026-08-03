@@ -1,0 +1,103 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ops-agent-diagnostics-e2e
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: limited-reader
+  namespace: ops-agent-diagnostics-e2e
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - pods
+      - services
+    verbs:
+      - get
+      - list
+  - apiGroups:
+      - apps
+    resources:
+      - deployments
+      - replicasets
+    verbs:
+      - get
+      - list
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: limited-reader
+  namespace: ops-agent-diagnostics-e2e
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: limited-reader
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: User
+    name: ops-agent-limited-reader
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: diagnostics-no-endpoint
+  namespace: ops-agent-diagnostics-e2e
+spec:
+  selector:
+    app.kubernetes.io/name: diagnostics-missing
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: diagnostics-crash-loop
+  namespace: ops-agent-diagnostics-e2e
+spec:
+  restartPolicy: Always
+  containers:
+    - name: crash-loop
+      image: busybox:1.36.1
+      imagePullPolicy: IfNotPresent
+      command:
+        - /bin/sh
+        - -c
+        - echo intentional integration failure; exit 1
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: diagnostics-image-pull
+  namespace: ops-agent-diagnostics-e2e
+spec:
+  containers:
+    - name: image-pull
+      image: invalid.example/ops-agent/does-not-exist:integration
+      imagePullPolicy: Always
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: diagnostics-rollout
+  namespace: ops-agent-diagnostics-e2e
+spec:
+  replicas: 1
+  progressDeadlineSeconds: 5
+  revisionHistoryLimit: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: diagnostics-rollout
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: diagnostics-rollout
+    spec:
+      containers:
+        - name: rollout
+          image: invalid.example/ops-agent/does-not-exist:rollout
+          imagePullPolicy: Always

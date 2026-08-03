@@ -289,6 +289,8 @@ ReplicaSet 和 Pod，而不是根据名称前缀推测关系。诊断所用只�
 Service 诊断使用 `discovery.k8s.io/v1` EndpointSlice；只读 RBAC 除 Service
 权限外，还必须允许在目标 namespace 对 `endpointslices` 执行 `list`。该权限
 缺失时查询会返回明确错误，不会把权限失败误判为 Service 没有后端。
+如果集群明确返回 EndpointSlice API 404，Reader 会回退到 CoreV1 Endpoints；
+403 权限错误不会触发回退。
 
 ### 5. 启动交互式终端
 
@@ -400,13 +402,28 @@ make format
 make check
 make test-cli
 make test-harness
+make test-kubernetes-integration
 make tui CONFIG=config/local/test.toml
 make package
 make release TARGET=darwin-arm64
 ```
 
 `make format` 自动修复 Ruff 问题并格式化代码，`make check` 运行静态检查、
-格式检查和全量测试。
+格式检查和不依赖外部集群的全量测试。
+
+Kubernetes 集成测试只允许显式选择的临时 kind context，并会创建后删除
+`ops-agent-diagnostics-e2e` namespace。它不会在普通 `make check` 中运行：
+
+```bash
+OPS_AGENT_KUBERNETES_INTEGRATION=1 \
+OPS_AGENT_KUBERNETES_CONTEXT=kind-ops-agent-ci \
+KUBECONFIG=/path/to/disposable-kind-kubeconfig \
+make test-kubernetes-integration
+```
+
+测试夹具固定覆盖 Service 无 Endpoint、CrashLoopBackOff、ImagePullBackOff、
+Deployment progress deadline 和 EndpointSlice RBAC 403；fixture 会拒绝非
+`kind-` context 或 current context 不匹配的配置。CI 会自动创建独立 kind 集群。
 
 也可以直接运行测试：
 

@@ -280,13 +280,19 @@ class KubernetesReader:
         namespace: str,
     ) -> list[ServiceEndpointSummary]:
         discovery_api = self._require_api(self._discovery_api, "DiscoveryV1Api")
-        response = self._request(
-            f"查询 namespace '{namespace}' 的 EndpointSlice 失败",
-            lambda: discovery_api.list_namespaced_endpoint_slice(
-                namespace=namespace,
-                _request_timeout=self._request_timeout_seconds,
-            ),
-        )
+        try:
+            response = self._request(
+                f"查询 namespace '{namespace}' 的 EndpointSlice 失败",
+                lambda: discovery_api.list_namespaced_endpoint_slice(
+                    namespace=namespace,
+                    _request_timeout=self._request_timeout_seconds,
+                ),
+            )
+        except KubernetesError as error:
+            cause = error.__cause__
+            if isinstance(cause, ApiException) and cause.status == 404:
+                return self._list_legacy_service_endpoints(namespace)
+            raise
         totals: dict[str, _ServiceEndpointCounts] = {}
         for endpoint_slice in response.items:
             labels = endpoint_slice.metadata.labels or {}
@@ -310,6 +316,32 @@ class KubernetesReader:
                 endpoint_slice_count=counts.endpoint_slice_count,
             )
             for service_name, counts in sorted(totals.items())
+        ]
+
+    def _list_legacy_service_endpoints(
+        self,
+        namespace: str,
+    ) -> list[ServiceEndpointSummary]:
+        response = self._request(
+            f"查询 namespace '{namespace}' 的 Endpoints 失败",
+            lambda: self._core_api.list_namespaced_endpoints(
+                namespace=namespace,
+                _request_timeout=self._request_timeout_seconds,
+            ),
+        )
+        return [
+            ServiceEndpointSummary(
+                service_name=endpoints.metadata.name,
+                ready_addresses=sum(
+                    len(subset.addresses or []) for subset in (endpoints.subsets or [])
+                ),
+                not_ready_addresses=sum(
+                    len(subset.not_ready_addresses or [])
+                    for subset in (endpoints.subsets or [])
+                ),
+                endpoint_slice_count=0,
+            )
+            for endpoints in sorted(response.items, key=lambda item: item.metadata.name)
         ]
 
     def list_jobs(self, namespace: str) -> list[JobSummary]:
