@@ -156,49 +156,49 @@ def format_resource_diagnostics(
     resource: KubernetesResourceRef,
 ) -> str:
     diagnostics = snapshot.diagnostics_for(resource)
-    lines = [f"Resource: {resource.kind}/{resource.name}", ""]
+    lines = [f"资源：{resource.kind}/{resource.name}", ""]
     if diagnostics:
-        lines.append(f"Findings ({len(diagnostics)}):")
+        lines.append(f"发现（{len(diagnostics)}）：")
         for diagnostic in diagnostics:
             _append_diagnostic(lines, diagnostic, indentation="  ")
     else:
-        lines.append("Findings: No deterministic warning in the latest snapshot")
+        lines.append("发现：最新快照中未发现确定性警告")
 
     topology = snapshot.deployment_topology(resource)
     if topology is not None:
         lines.extend(
             (
                 "",
-                "Rollout:",
-                "  Generation: {} · Observed: {} · Revision: {}".format(
+                "发布状态：",
+                "  代次：{} · 已观测：{} · 修订：{}".format(
                     topology.generation or "-",
                     topology.observed_generation or "-",
                     topology.revision or "-",
                 ),
-                "  Conditions:",
+                "  条件：",
             )
         )
         lines.extend(
             (f"    {condition}" for condition in topology.conditions)
             if topology.conditions
-            else ("    none",)
+            else ("    无",)
         )
-        lines.append("  Topology:")
+        lines.append("  拓扑：")
         if not topology.replica_sets:
-            lines.append("    no controller-owned ReplicaSet observed")
+            lines.append("    未观测到由控制器持有的 ReplicaSet")
         for replica_set in topology.replica_sets:
             lines.append(
                 f"    ReplicaSet/{replica_set.name}"
-                f" · desired {replica_set.desired_replicas}"
-                f" · ready {replica_set.ready_replicas}"
-                f" · revision {replica_set.revision or '-'}"
+                f" · 期望 {replica_set.desired_replicas}"
+                f" · 就绪 {replica_set.ready_replicas}"
+                f" · 修订 {replica_set.revision or '-'}"
             )
             if not replica_set.pods:
-                lines.append("      no controller-owned Pod observed")
+                lines.append("      未观测到由控制器持有的 Pod")
                 continue
             for pod in replica_set.pods:
                 lines.append(
-                    f"      Pod/{pod.name} · owner {pod.owner_name} · phase {pod.phase}"
+                    f"      Pod/{pod.name} · 所有者 {pod.owner_name} · 阶段 {pod.phase}"
                 )
                 pod_diagnostics = snapshot.diagnostics_for(
                     KubernetesResourceRef(
@@ -214,24 +214,24 @@ def format_resource_diagnostics(
         lines.extend(
             (
                 "",
-                "Endpoints:",
-                f"  Source: {service_endpoint.source.value} · Ready: {service_endpoint.ready_addresses} · NotReady: {service_endpoint.not_ready_addresses}",
+                "端点：",
+                f"  来源：{service_endpoint.source.value} · 就绪：{service_endpoint.ready_addresses} · 未就绪：{service_endpoint.not_ready_addresses}",
             )
         )
         lines.extend(
             (
                 f"  {target.address} -> "
-                f"{target.target_kind or 'unknown'}/"
-                f"{target.target_name or 'unknown'}"
-                f" · {'ready' if target.ready else 'not-ready'}"
+                f"{target.target_kind or '未知'}/"
+                f"{target.target_name or '未知'}"
+                f" · {'就绪' if target.ready else '未就绪'}"
                 for target in service_endpoint.targets
             )
             if service_endpoint.targets
-            else ("  no endpoint target observed",)
+            else ("  未观测到端点目标",)
         )
 
     if snapshot.diagnostic_errors:
-        lines.extend(("", "Partial diagnostics:"))
+        lines.extend(("", "诊断不完整："))
         lines.extend(f"  {error}" for error in snapshot.diagnostic_errors)
     return "\n".join(lines)
 

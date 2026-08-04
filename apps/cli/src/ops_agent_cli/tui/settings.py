@@ -264,7 +264,7 @@ class SettingsScreen(ModalScreen[Settings | None]):
                     ),
                 )
                 yield from _field(
-                    "下载文件本机目录",
+                    "Pod/PVC 文件下载本机目录",
                     Input(
                         value=str(kubernetes.downloads.directory),
                         id="setting-download-directory",

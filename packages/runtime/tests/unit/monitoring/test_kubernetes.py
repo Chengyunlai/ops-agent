@@ -189,7 +189,17 @@ class FakeKubernetesSource:
         name: str,
     ) -> str:
         self.calls.append((f"describe:{kind}", f"{namespace}/{name}"))
-        return "kind: Pod\nmetadata:\n  name: sample-api"
+        return (
+            "Name:       sample-api\n"
+            "Namespace:  sample\n"
+            "Kind:       Pod\n\n"
+            "Resource details\n"
+            "----------------\n"
+            "metadata:\n  name: sample-api\n\n"
+            "Related events\n"
+            "--------------\n"
+            "Warning BackOff (count=3, last=now)"
+        )
 
     def get_pod_details(self, namespace: str, pod_name: str):
         self.calls.append(("pod_details", f"{namespace}/{pod_name}"))
@@ -500,6 +510,7 @@ def test_monitor_browses_and_previews_pvc_without_exposing_namespace() -> None:
     assert directory.entries[0].name == "backups"
     assert preview.title == "PVC/mysql-data · backups/latest.txt"
     assert "backup complete" in preview.content
+    assert "Pod：mysql-0 · 容器：mysql · 挂载路径：/var/lib/mysql" in preview.content
     assert ("browse_pvc", "sample/mysql-data/backups") in source.calls
     assert ("preview_pvc", "sample/mysql-data/backups/latest.txt") in source.calls
 
@@ -531,8 +542,8 @@ def test_monitor_exposes_storage_permission_errors_in_topology_rows() -> None:
     ).snapshot()
     row = snapshot.collection(KubernetesResourceKind.PERSISTENT_VOLUME_CLAIM).rows[0]
 
-    assert row.values[5] == "Unavailable: persistentvolumes is forbidden"
-    assert row.values[6] == "Unavailable: pods is forbidden"
+    assert row.values[5] == "不可用：persistentvolumes is forbidden"
+    assert row.values[6] == "不可用：pods is forbidden"
     assert row.values[7] == "-"
 
 
@@ -548,6 +559,12 @@ def test_monitor_reads_selected_resource_without_exposing_namespace() -> None:
     logs = monitor.pod_logs(resource, tail_lines=200)
 
     assert description.title == "Describe · Pod/sample-api"
+    assert "名称：      sample-api" in description.content
+    assert "Namespace： sample" in description.content
+    assert "资源类型：  Pod" in description.content
+    assert "资源详情" in description.content
+    assert "关联 Event" in description.content
+    assert "Warning BackOff （次数=3，最近=now）" in description.content
     assert "metadata:" in description.content
     assert logs.title == "Logs · Pod/sample-api · api · last 200 lines/container"
     assert logs.content == "api server started"
@@ -988,11 +1005,9 @@ def test_monitor_exposes_deterministic_findings_as_resource_health_reasons() -> 
         )
     )
     assert details.title == "Health · Deployment/sample-api"
-    assert "Generation: 7 · Observed: 7 · Revision: 3" in details.content
-    assert "ReplicaSet/sample-api-7f8 · desired 1 · ready 0 · revision 3" in (
-        details.content
-    )
-    assert "Pod/sample-api-7f8-x1 · owner sample-api-7f8 · phase Pending" in (
+    assert "代次：7 · 已观测：7 · 修订：3" in details.content
+    assert "ReplicaSet/sample-api-7f8 · 期望 1 · 就绪 0 · 修订 3" in (details.content)
+    assert "Pod/sample-api-7f8-x1 · 所有者 sample-api-7f8 · 阶段 Pending" in (
         details.content
     )
     assert "! [pod_resource_unschedulable] Pod 因资源不足无法调度" in details.content
@@ -1067,5 +1082,5 @@ def test_monitor_shows_healthy_service_endpoint_to_pod_topology() -> None:
         )
     )
 
-    assert "Source: EndpointSlice · Ready: 1 · NotReady: 0" in details.content
-    assert "10.42.0.8 -> Pod/sample-api-7f8-x1 · ready" in details.content
+    assert "来源：EndpointSlice · 就绪：1 · 未就绪：0" in details.content
+    assert "10.42.0.8 -> Pod/sample-api-7f8-x1 · 就绪" in details.content

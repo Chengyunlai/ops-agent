@@ -502,11 +502,11 @@ def test_interactive_session_downloads_discovered_file_without_exiting_shell(
     assert "传输 exec-cat" in session_messages[0]
     assert str(downloaded) in session_messages[0]
     banner = capsys.readouterr().out
-    assert "INTERACTIVE POD SESSION · MANUAL WRITE ACCESS" in banner
-    assert "Environment: test" in banner
-    assert "Namespace: sample" in banner
-    assert "Pod: pod-1" in banner
-    assert "Container: main" in banner
+    assert "交互式 Pod 会话 · 人工写入" in banner
+    assert "环境：test" in banner
+    assert "Namespace：sample" in banner
+    assert "Pod：pod-1" in banner
+    assert "容器：main" in banner
     assert "AI只读保护已暂停" in banner
     assert "download <文件>" in banner
     assert session_commands[0][6:12] == [

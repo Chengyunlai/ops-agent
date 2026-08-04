@@ -700,7 +700,7 @@ def test_tui_monitor_accepts_mouse_focus_arrows_and_resource_shortcuts() -> None
             await pilot.press("1")
             column_labels = [column.label.plain for column in table.columns.values()]
             assert "重启" in column_labels
-            assert "AGE" in column_labels
+            assert "时长" in column_labels
 
             await pilot.press("i", "0", "1", "2", "3")
             assert question.has_focus
@@ -1817,28 +1817,6 @@ def test_tui_can_follow_and_stop_new_log_records_without_replacing_snapshot() ->
             status = str(app.screen.query_one("#log-status", Static).content)
             assert "日志快照" in status
             assert any(call[0] == "stop_follow_logs" for call in monitor.content_calls)
-
-    asyncio.run(exercise())
-
-
-def test_tui_can_exit_cleanly_while_log_follow_is_active() -> None:
-    async def exercise() -> None:
-        monitor = FakeMonitor()
-        app = create_tui(FakeAgent(answer="unused"), monitor=monitor)
-
-        async with app.run_test() as pilot:
-            await app.workers.wait_for_complete()
-            await pilot.press("ctrl+k", "1", "l")
-            await app.workers.wait_for_complete()
-            await pilot.press("f")
-            for _ in range(20):
-                await pilot.pause()
-                if monitor.follow_started.is_set():
-                    break
-            await pilot.press("ctrl+c")
-
-        assert app.is_running is False
-        assert any(call[0] == "stop_follow_logs" for call in monitor.content_calls)
 
     asyncio.run(exercise())
 

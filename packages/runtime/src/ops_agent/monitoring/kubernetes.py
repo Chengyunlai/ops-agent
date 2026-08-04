@@ -364,10 +364,12 @@ class KubernetesMonitor:
     ) -> KubernetesResourceContent:
         return KubernetesResourceContent(
             title=f"Describe · {resource.kind}/{resource.name}",
-            content=self._source.describe_resource(
-                self._namespace,
-                resource.kind,
-                resource.name,
+            content=_localize_resource_description(
+                self._source.describe_resource(
+                    self._namespace,
+                    resource.kind,
+                    resource.name,
+                )
             ),
         )
 
@@ -513,8 +515,8 @@ class KubernetesMonitor:
         return KubernetesResourceContent(
             title=f"PVC/{resource.name} · {preview.path}",
             content=(
-                f"Pod: {target.pod_name} · Container: {target.container_name}"
-                f" · Mount: {target.mount_path}\n\n"
+                f"Pod：{target.pod_name} · 容器：{target.container_name}"
+                f" · 挂载路径：{target.mount_path}\n\n"
                 f"{preview.content}{truncation_note}"
             ),
         )
@@ -916,7 +918,33 @@ def _mount_path_label(mount: PersistentVolumeMountSummary) -> str:
 
 def _unavailable_cell(error: str) -> str:
     message = " ".join(error.split())
-    return f"Unavailable: {message[:120]}"
+    return f"不可用：{message[:120]}"
+
+
+def _localize_resource_description(description: str) -> str:
+    localized: list[str] = []
+    for line in description.splitlines():
+        if line.startswith("Name:       "):
+            line = f"名称：      {line.removeprefix('Name:       ')}"
+        elif line.startswith("Namespace:  "):
+            line = f"Namespace： {line.removeprefix('Namespace:  ')}"
+        elif line.startswith("Kind:       "):
+            line = f"资源类型：  {line.removeprefix('Kind:       ')}"
+        elif line == "Resource details":
+            line = "资源详情"
+        elif line == "Related events":
+            line = "关联 Event"
+        elif line.startswith("Unavailable: "):
+            line = f"不可用：{line.removeprefix('Unavailable: ')}"
+        elif line == "No related events.":
+            line = "未发现关联 Event。"
+        elif " (count=" in line and ", last=" in line and line.endswith(")"):
+            line = line.replace(" (count=", " （次数=", 1).replace(
+                ", last=", "，最近=", 1
+            )
+            line = f"{line[:-1]}）"
+        localized.append(line)
+    return "\n".join(localized)
 
 
 def _require_pvc(resource: KubernetesResourceRef) -> None:

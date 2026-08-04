@@ -126,7 +126,7 @@ class VolumeBrowser(ModalScreen[None]):
         entry, path = selected
         if entry.kind is not VolumeEntryKind.FILE:
             self.query_one("#volume-browser-status", Static).update(
-                "文件下载仅支持普通文件"
+                "PVC 文件下载仅支持普通文件"
             )
             return
         if self._download_loading:

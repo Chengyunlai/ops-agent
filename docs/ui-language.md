@@ -31,6 +31,7 @@ Ops Agent 由中文社区优先维护，面向操作员的界面以简体中文�
 | Unavailable | 不可用 |
 | Project Profile（界面） | 项目配置 |
 | Interactive Pod Session（界面） | 交互式 Pod 会话 |
+| Artifact Download（界面） | Pod/PVC 文件下载 |
 
 ## 维护要求
 

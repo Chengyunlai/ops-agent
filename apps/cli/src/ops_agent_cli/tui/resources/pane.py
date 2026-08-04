@@ -295,7 +295,7 @@ def _column_label(label: str) -> str:
         "READY": "就绪",
         "STATUS": "状态",
         "RESTARTS": "重启",
-        "AGE": "AGE",
+        "AGE": "时长",
         "AVAILABLE": "可用",
         "UPDATED": "已更新",
         "CURRENT": "当前",
@@ -307,6 +307,18 @@ def _column_label(label: str) -> str:
         "CAPACITY": "容量",
         "ACCESS-MODES": "访问模式",
         "VOLUME": "卷",
+        "SUCCEEDED": "成功",
+        "ACTIVE": "活跃",
+        "FAILED": "失败",
+        "SCHEDULE": "调度计划",
+        "SUSPEND": "暂停",
+        "LAST": "上次运行",
+        "CLASS": "类别",
+        "HOSTS": "主机",
+        "ADDRESS": "地址",
+        "BACKEND": "后端",
+        "MOUNTED BY": "挂载目标",
+        "MOUNT PATHS": "挂载路径",
     }.get(label, label)
 
 

@@ -110,17 +110,10 @@ type LogFocusFlag = Literal[
 
 
 def _range_label(query: KubernetesLogQuery) -> str:
-    if query.tail_lines is not None:
-        return f"最近 {query.tail_lines} 行"
-    if query.since_seconds is None:
-        raise AssertionError("validated log query has no range")
-    minutes, seconds = divmod(query.since_seconds, 60)
-    if seconds == 0 and minutes < 60:
-        return f"最近 {minutes} 分钟"
-    hours, remaining_minutes = divmod(minutes, 60)
-    if seconds == 0 and remaining_minutes == 0:
-        return f"最近 {hours} 小时"
-    return f"最近 {query.since_seconds} 秒"
+    for preset in LogRangePreset:
+        if query == preset.to_query(container=query.container):
+            return preset.label
+    raise AssertionError("log workbench received an unsupported range")
 
 
 class LogWorkbench(Screen[None]):
@@ -366,7 +359,7 @@ class LogWorkbench(Screen[None]):
         self._load_snapshot(self._requested_query)
 
     def on_unmount(self) -> None:
-        self._stop_follow(message="", update_ui=False)
+        self._stop_follow(message="")
 
     def on_resize(self, event: events.Resize) -> None:
         if event.size.width and self._snapshot is not None:
@@ -1007,7 +1000,7 @@ class LogWorkbench(Screen[None]):
             self._follow_message = "实时跟随流已结束，可按 f 重连"
         self._update_status()
 
-    def _stop_follow(self, *, message: str, update_ui: bool = True) -> None:
+    def _stop_follow(self, *, message: str) -> None:
         if not self._following:
             return
         self._follow_stop_event.set()
@@ -1018,7 +1011,7 @@ class LogWorkbench(Screen[None]):
                 message = f"{message}；关闭流失败：{error}"
         self._following = False
         self._follow_message = message
-        if update_ui and self.is_mounted:
+        if self.is_mounted:
             self.query_one("#log-follow", Button).label = "实时跟随：关"
             self.query_one("#log-follow", Button).remove_class("active")
             self._update_status()
