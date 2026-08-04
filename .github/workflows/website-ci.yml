@@ -1,0 +1,37 @@
+name: Website CI
+
+on:
+  pull_request:
+    paths:
+      - "website/**"
+      - "README.md"
+      - "Makefile"
+      - ".github/workflows/website-ci.yml"
+      - ".github/workflows/deploy-website.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: website-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  website:
+    name: Website
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.0.0
+        with:
+          node-version: "24"
+      - name: Enable pnpm
+        run: corepack enable && corepack prepare pnpm@11.20.0 --activate
+      - name: Install locked dependencies
+        working-directory: website
+        run: pnpm install --frozen-lockfile
+      - name: Check website
+        working-directory: website
+        run: pnpm check
