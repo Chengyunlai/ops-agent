@@ -440,7 +440,7 @@ def test_monitor_isolates_unexpected_optional_metrics_source_failures() -> None:
     assert pods is not None
     assert pods.rows[0].ref.name == "sample-api"
     assert snapshot.metrics.availability is KubernetesMetricsAvailability.UNAVAILABLE
-    assert snapshot.metrics.error == "Metrics adapter failure: adapter bug"
+    assert snapshot.metrics.error == "Metrics 适配器失败：adapter bug"
 
 
 def test_monitor_waits_for_change_without_exposing_namespace() -> None:

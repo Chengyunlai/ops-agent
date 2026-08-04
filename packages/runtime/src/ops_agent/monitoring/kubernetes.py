@@ -658,7 +658,7 @@ class KubernetesMonitor:
             return (
                 KubernetesMetricsStatus(
                     availability=KubernetesMetricsAvailability.UNAVAILABLE,
-                    error=f"Metrics adapter failure: {error}",
+                    error=f"Metrics 适配器失败：{error}",
                 ),
                 None,
             )
