@@ -60,6 +60,9 @@ def test_load_settings_from_toml(tmp_path: Path):
     assert settings.kubernetes.downloads.directory == Path("~/Downloads/ops-agent")
     assert settings.kubernetes.pod_transfer.strategy.value == "auto"
     assert settings.kubernetes.pod_transfer.max_file_size_mb == 512
+    assert settings.kubernetes.watch.enabled
+    assert settings.kubernetes.watch.timeout_seconds == 10
+    assert settings.kubernetes.watch.poll_interval_seconds == 5.0
 
 
 def test_load_settings_parses_manual_pod_access_configuration(
@@ -97,6 +100,74 @@ def test_load_settings_parses_manual_pod_access_configuration(
     assert settings.kubernetes.interactive_exec.terminal_type == "screen-256color"
     assert not settings.kubernetes.interactive_exec.color
     assert settings.kubernetes.downloads.directory == Path("/tmp/ops-agent-downloads")
+
+
+def test_load_settings_parses_watch_refresh_configuration(tmp_path: Path) -> None:
+    config_path = tmp_path / "watch.toml"
+    config_path.write_text(
+        """
+        [kubernetes]
+        environment = "test"
+        namespace = "sample"
+        kubeconfig_path = "/tmp/ops_agent-kubeconfig"
+        request_timeout_seconds = 10
+
+        [kubernetes.watch]
+        enabled = false
+        timeout_seconds = 15
+        poll_interval_seconds = 7.5
+
+        [model]
+        provider = "openai"
+        model = "test-model"
+        """,
+        encoding="utf-8",
+    )
+
+    settings = load_settings(config_path)
+
+    assert not settings.kubernetes.watch.enabled
+    assert settings.kubernetes.watch.timeout_seconds == 15
+    assert settings.kubernetes.watch.poll_interval_seconds == 7.5
+
+
+@pytest.mark.parametrize(
+    ("field_name", "field_value"),
+    [
+        ("enabled", '"true"'),
+        ("timeout_seconds", "0"),
+        ("timeout_seconds", "1.5"),
+        ("poll_interval_seconds", "0"),
+        ("poll_interval_seconds", "inf"),
+        ("poll_interval_seconds", '"5"'),
+    ],
+)
+def test_load_settings_rejects_invalid_watch_refresh_configuration(
+    tmp_path: Path,
+    field_name: str,
+    field_value: str,
+) -> None:
+    config_path = tmp_path / "invalid-watch.toml"
+    config_path.write_text(
+        f"""
+        [kubernetes]
+        environment = "test"
+        namespace = "sample"
+        kubeconfig_path = "/tmp/ops_agent-kubeconfig"
+        request_timeout_seconds = 10
+
+        [kubernetes.watch]
+        {field_name} = {field_value}
+
+        [model]
+        provider = "openai"
+        model = "test-model"
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SettingsError, match=field_name):
+        load_settings(config_path)
 
 
 @pytest.mark.parametrize(

@@ -1,10 +1,12 @@
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import TypeVar
+from threading import Event, Lock
+from typing import Protocol, TypeVar
 
 from kubernetes import config
+from kubernetes import watch as kubernetes_watch
 from kubernetes.client import (
     AppsV1Api,
     BatchV1Api,
@@ -47,10 +49,20 @@ from ops_agent.kubernetes.models import (
     VolumeDirectory,
     VolumeFilePreview,
 )
+from ops_agent.kubernetes.observations import (
+    KubernetesWatchOutcome,
+    KubernetesWatchResult,
+)
 from ops_agent.kubernetes.settings import KubernetesConnectionSettings
 from ops_agent.kubernetes.storage import KubernetesStorageReader
 
 Result = TypeVar("Result")
+
+
+class _Watcher(Protocol):
+    def stream(self, request: Callable[..., object], **kwargs: object) -> Iterator: ...
+
+    def stop(self) -> None: ...
 
 
 @dataclass
@@ -71,6 +83,7 @@ class KubernetesReader:
         networking_api: NetworkingV1Api | None = None,
         discovery_api: DiscoveryV1Api | None = None,
         pod_executor: Callable[..., str] | None = None,
+        watch_factory: Callable[[], _Watcher] | None = None,
     ) -> None:
         self._core_api = core_api
         self._apps_api = apps_api
@@ -78,6 +91,10 @@ class KubernetesReader:
         self._networking_api = networking_api
         self._discovery_api = discovery_api
         self._request_timeout_seconds = request_timeout_seconds
+        self._watch_factory = watch_factory or kubernetes_watch.Watch
+        self._watch_lock = Lock()
+        self._active_watcher: _Watcher | None = None
+        self._pod_resource_version: str | None = None
         self._storage = KubernetesStorageReader(
             core_api=core_api,
             request_timeout_seconds=request_timeout_seconds,
@@ -92,7 +109,83 @@ class KubernetesReader:
                 _request_timeout=self._request_timeout_seconds,
             ),
         )
+        response_metadata = getattr(response, "metadata", None)
+        self._pod_resource_version = getattr(
+            response_metadata,
+            "resource_version",
+            self._pod_resource_version,
+        )
         return [_to_pod_summary(pod) for pod in response.items]
+
+    def wait_for_change(
+        self,
+        namespace: str,
+        *,
+        timeout_seconds: int,
+        stop_event: Event | None = None,
+    ) -> KubernetesWatchResult:
+        """Wait for one Pod change as a bounded read-only invalidation signal."""
+        if stop_event is not None and stop_event.is_set():
+            return KubernetesWatchResult(
+                outcome=KubernetesWatchOutcome.STOPPED,
+            )
+        if not self._pod_resource_version:
+            return KubernetesWatchResult(
+                outcome=KubernetesWatchOutcome.UNAVAILABLE,
+                unavailable_reason=(
+                    "Pod Watch requires a successful list resourceVersion"
+                ),
+            )
+        watcher = self._watch_factory()
+        with self._watch_lock:
+            self._active_watcher = watcher
+        kwargs: dict[str, object] = {
+            "namespace": namespace,
+            "timeout_seconds": timeout_seconds,
+            "_request_timeout": timeout_seconds + self._request_timeout_seconds,
+        }
+        kwargs["resource_version"] = self._pod_resource_version
+        try:
+            if stop_event is not None and stop_event.is_set():
+                return KubernetesWatchResult(
+                    outcome=KubernetesWatchOutcome.STOPPED,
+                )
+            for event in watcher.stream(
+                self._core_api.list_namespaced_pod,
+                **kwargs,
+            ):
+                if stop_event is not None and stop_event.is_set():
+                    return KubernetesWatchResult(
+                        outcome=KubernetesWatchOutcome.STOPPED,
+                    )
+                resource = event.get("object")
+                metadata = getattr(resource, "metadata", None)
+                resource_version = getattr(metadata, "resource_version", None)
+                if resource_version is not None:
+                    self._pod_resource_version = str(resource_version)
+                return KubernetesWatchResult(
+                    outcome=KubernetesWatchOutcome.CHANGED,
+                )
+            return KubernetesWatchResult(
+                outcome=KubernetesWatchOutcome.TIMED_OUT,
+            )
+        except (ApiException, HTTPError) as error:
+            return KubernetesWatchResult(
+                outcome=KubernetesWatchOutcome.UNAVAILABLE,
+                unavailable_reason=str(error),
+            )
+        finally:
+            with self._watch_lock:
+                if self._active_watcher is watcher:
+                    self._active_watcher = None
+            watcher.stop()
+
+    def stop_waiting_for_change(self) -> None:
+        """Immediately stop the active bounded Watch request, if any."""
+        with self._watch_lock:
+            watcher = self._active_watcher
+        if watcher is not None:
+            watcher.stop()
 
     def get_pod_details(
         self,

@@ -171,6 +171,11 @@ namespace = "operations"
 kubeconfig_path = "/absolute/path/to/.kube/config"
 request_timeout_seconds = 10
 
+[kubernetes.watch]
+enabled = true
+timeout_seconds = 10
+poll_interval_seconds = 5.0
+
 [kubernetes.interactive_exec]
 enabled = false
 locale = "auto"
@@ -217,6 +222,9 @@ export DEEPSEEK_API_KEY="..."
 | `kubeconfig_path` | string | kubeconfig 路径，推荐使用绝对路径 |
 | `request_timeout_seconds` | integer | Kubernetes API 请求超时时间（秒） |
 | `proxy_url` | HTTP(S) URL | 可选；访问 Kubernetes API 使用的代理，例如 `http://127.0.0.1:7897` |
+| `kubernetes.watch.enabled` | boolean | 是否用 Kubernetes Watch 加速监盘刷新；默认 `true` |
+| `kubernetes.watch.timeout_seconds` | integer | 单次只读 Watch 请求的服务端超时；默认 `10` 秒 |
+| `kubernetes.watch.poll_interval_seconds` | number | 完整快照一致性兜底及 Watch 不可用时的轮询间隔；默认 `5.0` 秒 |
 | `kubernetes.interactive_exec.enabled` | boolean | 是否允许左侧监盘启动人工 Pod Shell；默认 `false` |
 | `kubernetes.interactive_exec.locale` | string | Pod Shell UTF-8 locale；`auto` 自动探测，默认 `auto` |
 | `kubernetes.interactive_exec.terminal_type` | string | Pod Shell 的 `TERM` 值；默认 `xterm-256color` |
@@ -236,9 +244,9 @@ export DEEPSEEK_API_KEY="..."
 | `tui.colors.warning` | `#RRGGBB` | 可选的主题警告色覆盖 |
 
 当前加载器校验配置文件、TOML 格式、`[kubernetes]` / `[model]`
-区块、字段类型、正整数超时、可选代理 URL、人工终端开关、Shell locale、
-终端类型、颜色开关、下载目录、Pod 传输策略、文件大小上限、主题名称和
-十六进制颜色；
+区块、字段类型、正整数超时、Watch 开关与正数轮询间隔、可选代理 URL、
+人工终端开关、Shell locale、终端类型、颜色开关、下载目录、Pod 传输策略、
+文件大小上限、主题名称和十六进制颜色；
 kubeconfig 是否存在由创建 Kubernetes Client 时检查。`proxy_url` 由配置
 模型校验并在 Kubernetes Client 创建前注入，因此不依赖启动 Shell 是否
 继承 macOS 系统代理。
@@ -315,8 +323,11 @@ uv run ops-agent \
   tui
 ```
 
-TUI 显示当前环境、固定 namespace 和 AI 只读标识。宽终端采用左右布局：左侧每
-5 秒刷新资源目录，默认 Overview 明确列出 Pod、Deployment、StatefulSet、
+TUI 显示当前环境、固定 namespace 和 AI 只读标识。宽终端采用左右布局：左侧
+先读取完整快照，再从该快照的 Pod `resourceVersion` 启动只读 Kubernetes
+Watch；Pod 变化会立即使完整快照失效并刷新。Watch 超时会正常重连，API 不可用、
+网络断开或 RBAC 403 时自动保留每 5 秒完整轮询，不会安装组件、提升权限或影响
+人工 Pod 操作。默认 Overview 明确列出 Pod、Deployment、StatefulSet、
 DaemonSet、Service、ReplicaSet、Job、CronJob、Ingress 和 PVC 的数量、
 Finding 数与状态；具体资源表紧邻名称显示 `OK` 或 `WARN · 原因`。右侧保留
 本次运行中的用户消息和 Agent Markdown 回复。窄终端自动改为
@@ -457,7 +468,7 @@ KUBECONFIG=/path/to/disposable-kind-kubeconfig \
 make test-kubernetes-integration
 ```
 
-测试夹具固定覆盖 Service 无 Endpoint、Service → Endpoint → Pod、
+测试夹具固定覆盖 Pod Watch 变化与 Watch RBAC 403 回退、Service 无 Endpoint、Service → Endpoint → Pod、
 CrashLoopBackOff、ImagePullBackOff、Deployment progress deadline、EndpointSlice
 RBAC 403，以及模拟 Discovery 404 后读取真实 CoreV1 Endpoints 的回退链路；
 fixture 会拒绝非 `kind-` context 或 current context 不匹配的配置。CI 会自动
@@ -634,10 +645,10 @@ Kubernetes 相关代码采用三层边界：
   namespace、日志行数和 Event 数量。
 - `monitoring/` 用无参数 `snapshot()` 以及固定 namespace 的 `diagnostics()` /
   `describe()` / `pod_logs()` / `pod_containers()` 接口封装资源浏览与诊断呈现。
-  Snapshot 携带 Finding 摘要和结构化 Deployment 拓扑。TUI 只消费这些
-  稳定接口，不导入
-  Kubernetes SDK，也不解析 Agent 文本；以后将轮询替换为 watch 时无需改动
-  聊天与布局。
+  Snapshot 携带 Finding 摘要和结构化 Deployment 拓扑；`wait_for_change()`
+  只返回稳定失效信号，SDK Watch Event 不会越过 runtime 边界。TUI 收到信号后
+  仍读取完整 Snapshot，因此不导入 Kubernetes SDK、不解析 Agent 文本，也不
+  改动聊天、布局或当前资源选择。
 
 `apps/cli/bootstrap.py` 是终端应用的组合根，负责读取进程环境并选择具体的
 模型、Reader、Monitor、Tool 和 Agent 适配器。`configuration/` 拥有完整的

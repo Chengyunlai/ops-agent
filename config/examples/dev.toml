@@ -7,6 +7,11 @@ namespace = "YOUR_NAMESPACE"
 kubeconfig_path = "/absolute/path/to/dev-kubeconfig"
 request_timeout_seconds = 10
 
+[kubernetes.watch]
+enabled = true
+timeout_seconds = 10
+poll_interval_seconds = 5.0
+
 [kubernetes.interactive_exec]
 enabled = false
 locale = "auto"

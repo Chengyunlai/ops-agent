@@ -30,6 +30,10 @@ from ops_agent.kubernetes.models import (
     VolumeEntryKind,
     VolumeFilePreview,
 )
+from ops_agent.kubernetes.observations import (
+    KubernetesWatchOutcome,
+    KubernetesWatchResult,
+)
 from ops_agent.kubernetes.reader import KubernetesReader, create_kubernetes_reader
 from ops_agent.kubernetes.settings import KubernetesConnectionSettings
 
@@ -50,6 +54,8 @@ __all__ = [
     "KubernetesEventSummary",
     "KubernetesReader",
     "KubernetesResourceKind",
+    "KubernetesWatchOutcome",
+    "KubernetesWatchResult",
     "PersistentVolumeClaimSummary",
     "PersistentVolumeMountSummary",
     "PodConditionSummary",

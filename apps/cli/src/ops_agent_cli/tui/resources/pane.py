@@ -32,7 +32,7 @@ class MonitorPane(Vertical):
 
     def on_mount(self) -> None:
         self._render_tabs()
-        self._render_table()
+        self._render_table(preserve_viewport=False)
 
     def display_snapshot(self, snapshot: KubernetesMonitorSnapshot) -> None:
         self._snapshot = snapshot
@@ -90,7 +90,7 @@ class MonitorPane(Vertical):
     def _render_all(self) -> None:
         self._render_title()
         self._render_tabs()
-        self._render_table()
+        self._render_table(preserve_viewport=False)
 
     def _render_title(self) -> None:
         snapshot = self._snapshot
@@ -136,9 +136,10 @@ class MonitorPane(Vertical):
         tabs.append(f"[{idle_color}]↑/↓ Enter 健康[/]")
         self.query_one("#monitor-tabs", Static).update("  ".join(tabs))
 
-    def _render_table(self) -> None:
+    def _render_table(self, *, preserve_viewport: bool = True) -> None:
         table = self.query_one("#monitor-table", DataTable)
         selected_row_key = _selected_row_key(table)
+        viewport = (table.scroll_x, table.scroll_y) if preserve_viewport else None
         table.clear(columns=True)
         snapshot = self._snapshot
         if self._kind is None:
@@ -210,6 +211,14 @@ class MonitorPane(Vertical):
                             key=f"{row.ref.kind.value}:{row.ref.name}",
                         )
         _restore_selected_row(table, selected_row_key)
+        if viewport is not None:
+            table.scroll_to(
+                x=viewport[0],
+                y=viewport[1],
+                animate=False,
+                force=True,
+                immediate=True,
+            )
 
     def _current_collection(self) -> KubernetesResourceCollection | None:
         if self._snapshot is None or self._kind is None:
