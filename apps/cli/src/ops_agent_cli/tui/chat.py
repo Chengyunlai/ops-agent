@@ -25,7 +25,7 @@ class ChatTranscript(Markdown):
     def begin_exchange(self, question: str) -> None:
         self._messages.extend(
             [
-                _ChatMessage(role="YOU", content=question),
+                _ChatMessage(role="你", content=question),
                 _ChatMessage(
                     role="OPS AGENT",
                     content="正在获取实时证据，请稍候。",

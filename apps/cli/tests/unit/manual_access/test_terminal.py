@@ -154,7 +154,7 @@ def test_terminal_download_protocol_rejects_invalid_utf8() -> None:
     events = list(protocol.feed(marker))
 
     assert events == [
-        b"\r\n[OPS AGENT] download request is invalid\r\n",
+        "\r\n[OPS AGENT] 下载请求无效\r\n".encode(),
         b"after",
     ]
 
@@ -173,7 +173,7 @@ def test_terminal_download_protocol_rejects_control_characters() -> None:
     events = list(protocol.feed(marker))
 
     assert events == [
-        b"\r\n[OPS AGENT] download request is invalid\r\n",
+        "\r\n[OPS AGENT] 下载请求无效\r\n".encode(),
         b"after",
     ]
 
@@ -189,7 +189,7 @@ def test_terminal_download_protocol_rejects_oversized_declared_path() -> None:
     ]
 
     assert events == [
-        b"\r\n[OPS AGENT] download request is too large\r\n",
+        "\r\n[OPS AGENT] 下载请求过大\r\n".encode(),
         b"safe prompt",
     ]
     assert protocol.finish() == b""
@@ -206,7 +206,7 @@ def test_terminal_download_protocol_does_not_replay_truncated_frame() -> None:
     remainder = protocol.finish()
 
     assert events == []
-    assert remainder == (b"\r\n[OPS AGENT] incomplete download request discarded\r\n")
+    assert remainder == "\r\n[OPS AGENT] 已丢弃不完整的下载请求\r\n".encode()
     assert b"\x1b]52" not in remainder
 
 
@@ -221,4 +221,4 @@ def test_terminal_download_protocol_bounds_unterminated_length_header() -> None:
         if isinstance(event, bytes)
     )
 
-    assert visible == b"\r\n[OPS AGENT] download request is invalid\r\n"
+    assert visible == "\r\n[OPS AGENT] 下载请求无效\r\n".encode()

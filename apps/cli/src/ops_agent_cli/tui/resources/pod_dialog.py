@@ -91,16 +91,17 @@ class PodAccessDialog(ModalScreen[PodAccessRequest | None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="pod-access-dialog"):
             yield Static(
-                " INTERACTIVE POD SESSION · SHELL + DOWNLOAD",
+                " 交互式 Pod 会话 · Shell + 下载",
                 id="pod-access-title",
             )
             with Vertical(id="pod-access-content"):
                 yield Static(
-                    f"Environment: {self._environment}\n"
-                    f"Namespace: {self._namespace}\n"
-                    f"Pod: {self._pod_name}"
+                    f"环境：{self._environment}\n"
+                    f"Namespace：{self._namespace}\n"
+                    f"Pod：{self._pod_name}",
+                    id="pod-access-context",
                 )
-                yield Label("Container")
+                yield Label("容器")
                 yield Select(
                     tuple((name, name) for name in self._containers),
                     value=self._containers[0],

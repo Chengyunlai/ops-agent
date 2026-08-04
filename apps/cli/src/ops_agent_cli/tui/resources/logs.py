@@ -56,6 +56,14 @@ class LogLineMode(StrEnum):
     TRUNCATE = "truncate"
     FULL = "full"
 
+    @property
+    def label(self) -> str:
+        return {
+            self.WRAP: "换行",
+            self.TRUNCATE: "截断",
+            self.FULL: "完整",
+        }[self]
+
 
 class LogRangePreset(StrEnum):
     LAST_200_LINES = "last_200_lines"
@@ -67,11 +75,11 @@ class LogRangePreset(StrEnum):
     @property
     def label(self) -> str:
         return {
-            self.LAST_200_LINES: "Last 200 lines",
-            self.LAST_500_LINES: "Last 500 lines",
-            self.LAST_1000_LINES: "Last 1000 lines",
-            self.LAST_15_MINUTES: "Last 15 minutes",
-            self.LAST_1_HOUR: "Last 1 hour",
+            self.LAST_200_LINES: "最近 200 行",
+            self.LAST_500_LINES: "最近 500 行",
+            self.LAST_1000_LINES: "最近 1000 行",
+            self.LAST_15_MINUTES: "最近 15 分钟",
+            self.LAST_1_HOUR: "最近 1 小时",
         }[self]
 
     def to_query(self, *, container: str | None) -> KubernetesLogQuery:
@@ -99,6 +107,13 @@ type LogFocusFlag = Literal[
     "hide_health_checks",
     "hide_access_logs",
 ]
+
+
+def _range_label(query: KubernetesLogQuery) -> str:
+    for preset in LogRangePreset:
+        if query == preset.to_query(container=query.container):
+            return preset.label
+    raise AssertionError("log workbench received an unsupported range")
 
 
 class LogWorkbench(Screen[None]):
@@ -283,12 +298,12 @@ class LogWorkbench(Screen[None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="log-workbench"):
-            yield Static(f"Logs · Pod/{self._resource.name}", id="log-title")
+            yield Static(f"日志 · Pod/{self._resource.name}", id="log-title")
             with Vertical(id="log-controls"):
                 with Horizontal(id="log-selectors"):
                     yield Select(
                         (
-                            ("All containers", None),
+                            ("全部容器", None),
                             *((name, name) for name in self._containers),
                         ),
                         value=self._containers[0],
@@ -302,27 +317,27 @@ class LogWorkbench(Screen[None]):
                         id="log-range",
                     )
                 with Horizontal(id="log-actions"):
-                    yield Button("Refresh", id="log-refresh", compact=True)
-                    yield Button("Follow: OFF", id="log-follow", compact=True)
-                    yield Button("Lines: WRAP", id="log-line-mode", compact=True)
+                    yield Button("刷新", id="log-refresh", compact=True)
+                    yield Button("实时跟随：关", id="log-follow", compact=True)
+                    yield Button("长行：换行", id="log-line-mode", compact=True)
                     yield Button("复制", id="log-copy-button", compact=True)
                 with Horizontal(id="log-focus-actions"):
-                    yield Button("Focus: OFF", id="log-focus-toggle", compact=True)
-                    yield Button("INFO: SHOW", id="log-hide-info", compact=True)
-                    yield Button("DEBUG: SHOW", id="log-hide-debug", compact=True)
-                    yield Button("Health: SHOW", id="log-hide-health", compact=True)
-                    yield Button("Access: SHOW", id="log-hide-access", compact=True)
-                    yield Button("Rules: 0", id="log-focus-rules", compact=True)
+                    yield Button("日志聚焦：关", id="log-focus-toggle", compact=True)
+                    yield Button("INFO：显示", id="log-hide-info", compact=True)
+                    yield Button("DEBUG：显示", id="log-hide-debug", compact=True)
+                    yield Button("健康检查：显示", id="log-hide-health", compact=True)
+                    yield Button("访问日志：显示", id="log-hide-access", compact=True)
+                    yield Button("规则：0", id="log-focus-rules", compact=True)
                 with Horizontal(id="log-search-actions"):
                     yield Input(
                         placeholder="/ 搜索当前视图（默认忽略大小写）",
                         max_length=200,
                         id="log-search-input",
                     )
-                    yield Button("Regex: OFF", id="log-search-regex", compact=True)
-                    yield Button("Prev N", id="log-search-prev", compact=True)
-                    yield Button("Next n", id="log-search-next", compact=True)
-                    yield Button("Clear", id="log-search-clear", compact=True)
+                    yield Button("正则：关", id="log-search-regex", compact=True)
+                    yield Button("上一个 N", id="log-search-prev", compact=True)
+                    yield Button("下一个 n", id="log-search-next", compact=True)
+                    yield Button("清空", id="log-search-clear", compact=True)
             yield RichLog(
                 max_lines=20_000,
                 highlight=False,
@@ -332,7 +347,7 @@ class LogWorkbench(Screen[None]):
                 id="log-content",
             )
             yield Static("正在读取 Kubernetes API…", id="log-status")
-            yield Static("VIEW ALL · SEARCH OFF", id="log-query-status")
+            yield Static("全部记录\n搜索关闭", id="log-query-status")
             yield Static(
                 self._footer_text(),
                 id="log-footer",
@@ -376,7 +391,7 @@ class LogWorkbench(Screen[None]):
         self._line_mode = modes[(current + 1) % len(modes)]
         self.query_one(
             "#log-line-mode", Button
-        ).label = f"Lines: {self._line_mode.value.upper()}"
+        ).label = f"长行：{self._line_mode.label}"
         if self._snapshot is not None:
             self._render_snapshot(self._snapshot)
 
@@ -401,17 +416,15 @@ class LogWorkbench(Screen[None]):
 
     def action_toggle_follow(self) -> None:
         if self._following:
-            self._stop_follow(message="Follow 已停止")
+            self._stop_follow(message="实时跟随已停止")
             return
         snapshot = self._snapshot
         if snapshot is None:
-            self.query_one("#log-status", Static).update(
-                "请先等待 Log Snapshot 读取完成"
-            )
+            self.query_one("#log-status", Static).update("请先等待日志快照读取完成")
             return
         if snapshot.query.container is None:
             self.query_one("#log-status", Static).update(
-                "Follow 需要选择单个容器；All containers 仍可读取稳定快照"
+                "实时跟随需要选择单个容器；全部容器仍可读取稳定快照"
             )
             return
         since_time = self._follow_since_time(
@@ -427,7 +440,7 @@ class LogWorkbench(Screen[None]):
         self._follow_stop_event = Event()
         self._following = True
         self._follow_message = "实时跟随中"
-        self.query_one("#log-follow", Button).label = "Follow: ON"
+        self.query_one("#log-follow", Button).label = "实时跟随：开"
         self.query_one("#log-follow", Button).add_class("active")
         self._update_status()
         self._follow_logs(
@@ -503,7 +516,7 @@ class LogWorkbench(Screen[None]):
         )
         self._search_cursor = 0
         button = self.query_one("#log-search-regex", Button)
-        button.label = f"Regex: {'ON' if self._search.regex else 'OFF'}"
+        button.label = f"正则：{'开' if self._search.regex else '关'}"
         button.set_class(self._search.regex, "active")
         if self._snapshot is not None:
             self._render_snapshot(self._snapshot)
@@ -536,7 +549,7 @@ class LogWorkbench(Screen[None]):
     @work(group="log-snapshot", exclusive=True, exit_on_error=False)
     async def _load_snapshot(self, query: KubernetesLogQuery) -> None:
         self.query_one("#log-status", Static).update(
-            f"正在读取 {query.container or 'default'} · {query.range_label}…"
+            f"正在读取 {query.container or '默认容器'} · {_range_label(query)}…"
         )
         try:
             snapshot = await self.run_worker_thread(query)
@@ -622,18 +635,18 @@ class LogWorkbench(Screen[None]):
         multiple_sources = len(snapshot.sources) > 1
         for source in snapshot.sources:
             if source.error is not None:
-                label = source.container or "default"
+                label = source.container or "默认容器"
                 viewer.write(
                     Text(
-                        f"[{label} unavailable] {source.error}",
+                        f"[{label} 不可用] {source.error}",
                         style=self._level_style(KubernetesLogLevel.ERROR),
                     )
                 )
         if self._omitted_follow_records:
             viewer.write(
                 Text(
-                    f"[{self._omitted_follow_records} newer Follow records were not "
-                    f"added after the {_MAX_FOLLOW_RECORDS:,}-record safety limit]",
+                    f"[达到 {_MAX_FOLLOW_RECORDS:,} 条安全上限后，有 "
+                    f"{self._omitted_follow_records} 条实时跟随记录未追加]",
                     style="dim",
                 )
             )
@@ -665,7 +678,7 @@ class LogWorkbench(Screen[None]):
         search_matches: Sequence[KubernetesLogSearchMatch] = (),
         current_search_match: KubernetesLogSearchMatch | None = None,
     ) -> Text:
-        prefix = f"{record.container or 'default'} │ " if show_container else ""
+        prefix = f"{record.container or '默认容器'} │ " if show_container else ""
         content = f"{prefix}{record.raw}"
         if max_length is not None and len(content) > max_length:
             content = f"{content[: max_length - 1]}…"
@@ -727,19 +740,19 @@ class LogWorkbench(Screen[None]):
         warning_count = sum(
             record.level is KubernetesLogLevel.WARNING for record in records
         )
-        follow = "FOLLOW" if self._following else "SNAPSHOT"
+        follow = "实时跟随" if self._following else "日志快照"
         detail = f" · {self._follow_message}" if self._follow_message else ""
         source_errors = sum(source.error is not None for source in snapshot.sources)
         if source_errors:
             detail += (
-                f" · SOURCE ERROR {source_errors} · r 重试；"
+                f" · 来源错误 {source_errors} · r 重试；"
                 "若 Pod 已重建，Esc 返回并选择新 Pod"
             )
         if self._omitted_follow_records:
-            detail += f" · FOLLOW OMITTED {self._omitted_follow_records}"
+            detail += f" · 跟随遗漏 {self._omitted_follow_records}"
         self.query_one("#log-status", Static).update(
-            f"{len(records)} records · ERROR {error_count}"
-            f" · WARN {warning_count} · {self._line_mode.value.upper()} · {follow}"
+            f"{len(records)} 条记录 · ERROR {error_count}"
+            f" · WARN {warning_count} · {self._line_mode.label} · {follow}"
             f"{detail}"
         )
         self.query_one("#log-query-status", Static).update(
@@ -781,21 +794,21 @@ class LogWorkbench(Screen[None]):
     def _query_status_text(self, total_records: int) -> str:
         if self._focus_enabled:
             view = (
-                f"FOCUS ON · {len(self._visible_records)}/{total_records} visible"
-                f" · HIDDEN {self._hidden_record_count} · {self._focus_summary()}"
+                f"日志聚焦开启 · {len(self._visible_records)}/{total_records} 可见"
+                f" · 隐藏 {self._hidden_record_count} · {self._focus_summary()}"
             )
         else:
-            view = f"VIEW ALL · {len(self._visible_records)}/{total_records} visible"
+            view = f"全部记录 · {len(self._visible_records)}/{total_records} 可见"
         if not self._search.text:
-            search = "SEARCH OFF"
+            search = "搜索关闭"
         elif self._search_result.error is not None:
             search = self._search_result.error
         else:
             position = self._search_cursor + 1 if self._search_cursor is not None else 0
-            mode = "REGEX" if self._search.regex else "LITERAL"
+            mode = "正则" if self._search.regex else "字面文本"
             search = (
-                f"SEARCH {position}/{len(self._search_result.matches)} · {mode}"
-                f' · insensitive · "{self._search.text}"'
+                f"搜索 {position}/{len(self._search_result.matches)} · {mode}"
+                f' · 忽略大小写 · "{self._search.text}"'
             )
         message = f" · {self._focus_message}" if self._focus_message else ""
         return f"{view}{message}\n{search}"
@@ -805,34 +818,34 @@ class LogWorkbench(Screen[None]):
         filters = [
             label
             for enabled, label in (
-                (settings.hide_info, "hide INFO"),
-                (settings.hide_debug, "hide DEBUG"),
-                (settings.hide_health_checks, "hide Health"),
-                (settings.hide_access_logs, "hide Access"),
+                (settings.hide_info, "隐藏 INFO"),
+                (settings.hide_debug, "隐藏 DEBUG"),
+                (settings.hide_health_checks, "隐藏健康检查"),
+                (settings.hide_access_logs, "隐藏访问日志"),
             )
             if enabled
         ]
         if settings.hidden_text:
-            filters.append(f"{len(settings.hidden_text)} text rules")
-        return ", ".join(filters) or "no hide rules"
+            filters.append(f"{len(settings.hidden_text)} 条文本规则")
+        return "，".join(filters) or "没有隐藏规则"
 
     def _refresh_focus_controls(self) -> None:
         focus_button = self.query_one("#log-focus-toggle", Button)
-        focus_button.label = f"Focus: {'ON' if self._focus_enabled else 'OFF'}"
+        focus_button.label = f"日志聚焦：{'开' if self._focus_enabled else '关'}"
         focus_button.set_class(self._focus_enabled, "active")
         for field, button_id, label in (
             ("hide_info", "#log-hide-info", "INFO"),
             ("hide_debug", "#log-hide-debug", "DEBUG"),
-            ("hide_health_checks", "#log-hide-health", "Health"),
-            ("hide_access_logs", "#log-hide-access", "Access"),
+            ("hide_health_checks", "#log-hide-health", "健康检查"),
+            ("hide_access_logs", "#log-hide-access", "访问日志"),
         ):
             hidden = bool(getattr(self._focus_settings, field))
             button = self.query_one(button_id, Button)
-            button.label = f"{label}: {'HIDE' if hidden else 'SHOW'}"
+            button.label = f"{label}：{'隐藏' if hidden else '显示'}"
             button.set_class(hidden, "active")
         self.query_one(
             "#log-focus-rules", Button
-        ).label = f"Rules: {len(self._focus_settings.hidden_text)}"
+        ).label = f"规则：{len(self._focus_settings.hidden_text)}"
 
     def _toggle_focus_setting(self, field: LogFocusFlag) -> None:
         values = self._focus_settings.model_dump()
@@ -864,11 +877,11 @@ class LogWorkbench(Screen[None]):
         try:
             self._save_focus_settings(updated)
         except Exception as error:  # noqa: BLE001 - 规则保存失败必须留在工作台
-            self._focus_message = f"Project Profile 保存失败：{error}"
+            self._focus_message = f"项目配置保存失败：{error}"
             self._update_status()
             return False
         self._focus_settings = updated
-        self._focus_message = "Project Profile 已保存"
+        self._focus_message = "项目配置已保存"
         return True
 
     def _move_search_cursor(self, offset: int) -> None:
@@ -912,9 +925,9 @@ class LogWorkbench(Screen[None]):
 
     def _footer_text(self) -> str:
         if self._copy_mode:
-            return "COPY MODE · 直接用鼠标拖选复制 · Esc 恢复鼠标控制"
+            return "复制模式 · 直接用鼠标拖选复制 · Esc 恢复鼠标控制"
         return (
-            "Esc/q 返回 · / 搜索 · n/N 命中 · r 刷新 · f Follow"
+            "Esc/q 返回 · / 搜索 · n/N 命中 · r 刷新 · f 实时跟随"
             " · w 长行模式 · ↑/↓/PgUp/PgDn 滚动 · F2 备用"
         )
 
@@ -931,7 +944,7 @@ class LogWorkbench(Screen[None]):
             self._omitted_follow_records += 1
             self._stop_follow(
                 message=(
-                    f"Follow 已停止：达到 {_MAX_FOLLOW_RECORDS:,} 条安全上限；"
+                    f"实时跟随已停止：达到 {_MAX_FOLLOW_RECORDS:,} 条安全上限；"
                     "请刷新快照或缩小读取范围"
                 )
             )
@@ -977,14 +990,14 @@ class LogWorkbench(Screen[None]):
         if not self.is_mounted:
             return
         self._following = False
-        self.query_one("#log-follow", Button).label = "Follow: OFF"
+        self.query_one("#log-follow", Button).label = "实时跟随：关"
         self.query_one("#log-follow", Button).remove_class("active")
         if error is not None:
             self._follow_message = (
-                f"Follow 中断：{error}；按 f 重连；若 Pod 已重建，Esc 返回并选择新 Pod"
+                f"实时跟随中断：{error}；按 f 重连；若 Pod 已重建，Esc 返回并选择新 Pod"
             )
         elif not stop_event.is_set():
-            self._follow_message = "Follow 流已结束，可按 f 重连"
+            self._follow_message = "实时跟随流已结束，可按 f 重连"
         self._update_status()
 
     def _stop_follow(self, *, message: str) -> None:
@@ -999,7 +1012,7 @@ class LogWorkbench(Screen[None]):
         self._following = False
         self._follow_message = message
         if self.is_mounted:
-            self.query_one("#log-follow", Button).label = "Follow: OFF"
+            self.query_one("#log-follow", Button).label = "实时跟随：关"
             self.query_one("#log-follow", Button).remove_class("active")
             self._update_status()
 

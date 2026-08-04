@@ -526,18 +526,18 @@ class OpsAgentTui(App[None]):
         Binding("ctrl+k", "focus_monitor", "资源监盘", priority=True),
         Binding("ctrl+comma", "open_settings", "设置", priority=True),
         Binding("f2", "toggle_copy_mode", "复制模式", priority=True),
-        Binding("0", "show_overview", "Overview", show=False),
+        Binding("0", "show_overview", "总览", show=False),
         Binding("1", "show_pods", "Pods", show=False),
         Binding("2", "show_deployments", "Deployments", show=False),
         Binding("3", "show_stateful_sets", "StatefulSets", show=False),
         Binding("4", "show_daemon_sets", "DaemonSets", show=False),
         Binding("5", "show_services", "Services", show=False),
         Binding("6", "show_replica_sets", "ReplicaSets", show=False),
-        Binding("7", "show_storage", "Storage", show=False),
-        Binding("h", "show_diagnostics", "Health", show=False),
-        Binding("d", "describe_resource", "Describe", show=False),
-        Binding("l", "show_logs", "Logs", show=False),
-        Binding("f", "browse_storage", "Browse PVC", show=False),
+        Binding("7", "show_storage", "存储", show=False),
+        Binding("h", "show_diagnostics", "健康", show=False),
+        Binding("d", "describe_resource", "详情", show=False),
+        Binding("l", "show_logs", "日志", show=False),
+        Binding("f", "browse_storage", "浏览 PVC", show=False),
         Binding("x", "interactive_pod_session", "Pod Shell", show=False),
         Binding("q", "quit", "退出"),
         Binding("i", "focus_question", "输入"),
@@ -583,26 +583,26 @@ class OpsAgentTui(App[None]):
                 id="context",
             )
             yield Button("复制", id="copy-button", compact=True, flat=True)
-            yield Button("⚙ Settings", id="settings-button", compact=True, flat=True)
+            yield Button("⚙ 设置", id="settings-button", compact=True, flat=True)
             yield Button("退出", id="quit-button", compact=True, flat=True)
         yield Static(
             "全局：顶部“退出” · Esc 后 q 退出 · Ctrl+C 备用 · F1/? 帮助"
             " · 顶部“复制”（F2 备用）· Ctrl+, 设置 · Ctrl+R 刷新"
             " · Ctrl+K 聚焦监盘\n"
             "聊天：Enter 提交 · i 返回输入 · Ctrl+L 清空右侧显示\n"
-            "监盘：0 总览 · 1~7 切换资源 · Enter/h 健康 · d Describe"
+            "监盘：0 总览 · 1~7 切换资源 · Enter/h 健康 · d 详情"
             " · l Pod 日志 · f PVC 目录 · x 人工 Pod Shell"
             "（Shell 内 download <文件>）· PVC 浏览器内 s 下载 · q 退出",
             id="help",
         )
         yield Static(
-            " COPY MODE · 现在直接用鼠标拖选复制 · 按 Esc 恢复仪表盘鼠标控制",
+            " 复制模式 · 现在直接用鼠标拖选复制 · 按 Esc 恢复仪表盘鼠标控制",
             id="copy-mode-banner",
         )
         with Horizontal(id="workspace"):
             yield MonitorPane(id="monitor-pane")
             with Vertical(id="chat-pane"):
-                yield Static(" OPS COPILOT · CONTROLLED CHAT", id="chat-title")
+                yield Static("运维助手 · 受控对话", id="chat-title")
                 yield ChatTranscript(namespace=self._namespace, id="result")
                 yield Static("就绪", id="status")
                 yield QuestionInput(
@@ -611,7 +611,7 @@ class OpsAgentTui(App[None]):
                 )
         yield Static(
             " Esc q 退出  │ ^K 监盘  0 总览  1 Pods  2 Deploy  3 Stateful"
-            "  4 Daemon  5 Services  6 Replica  7 Storage"
+            "  4 Daemon  5 Services  6 Replica  7 PVC"
             "  │ d 详情  l 日志  f 目录  x Shell+下载  i 聊天",
             id="hotkeys",
         )
@@ -765,7 +765,7 @@ class OpsAgentTui(App[None]):
         self.query_one("#monitor-pane", MonitorPane).focus_table()
         if not self._busy:
             self.query_one("#status", Static).update(
-                "监盘模式 · ↑/↓ 选择 · Enter/h 健康 · d Describe · l Pod 日志 · i 聊天"
+                "监盘模式 · ↑/↓ 选择 · Enter/h 健康 · d 详情 · l Pod 日志 · i 聊天"
             )
 
     def action_open_settings(self) -> None:
@@ -842,7 +842,7 @@ class OpsAgentTui(App[None]):
             self.query_one("#status", Static).update("请先在左侧选择一个资源")
             return
         self._open_resource_viewer(
-            loading_title=f"Describe · {resource.kind}/{resource.name}",
+            loading_title=f"资源详情 · {resource.kind}/{resource.name}",
             operation=ResourceOperation.DESCRIBE,
             resource=resource,
         )
@@ -854,7 +854,7 @@ class OpsAgentTui(App[None]):
             self.query_one("#status", Static).update("请先在左侧选择一个资源")
             return
         self._open_resource_viewer(
-            loading_title=f"Health · {resource.kind}/{resource.name}",
+            loading_title=f"健康诊断 · {resource.kind}/{resource.name}",
             operation=ResourceOperation.DIAGNOSTICS,
             resource=resource,
         )
@@ -866,7 +866,7 @@ class OpsAgentTui(App[None]):
         ).selected_resource()
         if resource is None or resource.kind is not KubernetesResourceKind.POD:
             self.query_one("#status", Static).update(
-                "Logs 仅适用于 Pod；请切换到 Pods 并选择一行"
+                "日志仅适用于 Pod；请切换到 Pods 并选择一行"
             )
             return
         self._prepare_log_workbench(resource)
@@ -881,7 +881,7 @@ class OpsAgentTui(App[None]):
             or resource.kind is not KubernetesResourceKind.PERSISTENT_VOLUME_CLAIM
         ):
             self.query_one("#status", Static).update(
-                "目录浏览仅适用于 PVC；请按 7 进入 Storage 并选择一行"
+                "目录浏览仅适用于 PVC；请按 7 进入存储并选择一行"
             )
             return
         self.push_screen(
@@ -895,7 +895,7 @@ class OpsAgentTui(App[None]):
     def action_interactive_pod_session(self) -> None:
         if not self._settings.kubernetes.interactive_exec.enabled:
             self.query_one("#status", Static).update(
-                "Interactive Pod Session 未启用 · 可在 Settings 中配置后重启"
+                "交互式 Pod 会话未启用 · 可在设置中配置后重启"
             )
             return
         self._prepare_pod_action()
@@ -1047,12 +1047,12 @@ class OpsAgentTui(App[None]):
     def _run_interactive_session(self, request: PodAccessRequest) -> None:
         self.exit_copy_mode()
         timer_paused = False
-        message = "Interactive Pod Session 未启动"
+        message = "交互式 Pod 会话未启动"
         try:
             if self._monitor_timer is not None:
                 self._monitor_timer.pause()
                 timer_paused = True
-            self._render_context(mode="INTERACTIVE POD SESSION · MANUAL WRITE ACCESS")
+            self._render_context(mode="交互式 Pod 会话 · 人工写入")
             self.query_one("#status", Static).update(
                 f"人工终端已接管 · {request.pod_name}/{request.container_name}"
             )
@@ -1065,9 +1065,9 @@ class OpsAgentTui(App[None]):
                         container_name=request.container_name,
                     )
         except Exception as error:  # noqa: BLE001 - 终端恢复后必须显示错误
-            message = f"Interactive Pod Session 启动失败：{error}"
+            message = f"交互式 Pod 会话启动失败：{error}"
         else:
-            message = f"Interactive Pod Session 已结束 · exit {result.exit_code}"
+            message = f"交互式 Pod 会话已结束 · 退出码 {result.exit_code}"
         finally:
             try:
                 self._render_context()
@@ -1124,18 +1124,18 @@ class OpsAgentTui(App[None]):
     def _context_text(
         self,
         *,
-        mode: str = "MONITOR / AI READ-ONLY / AI只读",
+        mode: str = "监盘 / AI 只读",
     ) -> str:
         return (
-            f" OPS AGENT  Project: {self._settings.project.name}"
-            f"  Context: {self._environment}"
-            f"  Namespace: {self._namespace}  Mode: {mode}"
+            f" OPS AGENT  项目：{self._settings.project.name}"
+            f"  环境：{self._environment}"
+            f"  Namespace：{self._namespace}  模式：{mode}"
         )
 
     def _render_context(
         self,
         *,
-        mode: str = "MONITOR / AI READ-ONLY / AI只读",
+        mode: str = "监盘 / AI 只读",
     ) -> None:
         self.query_one("#context", Static).update(self._context_text(mode=mode))
 
@@ -1158,7 +1158,7 @@ class OpsAgentTui(App[None]):
         self._apply_theme(updated.tui)
         message = "配置已保存 · 主题已生效"
         if requires_restart:
-            message += " · Project Profile 重启生效"
+            message += " · 项目配置重启生效"
         self.query_one("#status", Static).update(message)
 
     def _save_log_focus_settings(self, focus: LogFocusSettings) -> None:

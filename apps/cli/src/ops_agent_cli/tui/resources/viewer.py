@@ -46,7 +46,6 @@ class ResourceViewer(ModalScreen[None]):
         self.query_one("#resource-content", RichLog).write("正在读取 Kubernetes API…")
 
     def display_content(self, content: KubernetesResourceContent) -> None:
-        self.query_one("#resource-title", Static).update(content.title)
         viewer = self.query_one("#resource-content", RichLog)
         viewer.clear()
         viewer.write((content.content or "（没有返回内容）").rstrip("\r\n"))
@@ -77,7 +76,7 @@ class ResourceViewer(ModalScreen[None]):
 
     def _footer_text(self) -> str:
         return (
-            " COPY MODE · 直接用鼠标拖选复制 · Esc 恢复鼠标控制"
+            " 复制模式 · 直接用鼠标拖选复制 · Esc 恢复鼠标控制"
             if self._copy_mode
             else " Esc/q 返回 · ↑/↓/PgUp/PgDn 滚动 · F2 备用"
         )

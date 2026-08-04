@@ -1027,11 +1027,11 @@ def _interactive_session_banner(
 ) -> str:
     return (
         "\n"
-        "=== INTERACTIVE POD SESSION · MANUAL WRITE ACCESS ===\n"
-        f"Environment: {environment}\n"
-        f"Namespace: {namespace}\n"
-        f"Pod: {pod_name}\n"
-        f"Container: {container_name}\n"
+        "=== 交互式 Pod 会话 · 人工写入 ===\n"
+        f"环境：{environment}\n"
+        f"Namespace：{namespace}\n"
+        f"Pod：{pod_name}\n"
+        f"容器：{container_name}\n"
         "AI只读保护已暂停；以下命令由用户直接执行，不经过 AI。\n"
         "在容器中执行 download <文件> 可下载相对或绝对路径文件。\n"
         "输入 exit 或按 Ctrl+D 返回 Ops Agent TUI。\n"

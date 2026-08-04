@@ -15,6 +15,9 @@ from dataclasses import dataclass
 
 _MAX_DOWNLOAD_PATH_BYTES = 16 * 1024
 _MAX_DOWNLOAD_LENGTH_DIGITS = len(str(_MAX_DOWNLOAD_PATH_BYTES))
+_INVALID_DOWNLOAD_REQUEST = "\r\n[OPS AGENT] 下载请求无效\r\n".encode()
+_OVERSIZED_DOWNLOAD_REQUEST = "\r\n[OPS AGENT] 下载请求过大\r\n".encode()
+_INCOMPLETE_DOWNLOAD_REQUEST = "\r\n[OPS AGENT] 已丢弃不完整的下载请求\r\n".encode()
 
 
 class InteractiveTerminalError(Exception):
@@ -72,7 +75,7 @@ class _DownloadProtocol:
                     return
                 self._buffer.clear()
                 self._drop_until_finish = True
-                yield b"\r\n[OPS AGENT] download request is invalid\r\n"
+                yield _INVALID_DOWNLOAD_REQUEST
                 return
             length_payload = bytes(self._buffer[len(self._prefix) : length_end])
             if (
@@ -82,13 +85,13 @@ class _DownloadProtocol:
             ):
                 self._buffer.clear()
                 self._drop_until_finish = True
-                yield b"\r\n[OPS AGENT] download request is invalid\r\n"
+                yield _INVALID_DOWNLOAD_REQUEST
                 return
             path_length = int(length_payload)
             if path_length > _MAX_DOWNLOAD_PATH_BYTES:
                 del self._buffer[: length_end + 1]
                 self._discard_bytes_remaining = path_length
-                yield b"\r\n[OPS AGENT] download request is too large\r\n"
+                yield _OVERSIZED_DOWNLOAD_REQUEST
                 continue
             path_end = length_end + 1 + path_length
             if len(self._buffer) < path_end:
@@ -98,10 +101,10 @@ class _DownloadProtocol:
             try:
                 remote_path = path_payload.decode("utf-8")
             except UnicodeDecodeError:
-                yield b"\r\n[OPS AGENT] download request is invalid\r\n"
+                yield _INVALID_DOWNLOAD_REQUEST
                 continue
             if not remote_path or not remote_path.isprintable():
-                yield b"\r\n[OPS AGENT] download request is invalid\r\n"
+                yield _INVALID_DOWNLOAD_REQUEST
                 continue
             yield _DownloadRequest(remote_path=remote_path)
 
@@ -113,7 +116,7 @@ class _DownloadProtocol:
             return b""
         if self._buffer.startswith(self._prefix):
             self._buffer.clear()
-            return b"\r\n[OPS AGENT] incomplete download request discarded\r\n"
+            return _INCOMPLETE_DOWNLOAD_REQUEST
         remainder = bytes(self._buffer)
         self._buffer.clear()
         return remainder
@@ -202,7 +205,7 @@ def run_interactive_terminal(
                     ):
                         _write_all(
                             output_fd,
-                            b"[OPS AGENT] download cancelled\r\n",
+                            "[OPS AGENT] 已取消下载\r\n".encode(),
                         )
                         continue
                     try:
@@ -220,7 +223,7 @@ def run_interactive_terminal(
         return process.wait()
     except OSError as error:
         raise InteractiveTerminalError(
-            f"Interactive Pod Session 终端代理失败: {error}"
+            f"交互式 Pod 会话终端代理失败：{error}"
         ) from error
     finally:
         _attempt_cleanup(selector.close)

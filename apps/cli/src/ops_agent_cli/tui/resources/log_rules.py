@@ -9,7 +9,7 @@ from textual.widgets import Button, DataTable, Input, Static
 
 
 class LogFocusRulesScreen(Screen[tuple[str, ...] | None]):
-    """Maintain explicit literal hide rules for the current Project Profile."""
+    """维护当前项目配置中的明确文本隐藏规则。"""
 
     CSS = """
     LogFocusRulesScreen {
@@ -81,7 +81,7 @@ class LogFocusRulesScreen(Screen[tuple[str, ...] | None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="log-rules-workbench"):
-            yield Static("Log Focus · Project Profile 隐藏规则", id="log-rules-title")
+            yield Static("日志聚焦 · 项目配置隐藏规则", id="log-rules-title")
             yield Static(
                 "大小写不敏感的原文包含规则；只由操作员维护，AI 不参与。",
                 id="log-rules-help",
@@ -103,7 +103,7 @@ class LogFocusRulesScreen(Screen[tuple[str, ...] | None]):
             with Horizontal(id="log-rules-actions"):
                 yield Button("取消", id="log-rules-cancel", compact=True)
                 yield Button(
-                    "保存到 Project Profile",
+                    "保存到项目配置",
                     id="log-rules-save",
                     variant="primary",
                     compact=True,
@@ -168,7 +168,7 @@ class LogFocusRulesScreen(Screen[tuple[str, ...] | None]):
         table.clear(columns=False)
         for index, rule in enumerate(self._rules):
             table.add_row(rule, key=str(index))
-        self._set_status(f"{len(self._rules)}/50 rules")
+        self._set_status(f"{len(self._rules)}/50 条规则")
 
     def _set_status(self, message: str) -> None:
         self.query_one("#log-rules-status", Static).update(message)

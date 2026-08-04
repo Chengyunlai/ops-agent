@@ -23,7 +23,7 @@ class MonitorPane(Vertical):
         self._kind: KubernetesResourceKind | None = None
 
     def compose(self) -> ComposeResult:
-        yield Static(" LIVE · 正在连接 Kubernetes…", id="monitor-title")
+        yield Static(" 实时 · 正在连接 Kubernetes…", id="monitor-title")
         yield Static(id="monitor-tabs")
         yield DataTable(
             cursor_type="row",
@@ -38,14 +38,14 @@ class MonitorPane(Vertical):
 
     def display_snapshot(self, snapshot: KubernetesMonitorSnapshot) -> None:
         self._snapshot = snapshot
-        diagnostic_status = f" · {snapshot.finding_count} findings"
+        diagnostic_status = f" · {snapshot.finding_count} 项发现"
         if snapshot.diagnostic_errors:
-            diagnostic_status += " · diagnostics partial"
+            diagnostic_status += " · 诊断不完整"
         metrics_status = _metrics_status(snapshot.metrics)
         self.query_one("#monitor-status", Static).update(
             f"最近刷新 {snapshot.observed_at.astimezone():%H:%M:%S}"
             f"{diagnostic_status} · {metrics_status}"
-            " · Enter Health · d Describe · l Logs(Pod)"
+            " · Enter 健康 · d 详情 · l 日志（Pod）"
         )
         self._render_title()
         self._render_tabs()
@@ -53,7 +53,7 @@ class MonitorPane(Vertical):
 
     def display_error(self, message: str) -> None:
         self.query_one("#monitor-title", Static).update(
-            f" LIVE · {_kind_label(self._snapshot, self._kind)} · 暂时不可用"
+            f" 实时 · {_kind_label(self._snapshot, self._kind)} · 暂时不可用"
         )
         self.query_one("#monitor-status", Static).update(f"刷新失败：{message}")
 
@@ -98,17 +98,17 @@ class MonitorPane(Vertical):
 
     def _render_title(self) -> None:
         snapshot = self._snapshot
-        title = " LIVE · Namespace"
+        title = " 实时 · Namespace"
         if snapshot is not None:
             title += f" {snapshot.namespace}"
         title += f" · {_kind_label(snapshot, self._kind)}"
         if snapshot is not None:
             if self._kind is None:
                 total = sum(len(resource.rows) for resource in snapshot.resources)
-                title += f" · {total} resources · {snapshot.finding_count} findings"
+                title += f" · {total} 个资源 · {snapshot.finding_count} 项发现"
             elif (collection := self._current_collection()) is not None:
                 title += (
-                    " · Unavailable"
+                    " · 不可用"
                     if collection.error is not None
                     else f" · {len(collection.rows)}"
                 )
@@ -118,7 +118,7 @@ class MonitorPane(Vertical):
         theme = self.app.current_theme
         selected_color = theme.accent or theme.primary
         idle_color = theme.foreground or theme.primary
-        labels = [("0", "Overview", self._kind is None)]
+        labels = [("0", "总览", self._kind is None)]
         if self._snapshot is not None:
             labels.extend(
                 (
@@ -147,7 +147,7 @@ class MonitorPane(Vertical):
         table.clear(columns=True)
         snapshot = self._snapshot
         if self._kind is None:
-            table.add_columns("RESOURCE", "COUNT", "READY", "FINDINGS", "STATUS")
+            table.add_columns("资源", "数量", "就绪", "发现", "状态")
             if snapshot is not None:
                 theme = self.app.current_theme
                 for collection in snapshot.resources:
@@ -173,17 +173,17 @@ class MonitorPane(Vertical):
         else:
             collection = self._current_collection()
             if collection is None:
-                table.add_column("RESOURCE")
+                table.add_column("资源")
             else:
                 table.add_columns(
-                    collection.columns[0],
-                    "DIAGNOSIS",
-                    *collection.columns[1:],
+                    _column_label(collection.columns[0]),
+                    "诊断",
+                    *(_column_label(column) for column in collection.columns[1:]),
                 )
                 if collection.error is not None:
                     table.add_row(
                         Text(
-                            "Unavailable",
+                            "不可用",
                             style=self.app.current_theme.warning,
                         ),
                         collection.error,
@@ -235,7 +235,7 @@ def _kind_label(
     kind: KubernetesResourceKind | None,
 ) -> str:
     if kind is None:
-        return "Overview"
+        return "总览"
     if snapshot is not None and (collection := snapshot.collection(kind)) is not None:
         return collection.label
     return str(kind)
@@ -243,12 +243,12 @@ def _kind_label(
 
 def _metrics_status(status: KubernetesMetricsStatus) -> str:
     if status.availability is KubernetesMetricsAvailability.DISABLED:
-        return "Metrics Disabled"
+        return "Metrics 已禁用"
     if status.availability is KubernetesMetricsAvailability.UNAVAILABLE:
         detail = f": {status.error}" if status.error else ""
-        return f"Metrics Unavailable{detail}"
+        return f"Metrics 不可用{detail}"
     if status.observed_at is None:
-        return "Metrics Available"
+        return "Metrics 可用"
     return f"Metrics {status.observed_at.astimezone():%H:%M:%S}"
 
 
@@ -272,21 +272,54 @@ def _collection_status(
     collection: KubernetesResourceCollection,
 ) -> tuple[str, str, str, bool | None]:
     if collection.error is not None:
-        return "-", "-", "Unavailable", False
+        return "-", "-", "不可用", False
     count = len(collection.rows)
     if count == 0:
-        return "0", "-", "Empty", None
+        return "0", "-", "空", None
     health = [row.healthy for row in collection.rows if row.healthy is not None]
     if not health:
-        return str(count), "-", "Inventory", None
+        return str(count), "-", "已读取", None
     ready = sum(health)
     healthy = ready == len(health)
     return (
         str(count),
         f"{ready}/{len(health)}",
-        "Healthy" if healthy else "Attention",
+        "健康" if healthy else "需关注",
         healthy,
     )
+
+
+def _column_label(label: str) -> str:
+    return {
+        "NAME": "名称",
+        "READY": "就绪",
+        "STATUS": "状态",
+        "RESTARTS": "重启",
+        "AGE": "时长",
+        "AVAILABLE": "可用",
+        "UPDATED": "已更新",
+        "CURRENT": "当前",
+        "TYPE": "类型",
+        "CLUSTER-IP": "集群 IP",
+        "PORTS": "端口",
+        "DESIRED": "期望",
+        "STORAGECLASS": "存储类",
+        "CAPACITY": "容量",
+        "ACCESS-MODES": "访问模式",
+        "VOLUME": "卷",
+        "SUCCEEDED": "成功",
+        "ACTIVE": "活跃",
+        "FAILED": "失败",
+        "SCHEDULE": "调度计划",
+        "SUSPEND": "暂停",
+        "LAST": "上次运行",
+        "CLASS": "类别",
+        "HOSTS": "主机",
+        "ADDRESS": "地址",
+        "BACKEND": "后端",
+        "MOUNTED BY": "挂载目标",
+        "MOUNT PATHS": "挂载路径",
+    }.get(label, label)
 
 
 def _health_text(

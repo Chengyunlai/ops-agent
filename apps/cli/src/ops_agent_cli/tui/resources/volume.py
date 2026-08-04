@@ -79,7 +79,7 @@ class VolumeBrowser(ModalScreen[None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="volume-browser"):
             yield Static(
-                f" STORAGE · PVC/{self._resource.name} · READ-ONLY",
+                f" 存储 · PVC/{self._resource.name} · 只读",
                 id="volume-browser-title",
             )
             yield Static("正在查找可用挂载…", id="volume-browser-target")
@@ -97,9 +97,9 @@ class VolumeBrowser(ModalScreen[None]):
 
     def on_mount(self) -> None:
         self.query_one("#volume-browser-table", DataTable).add_columns(
-            "NAME",
-            "TYPE",
-            "SIZE",
+            "名称",
+            "类型",
+            "大小",
         )
         self._load_directory(".")
 
@@ -126,7 +126,7 @@ class VolumeBrowser(ModalScreen[None]):
         entry, path = selected
         if entry.kind is not VolumeEntryKind.FILE:
             self.query_one("#volume-browser-status", Static).update(
-                "Artifact Download 仅支持普通文件"
+                "PVC 文件下载仅支持普通文件"
             )
             return
         if self._download_loading:
@@ -213,8 +213,8 @@ class VolumeBrowser(ModalScreen[None]):
         self._directory = directory
         target = directory.target
         self.query_one("#volume-browser-target", Static).update(
-            f" Pod {target.pod_name} · Container {target.container_name}"
-            f" · Mount {target.mount_path}"
+            f" Pod {target.pod_name} · 容器 {target.container_name}"
+            f" · 挂载路径 {target.mount_path}"
         )
         self.query_one("#volume-browser-path", Static).update(
             f" /{directory.path.removeprefix('.').lstrip('/')}"
@@ -291,10 +291,10 @@ def _child_volume_path(parent: str, name: str) -> str:
 
 def _volume_entry_label(kind: VolumeEntryKind) -> str:
     return {
-        VolumeEntryKind.DIRECTORY: "Directory",
-        VolumeEntryKind.FILE: "File",
-        VolumeEntryKind.SYMLINK: "Symlink",
-        VolumeEntryKind.OTHER: "Other",
+        VolumeEntryKind.DIRECTORY: "目录",
+        VolumeEntryKind.FILE: "文件",
+        VolumeEntryKind.SYMLINK: "符号链接",
+        VolumeEntryKind.OTHER: "其他",
     }[kind]
 
 
