@@ -119,9 +119,9 @@ class SettingsScreen(ModalScreen[Settings | None]):
         kubernetes = self._settings.kubernetes
         colors = self._settings.tui.colors
         with Vertical(id="settings-dialog"):
-            yield Static(" SETTINGS · 项目与界面配置", id="settings-title")
+            yield Static("设置 · 项目与界面配置", id="settings-title")
             with VerticalScroll(id="settings-scroll"):
-                yield Static("Project Profile", classes="settings-section")
+                yield Static("项目配置", classes="settings-section")
                 yield from _field(
                     "项目名称",
                     Input(
@@ -218,7 +218,7 @@ class SettingsScreen(ModalScreen[Settings | None]):
                 )
                 yield Static("人工 Pod 访问", classes="settings-section")
                 yield from _field(
-                    "Interactive Pod Session",
+                    "交互式 Pod 会话",
                     Select(
                         (
                             ("禁用（默认）", "disabled"),
@@ -234,14 +234,14 @@ class SettingsScreen(ModalScreen[Settings | None]):
                     ),
                 )
                 yield from _field(
-                    "Pod Shell UTF-8 Locale",
+                    "Pod Shell UTF-8 语言环境",
                     Input(
                         value=kubernetes.interactive_exec.locale,
                         id="setting-interactive-locale",
                     ),
                 )
                 yield from _field(
-                    "Pod Shell TERM",
+                    "Pod Shell 终端类型（TERM）",
                     Input(
                         value=kubernetes.interactive_exec.terminal_type,
                         id="setting-interactive-terminal-type",
@@ -264,7 +264,7 @@ class SettingsScreen(ModalScreen[Settings | None]):
                     ),
                 )
                 yield from _field(
-                    "Artifact Download 本机目录",
+                    "下载文件本机目录",
                     Input(
                         value=str(kubernetes.downloads.directory),
                         id="setting-download-directory",
@@ -292,7 +292,7 @@ class SettingsScreen(ModalScreen[Settings | None]):
                 )
                 yield Static(
                     "环境、集群连接与人工访问配置保存后，重启应用生效。"
-                    " Interactive Pod Session 可修改容器，请谨慎启用。",
+                    " 交互式 Pod 会话可修改容器，请谨慎启用。",
                     id="settings-note",
                 )
 
@@ -301,9 +301,9 @@ class SettingsScreen(ModalScreen[Settings | None]):
                     "预设主题",
                     Select(
                         (
-                            ("Ops Dark", ThemeName.OPS_DARK.value),
-                            ("Light", ThemeName.LIGHT.value),
-                            ("High Contrast", ThemeName.HIGH_CONTRAST.value),
+                            ("运维深色", ThemeName.OPS_DARK.value),
+                            ("浅色", ThemeName.LIGHT.value),
+                            ("高对比度", ThemeName.HIGH_CONTRAST.value),
                         ),
                         value=self._settings.tui.theme.value,
                         allow_blank=False,

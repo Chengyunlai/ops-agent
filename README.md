@@ -44,6 +44,8 @@
 
 以下截图由本地 Textual 应用使用完全虚构的 `demo` 环境和 `sample-app`
 资源生成，不包含真实集群地址、资源名称、路径或凭据。
+界面默认采用简体中文，Kubernetes 固有名词和日志级别保留英文；完整约定见
+[界面语言规范](docs/ui-language.md)。
 
 ### 资源总览与受控对话
 
@@ -353,18 +355,18 @@ TUI 显示当前环境、固定 namespace 和 AI 只读标识。宽终端采用�
 先读取完整快照，再从该快照的 Pod `resourceVersion` 启动只读 Kubernetes
 Watch；Pod 变化会立即使完整快照失效并刷新。Watch 超时会正常重连，API 不可用、
 网络断开或 RBAC 403 时自动保留每 5 秒完整轮询，不会安装组件、提升权限或影响
-人工 Pod 操作。默认 Overview 明确列出 Pod、Deployment、StatefulSet、
+人工 Pod 操作。默认“总览”明确列出 Pod、Deployment、StatefulSet、
 DaemonSet、Service、ReplicaSet、Job、CronJob、Ingress 和 PVC 的数量、
 Finding 数与状态；具体资源表紧邻名称显示 `OK` 或 `WARN · 原因`。右侧保留
 本次运行中的用户消息和 Agent Markdown 回复。窄终端自动改为
 上下布局。启用 `[kubernetes.metrics]` 后，Pod 表追加当前 CPU、Memory；底部
 显示指标采样时间。Metrics API 不存在、无权限或暂时不可用时显示
-`Metrics Unavailable`，Pod 与其他资源清单继续正常刷新。每类资源独立查询，
+`Metrics 不可用`，Pod 与其他资源清单继续正常刷新。每类资源独立查询，
 单类 API 或 RBAC 失败会在该行显示
-`Unavailable`，不会让 Pod、Service 等其他目录一起消失。
+`不可用`，不会让 Pod、Service 等其他目录一起消失。
 
-`Ctrl+K` 聚焦左侧监盘，`0` 返回 Overview，`1`～`7` 切换具体资源；
-Overview 中可用方向键和 `Enter` 进入任意资源类型。选中资源后按
+`Ctrl+K` 聚焦左侧监盘，`0` 返回“总览”，`1`～`7` 切换具体资源；
+“总览”中可用方向键和 `Enter` 进入任意资源类型。选中资源后按
 `Enter` 或 `h` 打开最新确定性 Finding 和 Evidence；Deployment 还会显示
 generation、observedGeneration、revision、Conditions，以及只按 controller
 owner 构建的 Deployment → ReplicaSet → Pod 拓扑。`d` 读取原始对象详情与
@@ -373,18 +375,20 @@ owner 构建的 Deployment → ReplicaSet → Pod 拓扑。`d` 读取原始对�
 且单个容器读取失败不会遮蔽其他容器。默认保留完整 Log Snapshot 并对长行自动
 换行，按 `w` 可在换行、按当前视口截断和完整水平查看之间切换。ERROR、WARN、
 完整异常栈和 HTTP 4xx/5xx 使用当前主题的语义色突出显示。
-选择单个容器后，按 `f` 开启或停止只读 Log Follow；新记录追加在原始快照之后，
+选择单个容器后，按 `f` 开启或停止只读“实时跟随”（Log Follow）；新记录追加在
+原始快照之后，
 只抑制 Follow 开始时 Kubernetes API 重放的快照边界记录，不会合并后续相同事件。
 Follow 最多保留 10,000 条追加记录，达到上限时会停止并明确提示未追加记录；
 流中断会保留已有内容并显示重连或返回选择重建后 Pod 的操作。日志读取和 Follow
 都直接使用 Kubernetes API，不依赖 Pod Shell、不安装采集组件，也不把操作交给
 AI。
 
-Log Focus 默认关闭，原始 Log Snapshot 和 Follow 缓冲始终保留。点击 INFO、
-DEBUG、Health 或 Access 按钮会显式启用 Focus，并把操作员选择保存到当前
-Project Profile；Rules 可维护最多 50 条大小写不敏感的明确文本隐藏规则。AI
+“日志聚焦”（Log Focus）默认关闭，原始 Log Snapshot 和 Follow 缓冲始终保留。
+点击 INFO、DEBUG、“健康检查”或“访问日志”按钮会显式启用日志聚焦，并把操作员
+选择保存到当前 Project Profile；“规则”可维护最多 50 条大小写不敏感的明确文本
+隐藏规则。AI
 不能选择、生成或应用这些规则。按 `/` 聚焦本地搜索，`n` 和 `Shift+N` 跳转
-下一个或上一个命中；搜索默认忽略大小写，可切换 Regex。界面始终显示当前
+下一个或上一个命中；搜索默认忽略大小写，可切换“正则”。界面始终显示当前
 Focus、可见/隐藏记录数、搜索模式、命中总数和当前位置，无结果或无效正则也会
 明确提示。过滤与搜索只在本地重算视图，不会重新请求 Kubernetes；Follow 新记录
 会进入同一套 Focus 与搜索计算。
@@ -392,14 +396,14 @@ Focus、可见/隐藏记录数、搜索模式、命中总数和当前位置，�
 确定性的本地 Monitor 读取，不注册为 Agent Tool，也不会由模型猜测；历史指标
 时间线仍需已有 Prometheus 等外部数据源才可能提供。
 
-Service 的 Health 详情会显示数据来源（EndpointSlice 或旧版 Endpoints）、
+Service 的“健康诊断”详情会显示数据来源（EndpointSlice 或旧版 Endpoints）、
 Ready/NotReady 数量和 Endpoint → Pod targetRef；健康 Service 也可以查看该关系，
 不必先出现 Finding。
 
 如果 EndpointSlice 查询失败，Service 清单仍然保留，但监盘会明确标记
-`diagnostics partial`，不会把权限失败或 API 失败误判成“Service 没有后端”。
+`诊断不完整`，不会把权限失败或 API 失败误判成“Service 没有后端”。
 
-`7` 进入 Storage/PVC 视图，表格展示 PVC、PV、容量、StorageClass、NFS/CSI
+`7` 进入 PVC 视图，表格展示 PVC、PV、容量、StorageClass、NFS/CSI
 等后端类型，以及实际挂载它的 Pod、容器和 `mountPath`。选中 PVC 后按
 `Enter` 或 `f` 打开只读目录浏览器；目录中 `Enter` 进入子目录或预览普通
 文本文件，`Backspace` 返回上级目录，`r` 刷新。文件预览最多读取 64 KiB，
@@ -443,7 +447,7 @@ Pods 表格选中 Pod 后按 `x` 可启动 **Interactive Pod Session**。该功�
 警告，此时需要在容器镜像中安装 locale；Ops Agent 不会修改镜像。
 `terminal_type` 默认设为 `xterm-256color`，`color = true` 时仅在容器
 `ls --color=auto` 可用的情况下为本次 Shell 增加颜色 alias。三个选项也可在
-顶部 Settings 的“人工 Pod 访问”区域修改，保存后重启生效。
+顶部“设置”的“人工 Pod 访问”区域修改，保存后重启生效。
 
 Interactive Pod Session 及其下载命令要求目标容器包含 POSIX `sh`，并包含
 `cat` 或 `dd`；不要求 Python 或 `base64`。PVC 目录浏览和 PVC 文件下载还
@@ -456,16 +460,16 @@ namespace 内 Pod/PVC、读取集群级 PV，并允许连接 `pods/exec` 子资�
 实时 Pod CPU/Memory 只需要目标 namespace 对 `metrics.k8s.io` 的 `pods`
 拥有 `list` 权限，并且集群已经提供 Metrics API。可以先运行
 `kubectl auth can-i list pods.metrics.k8s.io -n <namespace>` 检查权限。
-缺少 API 或权限只会让指标显示为 `Unavailable`；Ops Agent 不会安装
+缺少 API 或权限只会让指标显示为“不可用”；Ops Agent 不会安装
 `metrics-server`、创建 ServiceAccount 或申请更高权限。若不需要指标，可在
-Settings 中禁用，或设置 `kubernetes.metrics.enabled = false`。
+“设置”中禁用，或设置 `kubernetes.metrics.enabled = false`。
 
 TUI 启用鼠标以支持点击聚焦；复制终端内容时点击顶部“复制”
 （`F2` 也可作为备用快捷键）进入复制模式，应用会释放终端鼠标，此时可以
 直接拖选任意内容并使用终端复制快捷键；复制完成后按 `Esc` 恢复仪表盘
 鼠标控制。
 
-顶部 `Settings`（或 `Ctrl+,`）编辑当前 Project Profile、集群连接、Watch、
+顶部“设置”（或 `Ctrl+,`）编辑当前 Project Profile、集群连接、Watch、
 Metrics API、人工 Pod 访问、下载目录、主题和颜色。主题
 选择与有效颜色会即时预览；保存后写回启动时使用的 TOML。项目名称、环境、
 namespace、kubeconfig、代理和请求超时属于运行边界，保存后需要重启应用才会

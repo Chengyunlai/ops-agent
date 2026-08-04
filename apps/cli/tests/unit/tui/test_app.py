@@ -537,6 +537,31 @@ def test_tui_topbar_buttons_are_readable_without_hover() -> None:
     asyncio.run(exercise())
 
 
+def test_tui_primary_interface_uses_chinese_copy() -> None:
+    async def exercise() -> None:
+        app = create_tui(FakeAgent(answer="unused"))
+
+        async with app.run_test(size=(140, 34)) as pilot:
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            assert str(app.query_one("#settings-button", Button).label) == "⚙ 设置"
+            assert str(app.query_one("#chat-title", Static).content) == (
+                "运维助手 · 受控对话"
+            )
+            context = str(app.query_one("#context", Static).content)
+            assert "项目：Testing" in context
+            assert "环境：test" in context
+            assert "模式：监盘 / AI 只读" in context
+            monitor_title = str(app.query_one("#monitor-title", Static).content)
+            monitor_status = str(app.query_one("#monitor-status", Static).content)
+            assert "实时 · Namespace sample · 总览" in monitor_title
+            assert "项发现" in monitor_status
+            assert "诊断不完整" not in monitor_status
+
+    asyncio.run(exercise())
+
+
 def test_tui_quit_button_and_footer_exit_hint() -> None:
     async def exercise() -> None:
         app = create_tui(FakeAgent(answer="unused"))
@@ -672,6 +697,11 @@ def test_tui_monitor_accepts_mouse_focus_arrows_and_resource_shortcuts() -> None
             assert "Deployments" in str(app.query_one("#monitor-title", Static).content)
             assert table.has_focus
 
+            await pilot.press("1")
+            column_labels = [column.label.plain for column in table.columns.values()]
+            assert "重启" in column_labels
+            assert "AGE" in column_labels
+
             await pilot.press("i", "0", "1", "2", "3")
             assert question.has_focus
             assert question.value == "0123"
@@ -720,7 +750,7 @@ def test_tui_copy_mode_releases_and_restores_terminal_mouse_capture() -> None:
                 "enable",
                 "disable",
             ]
-            assert "COPY MODE" in str(
+            assert "复制模式" in str(
                 app.screen.query_one("#log-footer", Static).content
             )
 
@@ -768,6 +798,15 @@ def test_tui_settings_persist_project_and_apply_theme_immediately() -> None:
             await pilot.click("#settings-button")
 
             screen = app.screen
+            assert str(screen.query_one("#settings-title", Static).content) == (
+                "设置 · 项目与界面配置"
+            )
+            sections = {
+                str(section.content) for section in screen.query(".settings-section")
+            }
+            assert "项目配置" in sections
+            assert "主题与颜色" in sections
+            assert "Project Profile" not in sections
             assert screen.query_one("#setting-project-name", Input).value == "Testing"
             assert screen.query_one("#setting-namespace", Input).value == "sample"
             assert (
@@ -942,7 +981,7 @@ def test_tui_displays_context_and_agent_answer() -> None:
             result = app.query_one("#result", Markdown)
             status = app.query_one("#status", Static)
             assert agent.questions == ["检查所有 Pod"]
-            assert "**YOU**" in result.source
+            assert "**你**" in result.source
             assert "检查所有 Pod" in result.source
             assert "**OPS AGENT**" in result.source
             assert "sample-api 正在运行" in result.source
@@ -997,7 +1036,7 @@ def test_tui_overview_names_every_monitored_resource_type() -> None:
             ] == ["1", "1", "1", "1", "1", "1", "0", "0", "0", "1"]
             title = str(app.query_one("#monitor-title", Static).content)
             assert "Namespace sample" in title
-            assert "Overview" in title
+            assert "总览" in title
 
     asyncio.run(exercise())
 
@@ -1013,7 +1052,7 @@ def test_tui_opens_describe_and_pod_logs_for_selected_resource() -> None:
             await pilot.press("ctrl+k", "5", "d")
             await app.workers.wait_for_complete()
             await pilot.pause()
-            assert "Describe · Service/sample-api" in str(
+            assert "资源详情 · Service/sample-api" in str(
                 app.screen.query_one("#resource-title", Static).content
             )
             assert "kind: Service" in "\n".join(
@@ -1028,7 +1067,7 @@ def test_tui_opens_describe_and_pod_logs_for_selected_resource() -> None:
             await pilot.press("1", "l")
             await app.workers.wait_for_complete()
             await pilot.pause()
-            assert "Logs · Pod/sample-api-7f8" in str(
+            assert "日志 · Pod/sample-api-7f8" in str(
                 app.screen.query_one("#log-title", Static).content
             )
             assert monitor.content_calls == [
@@ -1086,7 +1125,7 @@ def test_tui_shows_health_reason_and_opens_diagnostic_details() -> None:
             await pilot.press("enter")
             await app.workers.wait_for_complete()
             await pilot.pause()
-            assert "Health · Deployment/sample-api" in str(
+            assert "健康诊断 · Deployment/sample-api" in str(
                 app.screen.query_one("#resource-title", Static).content
             )
             assert "ReplicaSet/sample-api-7f8" in "\n".join(
@@ -1112,12 +1151,22 @@ def test_tui_browses_pvc_directories_and_previews_files() -> None:
             assert "PVC/mysql-data" in str(
                 app.screen.query_one("#volume-browser-title", Static).content
             )
+            assert "存储" in str(
+                app.screen.query_one("#volume-browser-title", Static).content
+            )
+            assert "只读" in str(
+                app.screen.query_one("#volume-browser-title", Static).content
+            )
             assert "mysql-0" in str(
+                app.screen.query_one("#volume-browser-target", Static).content
+            )
+            assert "容器 mysql" in str(
                 app.screen.query_one("#volume-browser-target", Static).content
             )
             table = app.screen.query_one("#volume-browser-table", DataTable)
             assert table.row_count == 2
             assert str(table.get_cell_at(Coordinate(0, 0))) == "backups"
+            assert str(table.get_cell_at(Coordinate(0, 1))) == "目录"
 
             await pilot.press("enter")
             await app.workers.wait_for_complete()
@@ -1183,11 +1232,14 @@ def test_tui_unifies_interactive_pod_session_and_downloads(
             await enabled_app.workers.wait_for_complete()
             await pilot.pause()
 
-            assert "INTERACTIVE POD SESSION" in str(
+            assert "交互式 Pod 会话" in str(
                 enabled_app.screen.query_one(
                     "#pod-access-title",
                     Static,
                 ).content
+            )
+            assert "环境：test" in str(
+                enabled_app.screen.query_one("#pod-access-context", Static).content
             )
             warning = str(
                 enabled_app.screen.query_one(
@@ -1333,6 +1385,22 @@ def test_tui_opens_readable_log_workbench_with_container_and_range_controls() ->
                 app.screen.query_one("#log-range", Select).value
                 is LogRangePreset.LAST_200_LINES
             )
+            assert str(app.screen.query_one("#log-title", Static).content) == (
+                "日志 · Pod/sample-api-7f8"
+            )
+            expected_buttons = {
+                "#log-refresh": "刷新",
+                "#log-follow": "实时跟随：关",
+                "#log-line-mode": "长行：换行",
+                "#log-focus-toggle": "日志聚焦：关",
+                "#log-hide-health": "健康检查：显示",
+                "#log-search-regex": "正则：关",
+                "#log-search-prev": "上一个 N",
+                "#log-search-next": "下一个 n",
+                "#log-search-clear": "清空",
+            }
+            for selector, label in expected_buttons.items():
+                assert str(app.screen.query_one(selector, Button).label) == label
             viewer = app.screen.query_one("#log-content", RichLog)
             assert viewer.wrap is True
             assert isinstance(app.screen, LogWorkbench)
@@ -1353,10 +1421,10 @@ def test_tui_opens_readable_log_workbench_with_container_and_range_controls() ->
                 "2026-08-04T03:52:00Z ERROR " + "database unavailable " * 20
             )
             status = str(app.screen.query_one("#log-status", Static).content)
-            assert "3 records" in status
+            assert "3 条记录" in status
             assert "ERROR 1" in status
             assert "WARN 1" in status
-            assert "WRAP" in status
+            assert "换行" in status
             assert monitor.content_calls == [
                 (
                     "pod_containers",
@@ -1380,13 +1448,13 @@ def test_tui_opens_readable_log_workbench_with_container_and_range_controls() ->
             await pilot.press("w")
             await pilot.pause()
             status = str(app.screen.query_one("#log-status", Static).content)
-            assert "TRUNCATE" in status
+            assert "截断" in status
             assert len(viewer.lines[-1].text) <= 163
 
             await pilot.press("w")
             await pilot.pause()
             status = str(app.screen.query_one("#log-status", Static).content)
-            assert "FULL" in status
+            assert "完整" in status
             assert viewer.wrap is False
             assert len(viewer.lines[-1].text) > 163
 
@@ -1436,7 +1504,7 @@ def test_tui_focus_is_opt_in_and_persists_explicit_category_filters() -> None:
                 for line in app.screen.query_one("#log-content", RichLog).lines
             )
             assert "INFO server started" in rendered
-            assert "VIEW ALL · 3/3 visible" in str(
+            assert "全部记录 · 3/3 可见" in str(
                 app.screen.query_one("#log-query-status", Static).content
             )
             snapshot_calls = sum(
@@ -1448,7 +1516,7 @@ def test_tui_focus_is_opt_in_and_persists_explicit_category_filters() -> None:
 
             assert saved[-1].project.log_focus.hide_info
             assert str(app.screen.query_one("#log-focus-toggle", Button).label) == (
-                "Focus: ON"
+                "日志聚焦：开"
             )
             rendered = "\n".join(
                 line.text
@@ -1460,8 +1528,8 @@ def test_tui_focus_is_opt_in_and_persists_explicit_category_filters() -> None:
             query_status = str(
                 app.screen.query_one("#log-query-status", Static).content
             )
-            assert "FOCUS ON · 2/3 visible · HIDDEN 1" in query_status
-            assert "hide INFO" in query_status
+            assert "日志聚焦开启 · 2/3 可见 · 隐藏 1" in query_status
+            assert "隐藏 INFO" in query_status
             assert (
                 sum(call[0] == "log_snapshot" for call in monitor.content_calls)
                 == snapshot_calls
@@ -1475,7 +1543,7 @@ def test_tui_focus_is_opt_in_and_persists_explicit_category_filters() -> None:
                 for line in app.screen.query_one("#log-content", RichLog).lines
             )
             assert "INFO server started" in rendered
-            assert "VIEW ALL · 3/3 visible" in str(
+            assert "全部记录 · 3/3 可见" in str(
                 app.screen.query_one("#log-query-status", Static).content
             )
 
@@ -1496,6 +1564,10 @@ def test_tui_maintains_literal_focus_rules_in_project_profile() -> None:
             await app.workers.wait_for_complete()
             await pilot.click("#log-focus-rules")
             await pilot.pause()
+
+            assert "日志聚焦 · 项目配置隐藏规则" in str(
+                app.screen.query_one("#log-rules-title", Static).content
+            )
 
             rule_input = app.screen.query_one("#log-rule-input", Input)
             rule_input.value = "DATABASE UNAVAILABLE"
@@ -1525,8 +1597,8 @@ def test_tui_maintains_literal_focus_rules_in_project_profile() -> None:
             query_status = str(
                 app.screen.query_one("#log-query-status", Static).content
             )
-            assert "FOCUS ON · 2/3 visible · HIDDEN 1" in query_status
-            assert "1 text rules" in query_status
+            assert "日志聚焦开启 · 2/3 可见 · 隐藏 1" in query_status
+            assert "1 条文本规则" in query_status
 
     asyncio.run(exercise())
 
@@ -1557,20 +1629,20 @@ def test_tui_search_uses_keyboard_navigation_and_reports_regex_errors() -> None:
             query_status = str(
                 app.screen.query_one("#log-query-status", Static).content
             )
-            assert 'SEARCH 1/3 · LITERAL · insensitive · "2026"' in query_status
+            assert '搜索 1/3 · 字面文本 · 忽略大小写 · "2026"' in query_status
 
             await pilot.press("n")
-            assert "SEARCH 2/3" in str(
+            assert "搜索 2/3" in str(
                 app.screen.query_one("#log-query-status", Static).content
             )
             await pilot.press("shift+n")
-            assert "SEARCH 1/3" in str(
+            assert "搜索 1/3" in str(
                 app.screen.query_one("#log-query-status", Static).content
             )
 
             search_input.value = "database"
             await pilot.pause()
-            assert "SEARCH 1/20" in str(
+            assert "搜索 1/20" in str(
                 app.screen.query_one("#log-query-status", Static).content
             )
             log_content = app.screen.query_one("#log-content", RichLog)
@@ -1578,7 +1650,7 @@ def test_tui_search_uses_keyboard_navigation_and_reports_regex_errors() -> None:
                 line.render(app.console) for line in log_content.lines
             )
             await pilot.press("n")
-            assert "SEARCH 2/20" in str(
+            assert "搜索 2/20" in str(
                 app.screen.query_one("#log-query-status", Static).content
             )
             second_rendered = tuple(
@@ -1588,7 +1660,7 @@ def test_tui_search_uses_keyboard_navigation_and_reports_regex_errors() -> None:
 
             search_input.value = "not-present"
             await pilot.pause()
-            assert "SEARCH 0/0" in str(
+            assert "搜索 0/0" in str(
                 app.screen.query_one("#log-query-status", Static).content
             )
 
@@ -1630,8 +1702,8 @@ def test_tui_log_focus_and_search_remain_usable_in_narrow_terminal() -> None:
 
             query_status = app.screen.query_one("#log-query-status", Static)
             assert query_status.region.height == 2
-            assert "FOCUS ON" in query_status.render_line(0).text
-            assert "SEARCH 1/20" in query_status.render_line(1).text
+            assert "日志聚焦开启" in query_status.render_line(0).text
+            assert "搜索 1/20" in query_status.render_line(1).text
 
     asyncio.run(exercise())
 
@@ -1692,13 +1764,13 @@ def test_tui_can_show_all_container_sources_and_recover_from_source_errors() -> 
                 for line in app.screen.query_one("#log-content", RichLog).lines
             )
             assert "api │ 2026-08-04T03:50:00Z INFO api ready" in rendered
-            assert "[sidecar unavailable] permission denied" in rendered
+            assert "[sidecar 不可用] permission denied" in rendered
             status = str(app.screen.query_one("#log-status", Static).content)
-            assert "SOURCE ERROR 1" in status
+            assert "来源错误 1" in status
             assert "Esc 返回并选择新 Pod" in status
 
             await pilot.press("f")
-            assert "Follow 需要选择单个容器" in str(
+            assert "实时跟随需要选择单个容器" in str(
                 app.screen.query_one("#log-status", Static).content
             )
 
@@ -1731,10 +1803,10 @@ def test_tui_can_follow_and_stop_new_log_records_without_replacing_snapshot() ->
             assert "INFO server started" in rendered
             assert "ERROR live failure" in rendered
             status = str(app.screen.query_one("#log-status", Static).content)
-            assert "4 records" in status
+            assert "4 条记录" in status
             assert "ERROR 2" in status
-            assert "FOLLOW" in status
-            assert 'SEARCH 1/1 · LITERAL · insensitive · "live failure"' in str(
+            assert "实时跟随" in status
+            assert '搜索 1/1 · 字面文本 · 忽略大小写 · "live failure"' in str(
                 app.screen.query_one("#log-query-status", Static).content
             )
 
@@ -1743,8 +1815,30 @@ def test_tui_can_follow_and_stop_new_log_records_without_replacing_snapshot() ->
             await pilot.pause()
 
             status = str(app.screen.query_one("#log-status", Static).content)
-            assert "SNAPSHOT" in status
+            assert "日志快照" in status
             assert any(call[0] == "stop_follow_logs" for call in monitor.content_calls)
+
+    asyncio.run(exercise())
+
+
+def test_tui_can_exit_cleanly_while_log_follow_is_active() -> None:
+    async def exercise() -> None:
+        monitor = FakeMonitor()
+        app = create_tui(FakeAgent(answer="unused"), monitor=monitor)
+
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete()
+            await pilot.press("ctrl+k", "1", "l")
+            await app.workers.wait_for_complete()
+            await pilot.press("f")
+            for _ in range(20):
+                await pilot.pause()
+                if monitor.follow_started.is_set():
+                    break
+            await pilot.press("ctrl+c")
+
+        assert app.is_running is False
+        assert any(call[0] == "stop_follow_logs" for call in monitor.content_calls)
 
     asyncio.run(exercise())
 
@@ -1797,7 +1891,7 @@ def test_tui_only_suppresses_snapshot_boundary_replay_during_follow() -> None:
             )
             assert rendered.count("03:52:00Z ERROR") == 1
             assert rendered.count("03:53:00Z INFO repeated event") == 2
-            assert "5 records" in str(
+            assert "5 条记录" in str(
                 app.screen.query_one("#log-status", Static).content
             )
 
@@ -1838,16 +1932,16 @@ def test_tui_reports_when_bounded_follow_buffer_omits_older_records() -> None:
             await pilot.pause()
 
             status = str(app.screen.query_one("#log-status", Static).content)
-            assert "FOLLOW OMITTED 1" in status
+            assert "跟随遗漏 1" in status
             rendered = "\n".join(
                 line.text
                 for line in app.screen.query_one("#log-content", RichLog).lines
             )
-            assert "1 newer Follow records were not added" in rendered
+            assert "有 1 条实时跟随记录未追加" in rendered
             assert "followed record 53" in rendered
             assert "followed record 54" in rendered
             assert "followed record 55" not in rendered
-            assert "Follow 已停止：达到 2 条安全上限" in status
+            assert "实时跟随已停止：达到 2 条安全上限" in status
 
     with patch.object(log_resources, "_MAX_FOLLOW_RECORDS", 2):
         asyncio.run(exercise())
@@ -1887,11 +1981,11 @@ def test_tui_keeps_snapshot_visible_when_log_follow_is_interrupted() -> None:
             )
             assert "INFO server started" in rendered
             status = str(app.screen.query_one("#log-status", Static).content)
-            assert "3 records" in status
-            assert "Follow 中断：upstream connection reset" in status
+            assert "3 条记录" in status
+            assert "实时跟随中断：upstream connection reset" in status
             assert "按 f 重连" in status
             assert "Esc 返回并选择新 Pod" in status
-            assert "SNAPSHOT" in status
+            assert "日志快照" in status
 
     asyncio.run(exercise())
 
@@ -1923,11 +2017,11 @@ def test_tui_distinguishes_unavailable_resource_type_from_empty() -> None:
             await app.workers.wait_for_complete()
             await pilot.press("ctrl+k", "5")
 
-            assert "Services · Unavailable" in str(
+            assert "Services · 不可用" in str(
                 app.query_one("#monitor-title", Static).content
             )
             table = app.query_one("#monitor-table", DataTable)
-            assert str(table.get_cell_at(Coordinate(0, 0))) == "Unavailable"
+            assert str(table.get_cell_at(Coordinate(0, 0))) == "不可用"
             assert table.get_cell_at(Coordinate(0, 1)) == "services is forbidden"
 
     asyncio.run(exercise())
@@ -1952,7 +2046,7 @@ def test_tui_consumes_stable_conversation_events() -> None:
             transcript = app.query_one("#result", Markdown).source
             assert "sample现在几个服务" in transcript
             assert "那 Pod 呢" in transcript
-            assert transcript.count("**YOU**") == 2
+            assert transcript.count("**你**") == 2
             assert "sample 中有 4 个 Service" in transcript
             assert str(app.query_one("#status", Static).content) == "完成"
 
@@ -2513,7 +2607,7 @@ def test_tui_monitor_failure_can_recover_with_manual_refresh() -> None:
             await app.workers.wait_for_complete()
 
             assert monitor.calls == 2
-            assert "Overview · 7 resources" in str(
+            assert "总览 · 7 个资源" in str(
                 app.query_one("#monitor-title", Static).content
             )
             assert app.query_one("#monitor-table", DataTable).row_count == 10
@@ -2569,7 +2663,7 @@ def test_tui_coalesces_slow_refresh_and_ignores_late_snapshot_after_exit() -> No
             release.set()
             assert await asyncio.to_thread(finished.wait, 1)
             await asyncio.sleep(0)
-            assert str(title.content) == " LIVE · 正在连接 Kubernetes…"
+            assert str(title.content) == " 实时 · 正在连接 Kubernetes…"
             assert monitor.maximum_active == 1
         finally:
             release.set()
