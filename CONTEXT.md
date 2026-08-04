@@ -81,6 +81,11 @@ An operator-selected view that hides records using explicit filters while
 preserving the complete underlying Log Snapshot.
 _Avoid_: Log cleanup, discarded logs, AI-selected noise
 
+**Log Search**:
+A local, non-destructive query over the current Log Focus with explicit literal
+or regular-expression semantics and operator-controlled match navigation.
+_Avoid_: Log query backend, Agent search, implicit filtering
+
 **Log Export**:
 A user-initiated local file generated from either an original Log Snapshot or
 its current Log Focus, distinct from transferring a file stored in a container.

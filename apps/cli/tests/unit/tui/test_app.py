@@ -39,6 +39,7 @@ from ops_agent_cli.configuration import (
     InteractiveExecSettings,
     KubernetesSettings,
     KubernetesWatchSettings,
+    LogFocusSettings,
     ModelSettings,
     ProjectSettings,
     Settings,
@@ -745,8 +746,20 @@ def test_tui_copy_mode_releases_and_restores_terminal_mouse_capture() -> None:
 def test_tui_settings_persist_project_and_apply_theme_immediately() -> None:
     async def exercise() -> None:
         saved: list[Settings] = []
+        settings = create_app_settings().model_copy(
+            update={
+                "project": ProjectSettings(
+                    name="Testing",
+                    log_focus=LogFocusSettings(
+                        hide_health_checks=True,
+                        hidden_text=("demo-noise",),
+                    ),
+                )
+            }
+        )
         app = create_tui(
             FakeAgent(answer="unused"),
+            settings=settings,
             save_settings=saved.append,
         )
 
@@ -838,6 +851,7 @@ def test_tui_settings_persist_project_and_apply_theme_immediately() -> None:
 
             assert len(saved) == 1
             assert saved[0].project.name == "Sample Platform"
+            assert saved[0].project.log_focus == settings.project.log_focus
             assert saved[0].kubernetes.namespace == "sample-next"
             assert saved[0].kubernetes.watch.enabled
             assert saved[0].kubernetes.watch.timeout_seconds == 12
@@ -1401,6 +1415,227 @@ def test_tui_opens_readable_log_workbench_with_container_and_range_controls() ->
     asyncio.run(exercise())
 
 
+def test_tui_focus_is_opt_in_and_persists_explicit_category_filters() -> None:
+    async def exercise() -> None:
+        saved: list[Settings] = []
+        monitor = FakeMonitor()
+        app = create_tui(
+            FakeAgent(answer="unused"),
+            monitor=monitor,
+            save_settings=saved.append,
+        )
+
+        async with app.run_test(size=(160, 40)) as pilot:
+            await app.workers.wait_for_complete()
+            await pilot.press("ctrl+k", "1", "l")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            rendered = "\n".join(
+                line.text
+                for line in app.screen.query_one("#log-content", RichLog).lines
+            )
+            assert "INFO server started" in rendered
+            assert "VIEW ALL · 3/3 visible" in str(
+                app.screen.query_one("#log-query-status", Static).content
+            )
+            snapshot_calls = sum(
+                call[0] == "log_snapshot" for call in monitor.content_calls
+            )
+
+            await pilot.click("#log-hide-info")
+            await pilot.pause()
+
+            assert saved[-1].project.log_focus.hide_info
+            assert str(app.screen.query_one("#log-focus-toggle", Button).label) == (
+                "Focus: ON"
+            )
+            rendered = "\n".join(
+                line.text
+                for line in app.screen.query_one("#log-content", RichLog).lines
+            )
+            assert "INFO server started" not in rendered
+            assert "WARN" in rendered
+            assert "ERROR" in rendered
+            query_status = str(
+                app.screen.query_one("#log-query-status", Static).content
+            )
+            assert "FOCUS ON · 2/3 visible · HIDDEN 1" in query_status
+            assert "hide INFO" in query_status
+            assert (
+                sum(call[0] == "log_snapshot" for call in monitor.content_calls)
+                == snapshot_calls
+            )
+
+            await pilot.click("#log-focus-toggle")
+            await pilot.pause()
+
+            rendered = "\n".join(
+                line.text
+                for line in app.screen.query_one("#log-content", RichLog).lines
+            )
+            assert "INFO server started" in rendered
+            assert "VIEW ALL · 3/3 visible" in str(
+                app.screen.query_one("#log-query-status", Static).content
+            )
+
+    asyncio.run(exercise())
+
+
+def test_tui_maintains_literal_focus_rules_in_project_profile() -> None:
+    async def exercise() -> None:
+        saved: list[Settings] = []
+        app = create_tui(
+            FakeAgent(answer="unused"),
+            save_settings=saved.append,
+        )
+
+        async with app.run_test(size=(140, 38)) as pilot:
+            await app.workers.wait_for_complete()
+            await pilot.press("ctrl+k", "1", "l")
+            await app.workers.wait_for_complete()
+            await pilot.click("#log-focus-rules")
+            await pilot.pause()
+
+            rule_input = app.screen.query_one("#log-rule-input", Input)
+            rule_input.value = "DATABASE UNAVAILABLE"
+            await pilot.click("#log-rule-add")
+            await pilot.pause()
+            rule_input.value = "remove-me"
+            rule_input.focus()
+            await pilot.press("enter")
+            await pilot.pause()
+            rules_table = app.screen.query_one("#log-rules-table", DataTable)
+            assert rules_table.row_count == 2
+            rules_table.move_cursor(row=1)
+            rules_table.focus()
+            await pilot.press("delete")
+            assert rules_table.row_count == 1
+            await pilot.click("#log-rules-save")
+            await pilot.pause()
+
+            assert saved[-1].project.log_focus == LogFocusSettings(
+                hidden_text=("DATABASE UNAVAILABLE",),
+            )
+            rendered = "\n".join(
+                line.text
+                for line in app.screen.query_one("#log-content", RichLog).lines
+            )
+            assert "database unavailable" not in rendered
+            query_status = str(
+                app.screen.query_one("#log-query-status", Static).content
+            )
+            assert "FOCUS ON · 2/3 visible · HIDDEN 1" in query_status
+            assert "1 text rules" in query_status
+
+    asyncio.run(exercise())
+
+
+def test_tui_search_uses_keyboard_navigation_and_reports_regex_errors() -> None:
+    async def exercise() -> None:
+        monitor = FakeMonitor()
+        app = create_tui(
+            FakeAgent(answer="unused"),
+            monitor=monitor,
+        )
+
+        async with app.run_test(size=(140, 38)) as pilot:
+            await app.workers.wait_for_complete()
+            await pilot.press("ctrl+k", "1", "l")
+            await app.workers.wait_for_complete()
+            snapshot_calls = sum(
+                call[0] == "log_snapshot" for call in monitor.content_calls
+            )
+
+            await pilot.press("/")
+            search_input = app.screen.query_one("#log-search-input", Input)
+            assert search_input.has_focus
+            search_input.value = "2026"
+            await pilot.pause()
+            await pilot.press("enter")
+
+            query_status = str(
+                app.screen.query_one("#log-query-status", Static).content
+            )
+            assert 'SEARCH 1/3 · LITERAL · insensitive · "2026"' in query_status
+
+            await pilot.press("n")
+            assert "SEARCH 2/3" in str(
+                app.screen.query_one("#log-query-status", Static).content
+            )
+            await pilot.press("shift+n")
+            assert "SEARCH 1/3" in str(
+                app.screen.query_one("#log-query-status", Static).content
+            )
+
+            search_input.value = "database"
+            await pilot.pause()
+            assert "SEARCH 1/20" in str(
+                app.screen.query_one("#log-query-status", Static).content
+            )
+            log_content = app.screen.query_one("#log-content", RichLog)
+            first_rendered = tuple(
+                line.render(app.console) for line in log_content.lines
+            )
+            await pilot.press("n")
+            assert "SEARCH 2/20" in str(
+                app.screen.query_one("#log-query-status", Static).content
+            )
+            second_rendered = tuple(
+                line.render(app.console) for line in log_content.lines
+            )
+            assert second_rendered != first_rendered
+
+            search_input.value = "not-present"
+            await pilot.pause()
+            assert "SEARCH 0/0" in str(
+                app.screen.query_one("#log-query-status", Static).content
+            )
+
+            await pilot.click("#log-search-regex")
+            search_input.value = "["
+            await pilot.pause()
+            query_status = str(
+                app.screen.query_one("#log-query-status", Static).content
+            )
+            assert "正则表达式无效" in query_status
+            assert (
+                sum(call[0] == "log_snapshot" for call in monitor.content_calls)
+                == snapshot_calls
+            )
+
+    asyncio.run(exercise())
+
+
+def test_tui_log_focus_and_search_remain_usable_in_narrow_terminal() -> None:
+    async def exercise() -> None:
+        app = create_tui(FakeAgent(answer="unused"))
+
+        async with app.run_test(size=(80, 24)) as pilot:
+            await app.workers.wait_for_complete()
+            await pilot.press("ctrl+k", "1", "l")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            assert app.screen.query_one("#log-content", RichLog).region.height >= 5
+            assert app.screen.query_one("#log-search-input", Input).region.width >= 14
+            assert (
+                app.screen.query_one("#log-search-clear", Button).region.right
+                <= app.size.width
+            )
+            await pilot.click("#log-hide-info")
+            search_input = app.screen.query_one("#log-search-input", Input)
+            search_input.value = "database unavailable"
+            await pilot.pause()
+
+            query_status = app.screen.query_one("#log-query-status", Static)
+            assert query_status.region.height == 2
+            assert "FOCUS ON" in query_status.render_line(0).text
+            assert "SEARCH 1/20" in query_status.render_line(1).text
+
+    asyncio.run(exercise())
+
+
 def test_tui_can_show_all_container_sources_and_recover_from_source_errors() -> None:
     class MultiContainerLogMonitor(FakeMonitor):
         def pod_log_snapshot(
@@ -1482,6 +1717,9 @@ def test_tui_can_follow_and_stop_new_log_records_without_replacing_snapshot() ->
             await app.workers.wait_for_complete()
             await pilot.press("ctrl+k", "1", "l")
             await app.workers.wait_for_complete()
+            app.screen.query_one("#log-search-input", Input).value = "live failure"
+            await pilot.pause()
+            app.screen.query_one("#log-content", RichLog).focus()
             await pilot.press("f")
             for _ in range(20):
                 await pilot.pause()
@@ -1496,6 +1734,9 @@ def test_tui_can_follow_and_stop_new_log_records_without_replacing_snapshot() ->
             assert "4 records" in status
             assert "ERROR 2" in status
             assert "FOLLOW" in status
+            assert 'SEARCH 1/1 · LITERAL · insensitive · "live failure"' in str(
+                app.screen.query_one("#log-query-status", Static).content
+            )
 
             await pilot.press("f")
             await app.workers.wait_for_complete()

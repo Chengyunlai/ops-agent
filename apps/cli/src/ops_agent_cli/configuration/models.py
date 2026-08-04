@@ -12,6 +12,7 @@ from pydantic import (
     StrictFloat,
     StrictInt,
     StrictStr,
+    field_validator,
 )
 from pydantic.types import StringConstraints
 
@@ -46,6 +47,10 @@ _ShellEnvironmentValue = Annotated[
         min_length=1,
         pattern=r"^[A-Za-z0-9_.@+-]+$",
     ),
+]
+_LogFocusRule = Annotated[
+    StrictStr,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=200),
 ]
 
 
@@ -190,10 +195,49 @@ class ThemeName(StrEnum):
     HIGH_CONTRAST = "high-contrast"
 
 
+class LogFocusSettings(_ConfigModel):
+    hide_info: StrictBool = Field(
+        default=False,
+        description="Log Focus 是否隐藏 INFO 记录",
+    )
+    hide_debug: StrictBool = Field(
+        default=False,
+        description="Log Focus 是否隐藏 DEBUG 记录",
+    )
+    hide_health_checks: StrictBool = Field(
+        default=False,
+        description="Log Focus 是否隐藏健康检查记录",
+    )
+    hide_access_logs: StrictBool = Field(
+        default=False,
+        description="Log Focus 是否隐藏 HTTP 访问日志",
+    )
+    hidden_text: tuple[_LogFocusRule, ...] = Field(
+        default=(),
+        max_length=50,
+        description="操作员维护的大小写不敏感文本隐藏规则",
+    )
+
+    @field_validator("hidden_text")
+    @classmethod
+    def require_unique_hidden_text(
+        cls,
+        value: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        normalized = tuple(rule.casefold() for rule in value)
+        if len(normalized) != len(set(normalized)):
+            raise ValueError("Log Focus 隐藏规则不能重复")
+        return value
+
+
 class ProjectSettings(_ConfigModel):
     name: _NonEmptyString = Field(
         default="Ops Project",
         description="Project Profile 显示名称",
+    )
+    log_focus: LogFocusSettings = Field(
+        default_factory=LogFocusSettings,
+        description="Project Profile 的操作员 Log Focus 偏好",
     )
 
 
