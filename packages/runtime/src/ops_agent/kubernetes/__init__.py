@@ -34,7 +34,11 @@ from ops_agent.kubernetes.observations import (
     KubernetesWatchOutcome,
     KubernetesWatchResult,
 )
-from ops_agent.kubernetes.reader import KubernetesReader, create_kubernetes_reader
+from ops_agent.kubernetes.reader import (
+    KubernetesReader,
+    create_kubernetes_api_client,
+    create_kubernetes_reader,
+)
 from ops_agent.kubernetes.settings import KubernetesConnectionSettings
 
 __all__ = [
@@ -72,5 +76,6 @@ __all__ = [
     "VolumeEntry",
     "VolumeEntryKind",
     "VolumeFilePreview",
+    "create_kubernetes_api_client",
     "create_kubernetes_reader",
 ]

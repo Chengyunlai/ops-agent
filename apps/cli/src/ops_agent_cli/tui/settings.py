@@ -12,6 +12,7 @@ from textual.widgets import Button, Input, Label, Select, Static
 from ops_agent_cli.configuration import (
     DownloadSettings,
     InteractiveExecSettings,
+    KubernetesMetricsSettings,
     KubernetesSettings,
     KubernetesWatchSettings,
     PodTransferSettings,
@@ -188,6 +189,33 @@ class SettingsScreen(ModalScreen[Settings | None]):
                         id="setting-poll-interval",
                     ),
                 )
+                yield Static("实时资源指标", classes="settings-section")
+                yield from _field(
+                    "Kubernetes Metrics API",
+                    Select(
+                        (
+                            ("读取已有 API（推荐）", "enabled"),
+                            ("禁用", "disabled"),
+                        ),
+                        value=("enabled" if kubernetes.metrics.enabled else "disabled"),
+                        allow_blank=False,
+                        id="setting-metrics-enabled",
+                    ),
+                )
+                yield from _field(
+                    "Metrics 请求超时（秒，1-30）",
+                    Input(
+                        value=str(kubernetes.metrics.request_timeout_seconds),
+                        id="setting-metrics-timeout",
+                    ),
+                )
+                yield from _field(
+                    "Metrics 本地缓存（秒，1.0-300.0）",
+                    Input(
+                        value=str(kubernetes.metrics.cache_ttl_seconds),
+                        id="setting-metrics-cache-ttl",
+                    ),
+                )
                 yield Static("人工 Pod 访问", classes="settings-section")
                 yield from _field(
                     "Interactive Pod Session",
@@ -339,6 +367,18 @@ class SettingsScreen(ModalScreen[Settings | None]):
                     self.query_one("#setting-poll-interval", Input).value
                 ),
             )
+            metrics = KubernetesMetricsSettings(
+                enabled=(
+                    self.query_one("#setting-metrics-enabled", Select).value
+                    == "enabled"
+                ),
+                request_timeout_seconds=int(
+                    self.query_one("#setting-metrics-timeout", Input).value
+                ),
+                cache_ttl_seconds=float(
+                    self.query_one("#setting-metrics-cache-ttl", Input).value
+                ),
+            )
             interactive_exec = InteractiveExecSettings(
                 enabled=(
                     self.query_one(
@@ -392,6 +432,7 @@ class SettingsScreen(ModalScreen[Settings | None]):
                 request_timeout_seconds=timeout,
                 proxy_url=proxy_value or None,
                 watch=watch,
+                metrics=metrics,
                 interactive_exec=interactive_exec,
                 downloads=downloads,
                 pod_transfer=pod_transfer,

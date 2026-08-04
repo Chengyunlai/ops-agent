@@ -1,6 +1,7 @@
 from ops_agent_cli.configuration.models import (
     DownloadSettings,
     InteractiveExecSettings,
+    KubernetesMetricsSettings,
     KubernetesSettings,
     KubernetesWatchSettings,
     ModelSettings,
@@ -21,6 +22,7 @@ from ops_agent_cli.configuration.persistence import (
 __all__ = [
     "DownloadSettings",
     "InteractiveExecSettings",
+    "KubernetesMetricsSettings",
     "KubernetesSettings",
     "KubernetesWatchSettings",
     "ModelSettings",

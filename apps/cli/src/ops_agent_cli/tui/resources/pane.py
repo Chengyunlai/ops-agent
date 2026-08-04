@@ -1,4 +1,6 @@
 from ops_agent.monitoring import (
+    KubernetesMetricsAvailability,
+    KubernetesMetricsStatus,
     KubernetesMonitorSnapshot,
     KubernetesResourceCollection,
     KubernetesResourceKind,
@@ -39,9 +41,11 @@ class MonitorPane(Vertical):
         diagnostic_status = f" · {snapshot.finding_count} findings"
         if snapshot.diagnostic_errors:
             diagnostic_status += " · diagnostics partial"
+        metrics_status = _metrics_status(snapshot.metrics)
         self.query_one("#monitor-status", Static).update(
             f"最近刷新 {snapshot.observed_at.astimezone():%H:%M:%S}"
-            f"{diagnostic_status} · Enter Health · d Describe · l Logs(Pod)"
+            f"{diagnostic_status} · {metrics_status}"
+            " · Enter Health · d Describe · l Logs(Pod)"
         )
         self._render_title()
         self._render_tabs()
@@ -235,6 +239,17 @@ def _kind_label(
     if snapshot is not None and (collection := snapshot.collection(kind)) is not None:
         return collection.label
     return str(kind)
+
+
+def _metrics_status(status: KubernetesMetricsStatus) -> str:
+    if status.availability is KubernetesMetricsAvailability.DISABLED:
+        return "Metrics Disabled"
+    if status.availability is KubernetesMetricsAvailability.UNAVAILABLE:
+        detail = f": {status.error}" if status.error else ""
+        return f"Metrics Unavailable{detail}"
+    if status.observed_at is None:
+        return "Metrics Available"
+    return f"Metrics {status.observed_at.astimezone():%H:%M:%S}"
 
 
 def _selected_row_key(table: DataTable) -> RowKey | None:

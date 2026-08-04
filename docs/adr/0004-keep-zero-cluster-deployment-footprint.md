@@ -27,6 +27,25 @@ resource-pressure evictions are evidence. They are not presented as live CPU
 or memory usage. Live metrics require an already available Metrics API or an
 explicitly configured existing observability system.
 
+The local monitor may read namespaced PodMetrics from the existing
+`metrics.k8s.io/v1beta1` API through an optional adapter. The adapter aggregates
+container CPU and memory into Pod rows, uses a bounded request timeout and a
+local TTL cache, and records the metric observation time separately from the
+resource snapshot time. A missing API, RBAC 403, malformed response, or
+temporary failure is represented as `Metrics Unavailable`; it must not remove
+Pod inventory or stop other resource reads. Disabling the adapter is represented
+as `Metrics Disabled`.
+
+The SDK-independent source contract and cache live in `monitoring/metrics.py`;
+the concrete Kubernetes SDK adapter lives in `kubernetes/metrics.py`. This keeps
+SDK objects inside the infrastructure boundary without adding Metrics methods
+to the core-resource `KubernetesReader`.
+
+Metrics data in this slice is a deterministic local-monitor capability. It is
+not registered as a LangChain tool and is not supplied to the Agent. Adding it
+to Agent evidence later requires an explicit capability and policy decision;
+prompt text alone is not an authorization boundary.
+
 Interactive Pod Sessions and Artifact Downloads remain explicit manual
 operator actions under ADR 0001 and ADR 0002. They may use `pods/exec`, but
 they do not create a helper workload and are never available to Agent tool

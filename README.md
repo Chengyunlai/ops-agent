@@ -4,8 +4,8 @@
 
 > [!IMPORTANT]
 > 项目目前处于早期开发阶段。当前已打通 Kubernetes TOML 配置、
-> 八项 Kubernetes 只读工具、LangGraph 主/子 Agent 和 CLI 自然语言查询链路；
-> 指标、告警接入和自动处置等能力仍在规划中。
+> 八项 Kubernetes 只读工具、可选 Metrics API 监盘、LangGraph 主/子 Agent 和
+> CLI 自然语言查询链路；告警接入和自动处置等能力仍在规划中。
 
 > [!NOTE]
 > Ops Agent 始终作为本地终端监控工具运行，不向目标集群安装 Operator、CRD、
@@ -28,6 +28,7 @@
 | 配置错误处理 | 已完成 | 识别文件缺失、TOML 格式错误、区块、字段缺失或未知字段 |
 | 不可变配置模型 | 已完成 | 使用冻结的 Pydantic 模型声明类型、别名和字段约束 |
 | Kubernetes 只读查询 | 已完成 | 查询常用工作负载、网络入口、PVC、Pod 详情/日志和关联 Event |
+| Kubernetes 实时指标 | 已完成 | 可选读取集群已有 Metrics API，在 Pod 监盘显示 CPU/Memory；缺失或无权限时独立降级 |
 | PVC 存储浏览 | 已完成 | 展示 PVC/PV/StorageClass/后端/挂载关系，并经现有 Pod 只读浏览目录和预览文本文件 |
 | Artifact Download | 已完成 | 从选定 Pod 或 PVC 流式下载普通文件，显示大小与 SHA-256，失败自动清理 |
 | Interactive Pod Session | 已完成 | 左侧监盘人工进入选定 Pod/容器；默认禁用且不向 Agent 暴露 |
@@ -50,7 +51,7 @@
 
 ### Pods 实时监盘
 
-![Ops Agent Pods 实时监盘，包含 AGE](docs/images/tui-pods.svg)
+![Ops Agent Pods 实时监盘，包含 AGE、CPU 和 Memory](docs/images/tui-pods.svg)
 
 ### 项目与界面设置
 
@@ -176,6 +177,11 @@ enabled = true
 timeout_seconds = 10
 poll_interval_seconds = 5.0
 
+[kubernetes.metrics]
+enabled = true
+request_timeout_seconds = 3
+cache_ttl_seconds = 10.0
+
 [kubernetes.interactive_exec]
 enabled = false
 locale = "auto"
@@ -225,6 +231,9 @@ export DEEPSEEK_API_KEY="..."
 | `kubernetes.watch.enabled` | boolean | 是否用 Kubernetes Watch 加速监盘刷新；默认 `true` |
 | `kubernetes.watch.timeout_seconds` | integer | 单次只读 Watch 请求的服务端超时；默认 `10` 秒 |
 | `kubernetes.watch.poll_interval_seconds` | number | 完整快照一致性兜底及 Watch 不可用时的轮询间隔；默认 `5.0` 秒 |
+| `kubernetes.metrics.enabled` | boolean | 是否读取集群已经存在的 `metrics.k8s.io` Pod 指标；默认 `true`，不会安装 metrics-server |
+| `kubernetes.metrics.request_timeout_seconds` | integer | 单次 Metrics API 请求超时，范围 `1`～`30` 秒；默认 `3` 秒 |
+| `kubernetes.metrics.cache_ttl_seconds` | number | 成功指标快照的本地缓存时间，范围 `1.0`～`300.0` 秒；默认 `10.0` 秒 |
 | `kubernetes.interactive_exec.enabled` | boolean | 是否允许左侧监盘启动人工 Pod Shell；默认 `false` |
 | `kubernetes.interactive_exec.locale` | string | Pod Shell UTF-8 locale；`auto` 自动探测，默认 `auto` |
 | `kubernetes.interactive_exec.terminal_type` | string | Pod Shell 的 `TERM` 值；默认 `xterm-256color` |
@@ -244,7 +253,8 @@ export DEEPSEEK_API_KEY="..."
 | `tui.colors.warning` | `#RRGGBB` | 可选的主题警告色覆盖 |
 
 当前加载器校验配置文件、TOML 格式、`[kubernetes]` / `[model]`
-区块、字段类型、正整数超时、Watch 开关与正数轮询间隔、可选代理 URL、
+区块、字段类型、正整数超时、Watch 开关与正数轮询间隔、Metrics 开关、请求
+超时和缓存范围、可选代理 URL、
 人工终端开关、Shell locale、终端类型、颜色开关、下载目录、Pod 传输策略、
 文件大小上限、主题名称和十六进制颜色；
 kubeconfig 是否存在由创建 Kubernetes Client 时检查。`proxy_url` 由配置
@@ -331,7 +341,10 @@ Watch；Pod 变化会立即使完整快照失效并刷新。Watch 超时会正�
 DaemonSet、Service、ReplicaSet、Job、CronJob、Ingress 和 PVC 的数量、
 Finding 数与状态；具体资源表紧邻名称显示 `OK` 或 `WARN · 原因`。右侧保留
 本次运行中的用户消息和 Agent Markdown 回复。窄终端自动改为
-上下布局。每类资源独立查询，单类 API 或 RBAC 失败会在该行显示
+上下布局。启用 `[kubernetes.metrics]` 后，Pod 表追加当前 CPU、Memory；底部
+显示指标采样时间。Metrics API 不存在、无权限或暂时不可用时显示
+`Metrics Unavailable`，Pod 与其他资源清单继续正常刷新。每类资源独立查询，
+单类 API 或 RBAC 失败会在该行显示
 `Unavailable`，不会让 Pod、Service 等其他目录一起消失。
 
 `Ctrl+K` 聚焦左侧监盘，`0` 返回 Overview，`1`～`7` 切换具体资源；
@@ -339,9 +352,9 @@ Overview 中可用方向键和 `Enter` 进入任意资源类型。选中资源�
 `Enter` 或 `h` 打开最新确定性 Finding 和 Evidence；Deployment 还会显示
 generation、observedGeneration、revision、Conditions，以及只按 controller
 owner 构建的 Deployment → ReplicaSet → Pod 拓扑。`d` 读取原始对象详情与
-关联 Event；Pod 上按 `l` 读取每个容器最近 200 行日志。指标时间线只会在
-已有 Metrics API 或已有 Prometheus 被显式配置后增加，不会自动安装数据源，
-也不会用模型猜测实时指标。
+关联 Event；Pod 上按 `l` 读取每个容器最近 200 行日志。实时 CPU/Memory 只由
+确定性的本地 Monitor 读取，不注册为 Agent Tool，也不会由模型猜测；历史指标
+时间线仍需已有 Prometheus 等外部数据源才可能提供。
 
 Service 的 Health 详情会显示数据来源（EndpointSlice 或旧版 Endpoints）、
 Ready/NotReady 数量和 Endpoint → Pod targetRef；健康 Service 也可以查看该关系，
@@ -404,13 +417,20 @@ namespace 内 Pod/PVC、读取集群级 PV，并允许连接 `pods/exec` 子资�
 读取工具或权限不足时，界面会显示明确错误，并尝试同一 PVC 的其他 Running
 挂载目标；不会创建临时工作负载。
 
+实时 Pod CPU/Memory 只需要目标 namespace 对 `metrics.k8s.io` 的 `pods`
+拥有 `list` 权限，并且集群已经提供 Metrics API。可以先运行
+`kubectl auth can-i list pods.metrics.k8s.io -n <namespace>` 检查权限。
+缺少 API 或权限只会让指标显示为 `Unavailable`；Ops Agent 不会安装
+`metrics-server`、创建 ServiceAccount 或申请更高权限。若不需要指标，可在
+Settings 中禁用，或设置 `kubernetes.metrics.enabled = false`。
+
 TUI 启用鼠标以支持点击聚焦；复制终端内容时点击顶部“复制”
 （`F2` 也可作为备用快捷键）进入复制模式，应用会释放终端鼠标，此时可以
 直接拖选任意内容并使用终端复制快捷键；复制完成后按 `Esc` 恢复仪表盘
 鼠标控制。
 
-顶部 `Settings`（或 `Ctrl+,`）编辑当前 Project Profile、集群连接、人工
-Pod 访问、下载目录、主题和颜色。主题
+顶部 `Settings`（或 `Ctrl+,`）编辑当前 Project Profile、集群连接、Watch、
+Metrics API、人工 Pod 访问、下载目录、主题和颜色。主题
 选择与有效颜色会即时预览；保存后写回启动时使用的 TOML。项目名称、环境、
 namespace、kubeconfig、代理和请求超时属于运行边界，保存后需要重启应用才会
 生效；人工终端开关与下载目录也在重启后生效；主题与颜色无需重启。内置
@@ -468,7 +488,9 @@ KUBECONFIG=/path/to/disposable-kind-kubeconfig \
 make test-kubernetes-integration
 ```
 
-测试夹具固定覆盖 Pod Watch 变化与 Watch RBAC 403 回退、Service 无 Endpoint、Service → Endpoint → Pod、
+单元测试固定覆盖 Metrics API 缺失/403 的独立降级、响应解析和本地缓存。
+Kubernetes 集成测试夹具固定覆盖 Pod Watch 变化与 Watch RBAC 403 回退、
+Service 无 Endpoint、Service → Endpoint → Pod、
 CrashLoopBackOff、ImagePullBackOff、Deployment progress deadline、EndpointSlice
 RBAC 403，以及模拟 Discovery 404 后读取真实 CoreV1 Endpoints 的回退链路；
 fixture 会拒绝非 `kind-` context 或 current context 不匹配的配置。CI 会自动
@@ -602,6 +624,7 @@ ops_agent/
 │       │       ├── kubernetes/
 │       │       │   ├── __init__.py
 │       │       │   ├── errors.py
+│       │       │   ├── metrics.py
 │       │       │   ├── models.py
 │       │       │   ├── reader.py
 │       │       │   ├── settings.py
@@ -610,6 +633,7 @@ ops_agent/
 │       │       │   ├── __init__.py
 │       │       │   ├── diagnostics.py
 │       │       │   ├── kubernetes.py
+│       │       │   ├── metrics.py
 │       │       │   └── models.py
 │       ├── tests/
 │       │   ├── integration/kubernetes/
@@ -630,8 +654,9 @@ runtime 核心包，runtime 核心包不依赖任何具体入口。
 
 Kubernetes 相关代码采用三层边界：
 
-- `kubernetes/` 是基础设施能力层。`reader.py` 封装 Kubernetes SDK，
-  `models.py` 定义不依赖 SDK 的结构化查询结果。
+- `kubernetes/` 是基础设施能力层，统一封装 Kubernetes SDK。`reader.py`
+  读取核心资源，`metrics.py` 适配已有 Metrics API，`models.py` 定义不依赖
+  SDK 的结构化查询结果。
 - `diagnostics/` 是确定性诊断层。它消费查询结果，输出带证据的结构化
   finding，不访问集群，也不依赖 LLM 或 LangChain。
 - `agent/specialists/kubernetes/evidence.py` 是 Controlled Evidence Collection
@@ -645,7 +670,8 @@ Kubernetes 相关代码采用三层边界：
   namespace、日志行数和 Event 数量。
 - `monitoring/` 用无参数 `snapshot()` 以及固定 namespace 的 `diagnostics()` /
   `describe()` / `pod_logs()` / `pod_containers()` 接口封装资源浏览与诊断呈现。
-  Snapshot 携带 Finding 摘要和结构化 Deployment 拓扑；`wait_for_change()`
+  `metrics.py` 只定义 SDK-independent Source、失败语义和本地缓存；Snapshot
+  携带 Finding 摘要、当前 Pod/Container 指标和结构化 Deployment 拓扑；`wait_for_change()`
   只返回稳定失效信号，SDK Watch Event 不会越过 runtime 边界。TUI 收到信号后
   仍读取完整 Snapshot，因此不导入 Kubernetes SDK、不解析 Agent 文本，也不
   改动聊天、布局或当前资源选择。
@@ -802,7 +828,8 @@ make check
 - [x] 请求范围路由、默认拒绝与实时证据校验
 - [x] 最小 Kubernetes 只读诊断计划
 - [x] Kubernetes 原生资源压力证据（requests/limits、OOM、调度不足与驱逐）
-- [ ] 发布失败根因闭环与可选实时资源指标
+- [x] 可选 Metrics API 实时 Pod CPU/Memory 与独立降级
+- [ ] 发布失败根因闭环
 - [ ] 已有 Prometheus、日志与告警平台的可选只读接入
 - [x] LLM 工具调用与基础 Agent 编排
 - [x] CLI 自然语言查询入口

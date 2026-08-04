@@ -6,7 +6,11 @@ from langchain.chat_models import init_chat_model
 from langchain_core.language_models import BaseChatModel
 from ops_agent.agent import OpsAgent, create_ops_agent
 from ops_agent.agent.specialists.kubernetes import create_kubernetes_tools
-from ops_agent.kubernetes import create_kubernetes_reader
+from ops_agent.kubernetes import (
+    create_kubernetes_api_client,
+    create_kubernetes_reader,
+)
+from ops_agent.kubernetes.metrics import create_kubernetes_metrics_source
 from ops_agent.monitoring import KubernetesMonitor
 
 from ops_agent_cli.configuration import ModelSettings, Settings, load_settings
@@ -28,7 +32,21 @@ class ApplicationRuntime:
 def create_runtime(config_path: Path) -> ApplicationRuntime:
     settings = load_settings(config_path)
     model = _create_model(settings.model)
-    reader = create_kubernetes_reader(settings.kubernetes)
+    api_client = create_kubernetes_api_client(settings.kubernetes)
+    reader = create_kubernetes_reader(
+        settings.kubernetes,
+        api_client=api_client,
+    )
+    metrics_settings = settings.kubernetes.metrics
+    metrics_source = (
+        create_kubernetes_metrics_source(
+            api_client,
+            request_timeout_seconds=metrics_settings.request_timeout_seconds,
+            cache_ttl_seconds=metrics_settings.cache_ttl_seconds,
+        )
+        if metrics_settings.enabled
+        else None
+    )
     tools = create_kubernetes_tools(
         reader,
         namespace=settings.kubernetes.namespace,
@@ -38,6 +56,7 @@ def create_runtime(config_path: Path) -> ApplicationRuntime:
         monitor=KubernetesMonitor(
             reader,
             namespace=settings.kubernetes.namespace,
+            metrics_source=metrics_source,
         ),
         settings=settings,
         environment=settings.kubernetes.environment,

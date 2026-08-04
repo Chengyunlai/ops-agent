@@ -5,9 +5,18 @@ from ops_agent.kubernetes import (
     VolumeEntryKind,
 )
 from ops_agent.monitoring.kubernetes import KubernetesMonitor
+from ops_agent.monitoring.metrics import (
+    KubernetesMetricsSource,
+    KubernetesMetricsUnavailable,
+)
 from ops_agent.monitoring.models import (
+    KubernetesContainerMetrics,
     KubernetesDeploymentTopology,
+    KubernetesMetricsAvailability,
+    KubernetesMetricsStatus,
     KubernetesMonitorSnapshot,
+    KubernetesPodMetrics,
+    KubernetesPodMetricsSnapshot,
     KubernetesPodTopology,
     KubernetesReplicaSetTopology,
     KubernetesResourceCollection,
@@ -18,9 +27,16 @@ from ops_agent.monitoring.models import (
 )
 
 __all__ = [
+    "KubernetesContainerMetrics",
     "KubernetesDeploymentTopology",
+    "KubernetesMetricsAvailability",
+    "KubernetesMetricsSource",
+    "KubernetesMetricsStatus",
+    "KubernetesMetricsUnavailable",
     "KubernetesMonitor",
     "KubernetesMonitorSnapshot",
+    "KubernetesPodMetrics",
+    "KubernetesPodMetricsSnapshot",
     "KubernetesPodTopology",
     "KubernetesReplicaSetTopology",
     "KubernetesResourceCollection",

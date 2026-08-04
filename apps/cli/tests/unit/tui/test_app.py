@@ -688,6 +688,11 @@ def test_tui_settings_persist_project_and_apply_theme_immediately() -> None:
             assert screen.query_one("#setting-watch-timeout", Input).value == "10"
             assert screen.query_one("#setting-poll-interval", Input).value == "5.0"
             assert (
+                screen.query_one("#setting-metrics-enabled", Select).value == "enabled"
+            )
+            assert screen.query_one("#setting-metrics-timeout", Input).value == "3"
+            assert screen.query_one("#setting-metrics-cache-ttl", Input).value == "10.0"
+            assert (
                 screen.query_one("#setting-interactive-exec", Select).value
                 == "disabled"
             )
@@ -722,6 +727,9 @@ def test_tui_settings_persist_project_and_apply_theme_immediately() -> None:
             screen.query_one("#setting-watch-enabled", Select).value = "enabled"
             screen.query_one("#setting-watch-timeout", Input).value = "12"
             screen.query_one("#setting-poll-interval", Input).value = "7.5"
+            screen.query_one("#setting-metrics-enabled", Select).value = "disabled"
+            screen.query_one("#setting-metrics-timeout", Input).value = "5"
+            screen.query_one("#setting-metrics-cache-ttl", Input).value = "15.0"
             screen.query_one("#setting-interactive-exec", Select).value = "enabled"
             screen.query_one(
                 "#setting-interactive-locale",
@@ -759,6 +767,9 @@ def test_tui_settings_persist_project_and_apply_theme_immediately() -> None:
             assert saved[0].kubernetes.watch.enabled
             assert saved[0].kubernetes.watch.timeout_seconds == 12
             assert saved[0].kubernetes.watch.poll_interval_seconds == 7.5
+            assert not saved[0].kubernetes.metrics.enabled
+            assert saved[0].kubernetes.metrics.request_timeout_seconds == 5
+            assert saved[0].kubernetes.metrics.cache_ttl_seconds == 15.0
             assert saved[0].kubernetes.interactive_exec.enabled
             assert saved[0].kubernetes.interactive_exec.locale == "C.UTF-8"
             assert (

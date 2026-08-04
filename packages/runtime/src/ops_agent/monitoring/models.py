@@ -1,7 +1,8 @@
 """Kubernetes Monitoring module 的稳定 interface 模型。"""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
+from enum import StrEnum
 
 from ops_agent.diagnostics import FindingCode, FindingSeverity
 from ops_agent.kubernetes import KubernetesResourceKind, ServiceEndpointSummary
@@ -72,6 +73,48 @@ class KubernetesResourceContent:
     content: str
 
 
+class KubernetesMetricsAvailability(StrEnum):
+    DISABLED = "disabled"
+    AVAILABLE = "available"
+    UNAVAILABLE = "unavailable"
+
+
+@dataclass(frozen=True)
+class KubernetesContainerMetrics:
+    name: str
+    cpu_nano_cores: int
+    memory_bytes: int
+
+
+@dataclass(frozen=True)
+class KubernetesPodMetrics:
+    name: str
+    observed_at: datetime
+    window_seconds: float
+    containers: tuple[KubernetesContainerMetrics, ...]
+
+    @property
+    def cpu_nano_cores(self) -> int:
+        return sum(container.cpu_nano_cores for container in self.containers)
+
+    @property
+    def memory_bytes(self) -> int:
+        return sum(container.memory_bytes for container in self.containers)
+
+
+@dataclass(frozen=True)
+class KubernetesPodMetricsSnapshot:
+    observed_at: datetime | None
+    pods: tuple[KubernetesPodMetrics, ...]
+
+
+@dataclass(frozen=True)
+class KubernetesMetricsStatus:
+    availability: KubernetesMetricsAvailability
+    observed_at: datetime | None = None
+    error: str | None = None
+
+
 @dataclass(frozen=True)
 class KubernetesMonitorSnapshot:
     namespace: str
@@ -81,6 +124,11 @@ class KubernetesMonitorSnapshot:
     deployment_topologies: tuple[KubernetesDeploymentTopology, ...] = ()
     service_endpoints: tuple[ServiceEndpointSummary, ...] = ()
     diagnostic_errors: tuple[str, ...] = ()
+    metrics: KubernetesMetricsStatus = field(
+        default_factory=lambda: KubernetesMetricsStatus(
+            availability=KubernetesMetricsAvailability.DISABLED,
+        )
+    )
 
     @property
     def finding_count(self) -> int:

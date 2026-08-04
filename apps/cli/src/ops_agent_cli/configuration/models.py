@@ -27,6 +27,14 @@ _PositiveNumber = Annotated[
     StrictFloat,
     Field(gt=0, allow_inf_nan=False),
 ]
+_MetricsRequestTimeout = Annotated[
+    StrictInt,
+    Field(ge=1, le=30),
+]
+_MetricsCacheTtl = Annotated[
+    StrictFloat,
+    Field(ge=1.0, le=300.0, allow_inf_nan=False),
+]
 _HexColor = Annotated[
     StrictStr,
     StringConstraints(pattern=r"^#[0-9A-Fa-f]{6}$"),
@@ -122,10 +130,29 @@ class KubernetesWatchSettings(_ConfigModel):
     )
 
 
+class KubernetesMetricsSettings(_ConfigModel):
+    enabled: StrictBool = Field(
+        default=True,
+        description="是否读取集群已经提供的只读 Kubernetes Metrics API",
+    )
+    request_timeout_seconds: _MetricsRequestTimeout = Field(
+        default=3,
+        description="单次 Metrics API 请求超时秒数，范围 1 到 30",
+    )
+    cache_ttl_seconds: _MetricsCacheTtl = Field(
+        default=10.0,
+        description="成功指标快照的本地缓存秒数，范围 1.0 到 300.0",
+    )
+
+
 class KubernetesSettings(KubernetesConnectionSettings):
     watch: KubernetesWatchSettings = Field(
         default_factory=KubernetesWatchSettings,
         description="Kubernetes Watch 增量刷新与轮询兜底配置",
+    )
+    metrics: KubernetesMetricsSettings = Field(
+        default_factory=KubernetesMetricsSettings,
+        description="可选 Kubernetes Metrics API 只读接入配置",
     )
     interactive_exec: InteractiveExecSettings = Field(
         default_factory=InteractiveExecSettings,
