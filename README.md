@@ -170,6 +170,13 @@ cp config/examples/test.toml config/local/test.toml
 [project]
 name = "Operations"
 
+[project.log_focus]
+hide_info = false
+hide_debug = false
+hide_health_checks = false
+hide_access_logs = false
+hidden_text = []
+
 [kubernetes]
 environment = "local"
 namespace = "operations"
@@ -227,6 +234,11 @@ export DEEPSEEK_API_KEY="..."
 | 配置项 | 类型 | 说明 |
 | --- | --- | --- |
 | `project.name` | string | Project Profile 的显示名称 |
+| `project.log_focus.hide_info` | boolean | Focus 启用时是否隐藏 INFO；默认 `false` |
+| `project.log_focus.hide_debug` | boolean | Focus 启用时是否隐藏 DEBUG；默认 `false` |
+| `project.log_focus.hide_health_checks` | boolean | Focus 启用时是否隐藏健康检查；默认 `false` |
+| `project.log_focus.hide_access_logs` | boolean | Focus 启用时是否隐藏 HTTP 访问日志；默认 `false` |
+| `project.log_focus.hidden_text` | string array | 操作员维护的大小写不敏感原文隐藏规则；最多 50 条，每条最多 200 字符 |
 | `environment` | string | 环境标识，例如 `dev`、`test`、`prod` |
 | `namespace` | string | Agent 默认访问的 Kubernetes 命名空间 |
 | `kubeconfig_path` | string | kubeconfig 路径，推荐使用绝对路径 |
@@ -367,6 +379,15 @@ Follow 最多保留 10,000 条追加记录，达到上限时会停止并明确�
 流中断会保留已有内容并显示重连或返回选择重建后 Pod 的操作。日志读取和 Follow
 都直接使用 Kubernetes API，不依赖 Pod Shell、不安装采集组件，也不把操作交给
 AI。
+
+Log Focus 默认关闭，原始 Log Snapshot 和 Follow 缓冲始终保留。点击 INFO、
+DEBUG、Health 或 Access 按钮会显式启用 Focus，并把操作员选择保存到当前
+Project Profile；Rules 可维护最多 50 条大小写不敏感的明确文本隐藏规则。AI
+不能选择、生成或应用这些规则。按 `/` 聚焦本地搜索，`n` 和 `Shift+N` 跳转
+下一个或上一个命中；搜索默认忽略大小写，可切换 Regex。界面始终显示当前
+Focus、可见/隐藏记录数、搜索模式、命中总数和当前位置，无结果或无效正则也会
+明确提示。过滤与搜索只在本地重算视图，不会重新请求 Kubernetes；Follow 新记录
+会进入同一套 Focus 与搜索计算。
 实时 CPU/Memory 只由
 确定性的本地 Monitor 读取，不注册为 Agent Tool，也不会由模型猜测；历史指标
 时间线仍需已有 Prometheus 等外部数据源才可能提供。
@@ -845,7 +866,7 @@ make check
 - [x] Kubernetes 原生资源压力证据（requests/limits、OOM、调度不足与驱逐）
 - [x] 可选 Metrics API 实时 Pod CPU/Memory 与独立降级
 - [x] Log Snapshot、范围选择、长行显示和可停止的 Log Follow
-- [ ] Log Focus、手动隐藏规则与日志搜索
+- [x] Log Focus、Project Profile 手动隐藏规则与本地日志搜索
 - [ ] 原始 Log Snapshot 与过滤结果安全导出
 - [ ] 发布失败根因闭环
 - [ ] 已有 Prometheus、日志与告警平台的可选只读接入

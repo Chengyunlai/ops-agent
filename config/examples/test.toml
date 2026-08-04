@@ -1,6 +1,13 @@
 [project]
 name = "Testing"
 
+[project.log_focus]
+hide_info = false
+hide_debug = false
+hide_health_checks = false
+hide_access_logs = false
+hidden_text = []
+
 [kubernetes]
 environment = "test"
 namespace = "YOUR_NAMESPACE"

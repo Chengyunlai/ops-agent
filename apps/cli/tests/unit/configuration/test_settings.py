@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 from ops_agent_cli.configuration import (
     KubernetesSettings,
+    LogFocusSettings,
     SettingsError,
     ThemeName,
     load_settings,
@@ -423,6 +424,62 @@ def test_save_settings_persists_validated_preferences_and_runtime_config(
     assert reloaded.tui.theme is ThemeName.HIGH_CONTRAST
     assert reloaded.tui.colors.accent == "#FFFF00"
     assert 'model = "test-model"' in config_path.read_text(encoding="utf-8")
+
+
+def test_project_profile_persists_validated_log_focus_preferences(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "focus.toml"
+    config_path.write_text(
+        """
+        [project]
+        name = "Sample Platform"
+
+        [project.log_focus]
+        hide_info = true
+        hide_debug = false
+        hide_health_checks = true
+        hide_access_logs = false
+        hidden_text = ["scheduler heartbeat", "demo-noise"]
+
+        [kubernetes]
+        environment = "test"
+        namespace = "sample"
+        kubeconfig_path = "/tmp/ops_agent-kubeconfig"
+        request_timeout_seconds = 10
+
+        [model]
+        provider = "openai"
+        model = "test-model"
+        """,
+        encoding="utf-8",
+    )
+
+    settings = load_settings(config_path)
+    save_settings(config_path, settings)
+    reloaded = load_settings(config_path)
+
+    assert reloaded.project.log_focus == LogFocusSettings(
+        hide_info=True,
+        hide_health_checks=True,
+        hidden_text=("scheduler heartbeat", "demo-noise"),
+    )
+
+
+@pytest.mark.parametrize(
+    "hidden_text",
+    [
+        ("",),
+        ("duplicate", " DUPLICATE "),
+        ("x" * 201,),
+        tuple(f"rule-{index}" for index in range(51)),
+    ],
+)
+def test_log_focus_preferences_reject_ambiguous_or_unbounded_rules(
+    hidden_text: tuple[str, ...],
+) -> None:
+    with pytest.raises(ValidationError):
+        LogFocusSettings(hidden_text=hidden_text)
 
 
 @pytest.mark.parametrize(

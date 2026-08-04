@@ -25,6 +25,7 @@ from ops_agent.monitoring import (
 from ops_agent_cli.configuration import (
     KubernetesSettings,
     KubernetesWatchSettings,
+    LogFocusSettings,
     ModelSettings,
     ProjectSettings,
     Settings,
@@ -32,6 +33,7 @@ from ops_agent_cli.configuration import (
 )
 from ops_agent_cli.tui.app import OpsAgentTui
 from ops_agent_cli.tui.chat import ChatTranscript
+from textual.widgets import Input
 
 _REPOSITORY_ROOT = Path(__file__).parents[1]
 _OUTPUT_DIRECTORY = _REPOSITORY_ROOT / "docs/images"
@@ -334,7 +336,10 @@ def _demo_snapshot() -> KubernetesMonitorSnapshot:
 
 def _demo_settings() -> Settings:
     return Settings(
-        project=ProjectSettings(name="Demo Project"),
+        project=ProjectSettings(
+            name="Demo Project",
+            log_focus=LogFocusSettings(hide_health_checks=True),
+        ),
         kubernetes=KubernetesSettings(
             environment="demo",
             namespace="sample-app",
@@ -391,6 +396,9 @@ async def _capture(
             app.action_show_pods()
             app.action_show_logs()
             await app.workers.wait_for_complete()
+            await pilot.pause()
+            await pilot.click("#log-focus-toggle")
+            app.screen.query_one("#log-search-input", Input).value = "database"
         await pilot.pause()
         screenshot = app.export_screenshot(
             title=f"Ops Agent · {filename.removesuffix('.svg')}",

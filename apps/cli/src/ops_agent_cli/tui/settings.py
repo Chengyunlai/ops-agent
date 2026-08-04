@@ -354,6 +354,7 @@ class SettingsScreen(ModalScreen[Settings | None]):
             timeout = int(self.query_one("#setting-timeout", Input).value)
             project = ProjectSettings(
                 name=self.query_one("#setting-project-name", Input).value,
+                log_focus=self._settings.project.log_focus,
             )
             proxy_value = self.query_one("#setting-proxy", Input).value.strip()
             watch = KubernetesWatchSettings(

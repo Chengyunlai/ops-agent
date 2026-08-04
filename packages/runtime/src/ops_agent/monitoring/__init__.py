@@ -5,6 +5,10 @@ from ops_agent.kubernetes import (
     VolumeEntryKind,
 )
 from ops_agent.monitoring.kubernetes import KubernetesMonitor
+from ops_agent.monitoring.log_focus import (
+    apply_kubernetes_log_focus,
+    search_kubernetes_log_records,
+)
 from ops_agent.monitoring.metrics import (
     KubernetesMetricsSource,
     KubernetesMetricsUnavailable,
@@ -12,9 +16,14 @@ from ops_agent.monitoring.metrics import (
 from ops_agent.monitoring.models import (
     KubernetesContainerMetrics,
     KubernetesDeploymentTopology,
+    KubernetesLogFocus,
+    KubernetesLogFocusResult,
     KubernetesLogLevel,
     KubernetesLogQuery,
     KubernetesLogRecord,
+    KubernetesLogSearch,
+    KubernetesLogSearchMatch,
+    KubernetesLogSearchResult,
     KubernetesLogSnapshot,
     KubernetesLogSourceSnapshot,
     KubernetesMetricsAvailability,
@@ -34,9 +43,14 @@ from ops_agent.monitoring.models import (
 __all__ = [
     "KubernetesContainerMetrics",
     "KubernetesDeploymentTopology",
+    "KubernetesLogFocus",
+    "KubernetesLogFocusResult",
     "KubernetesLogLevel",
     "KubernetesLogQuery",
     "KubernetesLogRecord",
+    "KubernetesLogSearch",
+    "KubernetesLogSearchMatch",
+    "KubernetesLogSearchResult",
     "KubernetesLogSnapshot",
     "KubernetesLogSourceSnapshot",
     "KubernetesMetricsAvailability",
@@ -58,4 +72,6 @@ __all__ = [
     "VolumeDirectory",
     "VolumeEntry",
     "VolumeEntryKind",
+    "apply_kubernetes_log_focus",
+    "search_kubernetes_log_records",
 ]

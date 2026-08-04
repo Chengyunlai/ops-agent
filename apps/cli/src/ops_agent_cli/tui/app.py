@@ -26,7 +26,7 @@ from textual.timer import Timer
 from textual.widgets import Button, DataTable, Input, Static
 from urllib3.exceptions import InsecureRequestWarning
 
-from ops_agent_cli.configuration import Settings, TuiSettings
+from ops_agent_cli.configuration import LogFocusSettings, Settings, TuiSettings
 from ops_agent_cli.manual_access import (
     DownloadResult,
     InteractiveSessionResult,
@@ -991,6 +991,8 @@ class OpsAgentTui(App[None]):
                 source=self._monitor,
                 resource=resource,
                 containers=containers,
+                focus_settings=self._settings.project.log_focus,
+                save_focus_settings=self._save_log_focus_settings,
                 copy_mode=self._copy_mode,
             )
         )
@@ -1158,6 +1160,12 @@ class OpsAgentTui(App[None]):
         if requires_restart:
             message += " · Project Profile 重启生效"
         self.query_one("#status", Static).update(message)
+
+    def _save_log_focus_settings(self, focus: LogFocusSettings) -> None:
+        project = self._settings.project.model_copy(update={"log_focus": focus})
+        updated = self._settings.model_copy(update={"project": project})
+        self._save_settings(updated)
+        self._settings = updated
 
 
 def _next_event(events: Iterator[AgentEvent]) -> AgentEvent | None:

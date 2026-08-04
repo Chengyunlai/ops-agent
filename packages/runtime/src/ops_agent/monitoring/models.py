@@ -143,6 +143,40 @@ class KubernetesLogSnapshot:
         return tuple(record for source in self.sources for record in source.records)
 
 
+@dataclass(frozen=True)
+class KubernetesLogFocus:
+    hide_info: bool = False
+    hide_debug: bool = False
+    hide_health_checks: bool = False
+    hide_access_logs: bool = False
+    hidden_text: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class KubernetesLogFocusResult:
+    records: tuple[KubernetesLogRecord, ...]
+    hidden_count: int
+
+
+@dataclass(frozen=True)
+class KubernetesLogSearch:
+    text: str = ""
+    regex: bool = False
+    case_sensitive: bool = False
+
+
+@dataclass(frozen=True)
+class KubernetesLogSearchMatch:
+    record_index: int
+    spans: tuple[tuple[int, int], ...]
+
+
+@dataclass(frozen=True)
+class KubernetesLogSearchResult:
+    matches: tuple[KubernetesLogSearchMatch, ...]
+    error: str | None = None
+
+
 class KubernetesMetricsAvailability(StrEnum):
     DISABLED = "disabled"
     AVAILABLE = "available"
