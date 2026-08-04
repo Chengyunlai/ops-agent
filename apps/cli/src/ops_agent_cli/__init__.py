@@ -1,3 +1,3 @@
 """Ops Agent 命令行应用。"""
 
-__version__ = "0.1.8"
+__version__ = "0.1.9"
