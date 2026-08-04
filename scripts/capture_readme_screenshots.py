@@ -9,6 +9,8 @@ from ops_agent.agent import AgentEvent, AgentStage
 from ops_agent.diagnostics import FindingSeverity
 from ops_agent.kubernetes import KubernetesResourceKind
 from ops_agent.monitoring import (
+    KubernetesMetricsAvailability,
+    KubernetesMetricsStatus,
     KubernetesMonitorSnapshot,
     KubernetesResourceCollection,
     KubernetesResourceDiagnostic,
@@ -17,6 +19,7 @@ from ops_agent.monitoring import (
 )
 from ops_agent_cli.configuration import (
     KubernetesSettings,
+    KubernetesWatchSettings,
     ModelSettings,
     ProjectSettings,
     Settings,
@@ -104,13 +107,35 @@ def _demo_snapshot() -> KubernetesMonitorSnapshot:
                 pod,
                 "Pods",
                 "1",
-                ("NAME", "READY", "STATUS", "RESTARTS", "AGE"),
+                ("NAME", "CPU", "MEMORY", "READY", "STATUS", "RESTARTS", "AGE"),
                 (
-                    _row(pod, ("api-7d9f6c8b5-x2k4m", "2/2", "Running", "0", "18m")),
-                    _row(pod, ("web-6c7d8f9b4-p8q2n", "1/1", "Running", "0", "18m")),
                     _row(
                         pod,
-                        ("worker-0", "0/1", "Pending", "0", "18m"),
+                        (
+                            "api-7d9f6c8b5-x2k4m",
+                            "145m",
+                            "196Mi",
+                            "2/2",
+                            "Running",
+                            "0",
+                            "18m",
+                        ),
+                    ),
+                    _row(
+                        pod,
+                        (
+                            "web-6c7d8f9b4-p8q2n",
+                            "42m",
+                            "88Mi",
+                            "1/1",
+                            "Running",
+                            "0",
+                            "18m",
+                        ),
+                    ),
+                    _row(
+                        pod,
+                        ("worker-0", "-", "-", "0/1", "Pending", "0", "18m"),
                         healthy=False,
                         health_reasons=("Pod 无法调度",),
                     ),
@@ -228,6 +253,10 @@ def _demo_snapshot() -> KubernetesMonitorSnapshot:
                 evidence=("pod_condition: PodScheduled=False, reason=Unschedulable",),
             ),
         ),
+        metrics=KubernetesMetricsStatus(
+            availability=KubernetesMetricsAvailability.AVAILABLE,
+            observed_at=datetime(2026, 7, 29, 14, 19, 58, tzinfo=UTC),
+        ),
     )
 
 
@@ -239,6 +268,7 @@ def _demo_settings() -> Settings:
             namespace="sample-app",
             kubeconfig_path="/home/demo/.kube/config",
             request_timeout_seconds=10,
+            watch=KubernetesWatchSettings(enabled=False),
         ),
         model=ModelSettings(
             provider="openai",

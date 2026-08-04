@@ -30,7 +30,12 @@ from ops_agent.kubernetes import (
     VolumeFilePreview,
 )
 from ops_agent.monitoring import (
+    KubernetesContainerMetrics,
+    KubernetesMetricsAvailability,
+    KubernetesMetricsUnavailable,
     KubernetesMonitor,
+    KubernetesPodMetrics,
+    KubernetesPodMetricsSnapshot,
     KubernetesResourceKind,
     KubernetesResourceRef,
 )
@@ -324,6 +329,101 @@ def test_monitor_captures_fixed_namespace_snapshot() -> None:
         ("ingresses", "sample"),
         ("persistent_volume_claims", "sample"),
     ]
+
+
+def test_monitor_enriches_pod_rows_with_optional_metrics() -> None:
+    class MetricsSource:
+        def snapshot(self, namespace: str) -> KubernetesPodMetricsSnapshot:
+            assert namespace == "sample"
+            return KubernetesPodMetricsSnapshot(
+                observed_at=datetime(2026, 8, 4, 8, 15, 30, tzinfo=UTC),
+                pods=(
+                    KubernetesPodMetrics(
+                        name="sample-api",
+                        observed_at=datetime(2026, 8, 4, 8, 15, 30, tzinfo=UTC),
+                        window_seconds=30.0,
+                        containers=(
+                            KubernetesContainerMetrics(
+                                name="api",
+                                cpu_nano_cores=150_000_000,
+                                memory_bytes=96 * 1024 * 1024,
+                            ),
+                        ),
+                    ),
+                ),
+            )
+
+    monitor = KubernetesMonitor(
+        FakeKubernetesSource(),
+        namespace="sample",
+        metrics_source=MetricsSource(),
+    )
+
+    snapshot = monitor.snapshot()
+    pods = snapshot.collection(KubernetesResourceKind.POD)
+
+    assert pods is not None
+    assert pods.columns == (
+        "NAME",
+        "CPU",
+        "MEMORY",
+        "READY",
+        "STATUS",
+        "RESTARTS",
+        "AGE",
+    )
+    assert pods.rows[0].values[1:3] == ("150m", "96Mi")
+    assert snapshot.metrics.availability is KubernetesMetricsAvailability.AVAILABLE
+    assert snapshot.metrics.observed_at == datetime(
+        2026,
+        8,
+        4,
+        8,
+        15,
+        30,
+        tzinfo=UTC,
+    )
+
+
+def test_monitor_keeps_pod_inventory_when_optional_metrics_are_unavailable() -> None:
+    class UnavailableMetricsSource:
+        def snapshot(self, namespace: str) -> KubernetesPodMetricsSnapshot:
+            raise KubernetesMetricsUnavailable("Metrics API 未安装或未注册")
+
+    monitor = KubernetesMonitor(
+        FakeKubernetesSource(),
+        namespace="sample",
+        metrics_source=UnavailableMetricsSource(),
+    )
+
+    snapshot = monitor.snapshot()
+    pods = snapshot.collection(KubernetesResourceKind.POD)
+
+    assert pods is not None
+    assert pods.error is None
+    assert pods.rows[0].values[1:3] == ("-", "-")
+    assert snapshot.metrics.availability is KubernetesMetricsAvailability.UNAVAILABLE
+    assert snapshot.metrics.error == "Metrics API 未安装或未注册"
+
+
+def test_monitor_isolates_unexpected_optional_metrics_source_failures() -> None:
+    class BrokenMetricsSource:
+        def snapshot(self, namespace: str) -> KubernetesPodMetricsSnapshot:
+            raise RuntimeError("adapter bug")
+
+    monitor = KubernetesMonitor(
+        FakeKubernetesSource(),
+        namespace="sample",
+        metrics_source=BrokenMetricsSource(),
+    )
+
+    snapshot = monitor.snapshot()
+    pods = snapshot.collection(KubernetesResourceKind.POD)
+
+    assert pods is not None
+    assert pods.rows[0].ref.name == "sample-api"
+    assert snapshot.metrics.availability is KubernetesMetricsAvailability.UNAVAILABLE
+    assert snapshot.metrics.error == "Metrics adapter failure: adapter bug"
 
 
 def test_monitor_waits_for_change_without_exposing_namespace() -> None:

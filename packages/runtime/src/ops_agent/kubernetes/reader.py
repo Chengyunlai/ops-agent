@@ -8,6 +8,7 @@ from typing import Protocol, TypeVar
 from kubernetes import config
 from kubernetes import watch as kubernetes_watch
 from kubernetes.client import (
+    ApiClient,
     AppsV1Api,
     BatchV1Api,
     Configuration,
@@ -662,19 +663,10 @@ class KubernetesReader:
 
 def create_kubernetes_reader(
     settings: KubernetesConnectionSettings,
+    *,
+    api_client: ApiClient | None = None,
 ) -> KubernetesReader:
-    client_configuration = Configuration()
-    if settings.proxy_url is not None:
-        client_configuration.proxy = str(settings.proxy_url)
-    kubeconfig_path = settings.kubeconfig_path.expanduser()
-    try:
-        api_client = config.new_client_from_config(
-            config_file=str(kubeconfig_path),
-            persist_config=False,
-            client_configuration=client_configuration,
-        )
-    except ConfigException as error:
-        raise KubernetesError(f"无法加载 kubeconfig: {kubeconfig_path}") from error
+    api_client = api_client or create_kubernetes_api_client(settings)
     core_api = CoreV1Api(api_client)
 
     def execute_pod_command(**kwargs) -> str:
@@ -692,6 +684,24 @@ def create_kubernetes_reader(
         request_timeout_seconds=settings.request_timeout_seconds,
         pod_executor=execute_pod_command,
     )
+
+
+def create_kubernetes_api_client(
+    settings: KubernetesConnectionSettings,
+) -> ApiClient:
+    client_configuration = Configuration()
+    if settings.proxy_url is not None:
+        client_configuration.proxy = str(settings.proxy_url)
+    kubeconfig_path = settings.kubeconfig_path.expanduser()
+    try:
+        api_client = config.new_client_from_config(
+            config_file=str(kubeconfig_path),
+            persist_config=False,
+            client_configuration=client_configuration,
+        )
+    except ConfigException as error:
+        raise KubernetesError(f"无法加载 kubeconfig: {kubeconfig_path}") from error
+    return api_client
 
 
 def _to_pod_summary(pod) -> PodSummary:

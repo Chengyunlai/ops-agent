@@ -63,6 +63,9 @@ def test_load_settings_from_toml(tmp_path: Path):
     assert settings.kubernetes.watch.enabled
     assert settings.kubernetes.watch.timeout_seconds == 10
     assert settings.kubernetes.watch.poll_interval_seconds == 5.0
+    assert settings.kubernetes.metrics.enabled
+    assert settings.kubernetes.metrics.request_timeout_seconds == 3
+    assert settings.kubernetes.metrics.cache_ttl_seconds == 10.0
 
 
 def test_load_settings_parses_manual_pod_access_configuration(
@@ -129,6 +132,75 @@ def test_load_settings_parses_watch_refresh_configuration(tmp_path: Path) -> Non
     assert not settings.kubernetes.watch.enabled
     assert settings.kubernetes.watch.timeout_seconds == 15
     assert settings.kubernetes.watch.poll_interval_seconds == 7.5
+
+
+def test_load_settings_parses_optional_metrics_configuration(tmp_path: Path) -> None:
+    config_path = tmp_path / "metrics.toml"
+    config_path.write_text(
+        """
+        [kubernetes]
+        environment = "test"
+        namespace = "sample"
+        kubeconfig_path = "/tmp/ops_agent-kubeconfig"
+        request_timeout_seconds = 10
+
+        [kubernetes.metrics]
+        enabled = false
+        request_timeout_seconds = 5
+        cache_ttl_seconds = 15.0
+
+        [model]
+        provider = "openai"
+        model = "test-model"
+        """,
+        encoding="utf-8",
+    )
+
+    settings = load_settings(config_path)
+
+    assert not settings.kubernetes.metrics.enabled
+    assert settings.kubernetes.metrics.request_timeout_seconds == 5
+    assert settings.kubernetes.metrics.cache_ttl_seconds == 15.0
+
+
+@pytest.mark.parametrize(
+    ("field_name", "field_value"),
+    [
+        ("enabled", '"true"'),
+        ("request_timeout_seconds", "0"),
+        ("request_timeout_seconds", "31"),
+        ("request_timeout_seconds", "1.5"),
+        ("cache_ttl_seconds", "0.5"),
+        ("cache_ttl_seconds", "301.0"),
+        ("cache_ttl_seconds", '"10"'),
+    ],
+)
+def test_load_settings_rejects_invalid_optional_metrics_configuration(
+    tmp_path: Path,
+    field_name: str,
+    field_value: str,
+) -> None:
+    config_path = tmp_path / "invalid-metrics.toml"
+    config_path.write_text(
+        f"""
+        [kubernetes]
+        environment = "test"
+        namespace = "sample"
+        kubeconfig_path = "/tmp/ops_agent-kubeconfig"
+        request_timeout_seconds = 10
+
+        [kubernetes.metrics]
+        {field_name} = {field_value}
+
+        [model]
+        provider = "openai"
+        model = "test-model"
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SettingsError, match=field_name):
+        load_settings(config_path)
 
 
 @pytest.mark.parametrize(

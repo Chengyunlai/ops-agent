@@ -12,6 +12,11 @@ enabled = true
 timeout_seconds = 10
 poll_interval_seconds = 5.0
 
+[kubernetes.metrics]
+enabled = true
+request_timeout_seconds = 3
+cache_ttl_seconds = 10.0
+
 [kubernetes.interactive_exec]
 enabled = false
 locale = "auto"

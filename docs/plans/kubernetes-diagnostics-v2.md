@@ -1,7 +1,8 @@
 # Kubernetes Diagnostics V2 实施规划
 
-实施状态：Slice 1 至 Slice 5 已完成；指标时间线仅在已有 Metrics API 或已有
-Prometheus 被显式配置后实施，不由 Ops Agent 安装数据源。
+实施状态：Slice 1 至 Slice 7 已完成；当前指标切片读取已有 Metrics API 的
+Pod CPU/Memory 当前值。历史指标时间线仍需已有 Prometheus 等数据源，不由
+Ops Agent 安装数据源。
 
 ## 目标
 
@@ -191,7 +192,8 @@ namespace 纳入身份，不提前增加全局资源抽象。
 - [x] Deployment rollout condition 与 ReplicaSet/Pod owner 拓扑；
 - [x] `d` Event/Describe、`l` Pod 日志入口；
 - [x] 自动刷新后按资源 key 保持当前选择；
-- [ ] 指标时间线（仅读取显式配置的已有数据源，不安装、不由模型猜测）；
+- [x] 当前 Pod CPU/Memory（仅读取已有 Metrics API，不安装、不由模型猜测）；
+- [ ] 指标时间线（需要显式配置已有历史指标数据源）；
 - [x] Monitor 用稳定失效信号接入 Pod Watch，失败时保留完整快照轮询。
 
 ### Slice 6：Kubernetes Watch 增量刷新
@@ -209,6 +211,18 @@ namespace 纳入身份，不提前增加全局资源抽象。
 - [x] TUI 退出时主动停止底层 Watch，不应用晚到事件或 Snapshot；
 - [x] Watch 不注册为 Agent Tool，不改变 Interactive Pod Session、Artifact
   Download 或 PVC 浏览的人工权限边界。
+
+### Slice 7：可选 Kubernetes Metrics API
+
+- [x] `monitoring` 定义 SDK-independent Source；具体 Metrics API adapter 位于
+  `kubernetes/metrics.py`，不混入核心资源 Reader；
+- [x] 聚合 Container PodMetrics，在 Pod 表显示当前 CPU、Memory 和采样时间；
+- [x] API 缺失、403、临时故障或无效响应显示 `Metrics Unavailable`，其他资源
+  快照继续刷新；
+- [x] 开关、1～30 秒请求超时和 1～300 秒本地缓存由冻结的 Pydantic 模型约束；
+- [x] 不安装 metrics-server，不创建工作负载，不提升 RBAC；
+- [x] 当前指标不注册为 Agent Tool；未来 Agent 使用必须经过确定性的
+  Capability/Policy 授权，不能只靠 Prompt。
 
 ## 安全与失败模式
 

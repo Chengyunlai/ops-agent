@@ -41,8 +41,15 @@ from ops_agent.monitoring.diagnostics import (
 from ops_agent.monitoring.diagnostics import (
     with_health_reasons as _with_health_reasons,
 )
+from ops_agent.monitoring.metrics import (
+    KubernetesMetricsSource,
+    KubernetesMetricsUnavailable,
+)
 from ops_agent.monitoring.models import (
+    KubernetesMetricsAvailability,
+    KubernetesMetricsStatus,
     KubernetesMonitorSnapshot,
+    KubernetesPodMetricsSnapshot,
     KubernetesResourceCollection,
     KubernetesResourceContent,
     KubernetesResourceRef,
@@ -155,10 +162,12 @@ class KubernetesMonitor:
         source: KubernetesMonitoringSource,
         *,
         namespace: str,
+        metrics_source: KubernetesMetricsSource | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._source = source
         self._namespace = namespace
+        self._metrics_source = metrics_source
         self._clock = clock or _utc_now
         self._latest_snapshot: KubernetesMonitorSnapshot | None = None
 
@@ -189,6 +198,9 @@ class KubernetesMonitor:
             request=self._source.list_pods,
             to_row=lambda pod: _pod_row(pod, observed_at=observed_at),
         )
+        metrics_status, metrics_snapshot = self._read_metrics()
+        if self._metrics_source is not None:
+            pods = _with_pod_metrics(pods, metrics_snapshot)
         deployments, deployment_items = self._capture_observations(
             kind=KubernetesResourceKind.DEPLOYMENT,
             label="Deployments",
@@ -308,6 +320,7 @@ class KubernetesMonitor:
                 if endpoint_error is not None
                 else ()
             ),
+            metrics=metrics_status,
         )
         self._latest_snapshot = snapshot
         return snapshot
@@ -510,6 +523,42 @@ class KubernetesMonitor:
         except Exception as error:  # noqa: BLE001 - 清单仍可展示，诊断明确降级
             return (), str(error)
 
+    def _read_metrics(
+        self,
+    ) -> tuple[KubernetesMetricsStatus, KubernetesPodMetricsSnapshot | None]:
+        if self._metrics_source is None:
+            return (
+                KubernetesMetricsStatus(
+                    availability=KubernetesMetricsAvailability.DISABLED,
+                ),
+                None,
+            )
+        try:
+            snapshot = self._metrics_source.snapshot(self._namespace)
+        except KubernetesMetricsUnavailable as error:
+            return (
+                KubernetesMetricsStatus(
+                    availability=KubernetesMetricsAvailability.UNAVAILABLE,
+                    error=str(error),
+                ),
+                None,
+            )
+        except Exception as error:  # noqa: BLE001 - 可选数据源不能中断资源监盘
+            return (
+                KubernetesMetricsStatus(
+                    availability=KubernetesMetricsAvailability.UNAVAILABLE,
+                    error=f"Metrics adapter failure: {error}",
+                ),
+                None,
+            )
+        return (
+            KubernetesMetricsStatus(
+                availability=KubernetesMetricsAvailability.AVAILABLE,
+                observed_at=snapshot.observed_at,
+            ),
+            snapshot,
+        )
+
 
 def _ref(kind: KubernetesResourceKind, name: str) -> KubernetesResourceRef:
     return KubernetesResourceRef(kind=kind, name=name)
@@ -532,6 +581,56 @@ def _pod_row(
         ),
         healthy=healthy,
     )
+
+
+def _with_pod_metrics(
+    collection: KubernetesResourceCollection,
+    metrics: KubernetesPodMetricsSnapshot | None,
+) -> KubernetesResourceCollection:
+    metrics_by_name = (
+        {pod.name: pod for pod in metrics.pods} if metrics is not None else {}
+    )
+    return KubernetesResourceCollection(
+        kind=collection.kind,
+        label=collection.label,
+        shortcut=collection.shortcut,
+        columns=(collection.columns[0], "CPU", "MEMORY", *collection.columns[1:]),
+        rows=tuple(
+            KubernetesResourceRow(
+                ref=row.ref,
+                values=(
+                    row.values[0],
+                    _format_cpu(metrics_by_name[row.ref.name].cpu_nano_cores),
+                    _format_memory(metrics_by_name[row.ref.name].memory_bytes),
+                    *row.values[1:],
+                )
+                if row.ref.name in metrics_by_name
+                else (row.values[0], "-", "-", *row.values[1:]),
+                healthy=row.healthy,
+                health_reasons=row.health_reasons,
+            )
+            for row in collection.rows
+        ),
+        error=collection.error,
+    )
+
+
+def _format_cpu(nano_cores: int) -> str:
+    milli_cores = nano_cores / 1_000_000
+    if milli_cores == 0:
+        return "0m"
+    if milli_cores < 1:
+        return f"{milli_cores:.1f}m"
+    return f"{milli_cores:.0f}m"
+
+
+def _format_memory(memory_bytes: int) -> str:
+    mebibytes = memory_bytes / (1024 * 1024)
+    if mebibytes >= 1024:
+        return f"{mebibytes / 1024:.1f}Gi"
+    if mebibytes >= 1:
+        return f"{mebibytes:.0f}Mi"
+    return f"{memory_bytes / 1024:.0f}Ki"
 
 
 def _format_age(
