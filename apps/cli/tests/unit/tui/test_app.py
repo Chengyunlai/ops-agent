@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event, Lock
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from ops_agent.agent import (
     AgentEvent,
@@ -19,6 +20,11 @@ from ops_agent.kubernetes import (
     PersistentVolumeMountSummary,
 )
 from ops_agent.monitoring import (
+    KubernetesLogLevel,
+    KubernetesLogQuery,
+    KubernetesLogRecord,
+    KubernetesLogSnapshot,
+    KubernetesLogSourceSnapshot,
     KubernetesMonitorSnapshot,
     KubernetesResourceCollection,
     KubernetesResourceContent,
@@ -43,6 +49,8 @@ from ops_agent_cli.configuration import (
 from ops_agent_cli.manual_access import DownloadResult, InteractiveSessionResult
 from ops_agent_cli.tui import run_tui
 from ops_agent_cli.tui.app import OpsAgentTui
+from ops_agent_cli.tui.resources import logs as log_resources
+from ops_agent_cli.tui.resources.logs import LogRangePreset, LogWorkbench
 from textual.color import Color
 from textual.coordinate import Coordinate
 from textual.widgets import Button, DataTable, Input, Markdown, RichLog, Select, Static
@@ -85,6 +93,7 @@ class FakeMonitor:
         self.calls = 0
         self.stop_watch_calls = 0
         self.content_calls: list[tuple[str, object]] = []
+        self.follow_started = Event()
 
     def snapshot(self) -> KubernetesMonitorSnapshot:
         self.calls += 1
@@ -139,6 +148,74 @@ class FakeMonitor:
     ) -> tuple[str, ...]:
         self.content_calls.append(("pod_containers", resource))
         return ("api", "sidecar")
+
+    def pod_log_snapshot(
+        self,
+        resource: KubernetesResourceRef,
+        *,
+        query: KubernetesLogQuery,
+    ) -> KubernetesLogSnapshot:
+        self.content_calls.append(("log_snapshot", (resource, query)))
+        container = query.container or "api"
+        records = (
+            KubernetesLogRecord(
+                container=container,
+                timestamp=datetime(2026, 8, 4, 3, 50, tzinfo=UTC),
+                message="INFO server started",
+                raw="2026-08-04T03:50:00Z INFO server started",
+                level=KubernetesLogLevel.INFO,
+            ),
+            KubernetesLogRecord(
+                container=container,
+                timestamp=datetime(2026, 8, 4, 3, 51, tzinfo=UTC),
+                message='WARN "GET /health HTTP/1.1" 404',
+                raw='2026-08-04T03:51:00Z WARN "GET /health HTTP/1.1" 404',
+                level=KubernetesLogLevel.WARNING,
+            ),
+            KubernetesLogRecord(
+                container=container,
+                timestamp=datetime(2026, 8, 4, 3, 52, tzinfo=UTC),
+                message="ERROR " + "database unavailable " * 20,
+                raw=("2026-08-04T03:52:00Z ERROR " + "database unavailable " * 20),
+                level=KubernetesLogLevel.ERROR,
+            ),
+        )
+        raw_content = "\n".join(record.raw for record in records) + "\n"
+        return KubernetesLogSnapshot(
+            namespace="sample",
+            pod_name=resource.name,
+            observed_at=datetime(2026, 8, 4, 4, 0, tzinfo=UTC),
+            query=query,
+            sources=(
+                KubernetesLogSourceSnapshot(
+                    container=container,
+                    raw_content=raw_content,
+                    records=records,
+                ),
+            ),
+        )
+
+    def follow_pod_logs(
+        self,
+        resource: KubernetesResourceRef,
+        *,
+        container: str | None,
+        since_time: datetime,
+        stop_event: Event,
+    ):
+        self.content_calls.append(("follow_logs", (resource, container, since_time)))
+        self.follow_started.set()
+        yield KubernetesLogRecord(
+            container=container,
+            timestamp=datetime(2026, 8, 4, 4, 0, 1, tzinfo=UTC),
+            message="ERROR live failure",
+            raw="2026-08-04T04:00:01Z ERROR live failure",
+            level=KubernetesLogLevel.ERROR,
+        )
+        stop_event.wait(timeout=2)
+
+    def stop_following_pod_logs(self) -> None:
+        self.content_calls.append(("stop_follow_logs", None))
 
     def browse_pvc(
         self,
@@ -634,7 +711,7 @@ def test_tui_copy_mode_releases_and_restores_terminal_mouse_capture() -> None:
 
             await pilot.press("ctrl+k", "1", "l")
             await app.workers.wait_for_complete()
-            await pilot.click("#resource-copy-button")
+            await pilot.click("#log-copy-button")
             assert mouse_capture_calls == [
                 "disable",
                 "enable",
@@ -643,7 +720,7 @@ def test_tui_copy_mode_releases_and_restores_terminal_mouse_capture() -> None:
                 "disable",
             ]
             assert "COPY MODE" in str(
-                app.screen.query_one("#resource-footer-text", Static).content
+                app.screen.query_one("#log-footer", Static).content
             )
 
             viewer = app.screen
@@ -657,9 +734,7 @@ def test_tui_copy_mode_releases_and_restores_terminal_mouse_capture() -> None:
                 "enable",
             ]
             assert app.screen is viewer
-            assert "F2 备用" in str(
-                app.screen.query_one("#resource-footer-text", Static).content
-            )
+            assert "F2 备用" in str(app.screen.query_one("#log-footer", Static).content)
 
             await pilot.press("escape")
             assert app.screen is not viewer
@@ -940,7 +1015,7 @@ def test_tui_opens_describe_and_pod_logs_for_selected_resource() -> None:
             await app.workers.wait_for_complete()
             await pilot.pause()
             assert "Logs · Pod/sample-api-7f8" in str(
-                app.screen.query_one("#resource-title", Static).content
+                app.screen.query_one("#log-title", Static).content
             )
             assert monitor.content_calls == [
                 (
@@ -951,13 +1026,20 @@ def test_tui_opens_describe_and_pod_logs_for_selected_resource() -> None:
                     ),
                 ),
                 (
-                    "logs",
+                    "pod_containers",
+                    KubernetesResourceRef(
+                        kind=KubernetesResourceKind.POD,
+                        name="sample-api-7f8",
+                    ),
+                ),
+                (
+                    "log_snapshot",
                     (
                         KubernetesResourceRef(
                             kind=KubernetesResourceKind.POD,
                             name="sample-api-7f8",
                         ),
-                        200,
+                        KubernetesLogQuery(container="api", tail_lines=200),
                     ),
                 ),
             ]
@@ -1166,15 +1248,34 @@ def test_tui_downloads_selected_pvc_file_with_s(
 
 def test_tui_renders_each_log_record_on_its_own_line() -> None:
     class MultilineLogMonitor(FakeMonitor):
-        def pod_logs(
+        def pod_log_snapshot(
             self,
             resource: KubernetesResourceRef,
             *,
-            tail_lines: int = 200,
-        ) -> KubernetesResourceContent:
-            return KubernetesResourceContent(
-                title=f"Logs · Pod/{resource.name}",
-                content="first record\nsecond record\nthird record\n",
+            query: KubernetesLogQuery,
+        ) -> KubernetesLogSnapshot:
+            records = tuple(
+                KubernetesLogRecord(
+                    container="api",
+                    timestamp=None,
+                    message=message,
+                    raw=message,
+                    level=KubernetesLogLevel.UNKNOWN,
+                )
+                for message in ("first record", "second record", "third record")
+            )
+            return KubernetesLogSnapshot(
+                namespace="sample",
+                pod_name=resource.name,
+                observed_at=datetime(2026, 8, 4, 4, 0, tzinfo=UTC),
+                query=query,
+                sources=(
+                    KubernetesLogSourceSnapshot(
+                        container="api",
+                        raw_content="first record\nsecond record\nthird record\n",
+                        records=records,
+                    ),
+                ),
             )
 
     async def exercise() -> None:
@@ -1189,12 +1290,367 @@ def test_tui_renders_each_log_record_on_its_own_line() -> None:
             await app.workers.wait_for_complete()
             await pilot.pause()
 
-            viewer = app.screen.query_one("#resource-content", RichLog)
+            viewer = app.screen.query_one("#log-content", RichLog)
             assert [line.text for line in viewer.lines] == [
                 "first record",
                 "second record",
                 "third record",
             ]
+
+    asyncio.run(exercise())
+
+
+def test_tui_opens_readable_log_workbench_with_container_and_range_controls() -> None:
+    async def exercise() -> None:
+        monitor = FakeMonitor()
+        app = create_tui(
+            FakeAgent(answer="unused"),
+            monitor=monitor,
+        )
+
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete()
+            await pilot.press("ctrl+k", "1", "l")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            assert app.screen.query_one("#log-container", Select).value == "api"
+            assert (
+                app.screen.query_one("#log-range", Select).value
+                is LogRangePreset.LAST_200_LINES
+            )
+            viewer = app.screen.query_one("#log-content", RichLog)
+            assert viewer.wrap is True
+            assert isinstance(app.screen, LogWorkbench)
+            assert app.screen._level_style(KubernetesLogLevel.ERROR) == (
+                f"bold {app.current_theme.error}"
+            )
+            assert app.screen._level_style(KubernetesLogLevel.WARNING) == (
+                app.current_theme.warning
+            )
+            assert app.screen._level_style(KubernetesLogLevel.UNKNOWN) == ""
+            rendered_lines = [line.text for line in viewer.lines]
+            assert rendered_lines[:2] == [
+                "2026-08-04T03:50:00Z INFO server started",
+                '2026-08-04T03:51:00Z WARN "GET /health HTTP/1.1" 404',
+            ]
+            assert len(rendered_lines) > 3
+            assert "".join(rendered_lines[2:]) == (
+                "2026-08-04T03:52:00Z ERROR " + "database unavailable " * 20
+            )
+            status = str(app.screen.query_one("#log-status", Static).content)
+            assert "3 records" in status
+            assert "ERROR 1" in status
+            assert "WARN 1" in status
+            assert "WRAP" in status
+            assert monitor.content_calls == [
+                (
+                    "pod_containers",
+                    KubernetesResourceRef(
+                        kind=KubernetesResourceKind.POD,
+                        name="sample-api-7f8",
+                    ),
+                ),
+                (
+                    "log_snapshot",
+                    (
+                        KubernetesResourceRef(
+                            kind=KubernetesResourceKind.POD,
+                            name="sample-api-7f8",
+                        ),
+                        KubernetesLogQuery(container="api", tail_lines=200),
+                    ),
+                ),
+            ]
+
+            await pilot.press("w")
+            await pilot.pause()
+            status = str(app.screen.query_one("#log-status", Static).content)
+            assert "TRUNCATE" in status
+            assert len(viewer.lines[-1].text) <= 163
+
+            await pilot.press("w")
+            await pilot.pause()
+            status = str(app.screen.query_one("#log-status", Static).content)
+            assert "FULL" in status
+            assert viewer.wrap is False
+            assert len(viewer.lines[-1].text) > 163
+
+            app.screen.query_one("#log-container", Select).value = "sidecar"
+            app.screen.query_one(
+                "#log-range", Select
+            ).value = LogRangePreset.LAST_15_MINUTES
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            assert monitor.content_calls[-1] == (
+                "log_snapshot",
+                (
+                    KubernetesResourceRef(
+                        kind=KubernetesResourceKind.POD,
+                        name="sample-api-7f8",
+                    ),
+                    KubernetesLogQuery(
+                        container="sidecar",
+                        tail_lines=None,
+                        since_seconds=900,
+                    ),
+                ),
+            )
+
+    asyncio.run(exercise())
+
+
+def test_tui_can_show_all_container_sources_and_recover_from_source_errors() -> None:
+    class MultiContainerLogMonitor(FakeMonitor):
+        def pod_log_snapshot(
+            self,
+            resource: KubernetesResourceRef,
+            *,
+            query: KubernetesLogQuery,
+        ) -> KubernetesLogSnapshot:
+            if query.container is not None:
+                return super().pod_log_snapshot(resource, query=query)
+            record = KubernetesLogRecord(
+                container="api",
+                timestamp=datetime(2026, 8, 4, 3, 50, tzinfo=UTC),
+                message="INFO api ready",
+                raw="2026-08-04T03:50:00Z INFO api ready",
+                level=KubernetesLogLevel.INFO,
+            )
+            return KubernetesLogSnapshot(
+                namespace="sample",
+                pod_name=resource.name,
+                observed_at=datetime(2026, 8, 4, 4, 0, tzinfo=UTC),
+                query=query,
+                sources=(
+                    KubernetesLogSourceSnapshot(
+                        container="api",
+                        raw_content=f"{record.raw}\n",
+                        records=(record,),
+                    ),
+                    KubernetesLogSourceSnapshot(
+                        container="sidecar",
+                        raw_content="",
+                        records=(),
+                        error="permission denied",
+                    ),
+                ),
+            )
+
+    async def exercise() -> None:
+        app = create_tui(
+            FakeAgent(answer="unused"),
+            monitor=MultiContainerLogMonitor(),
+        )
+
+        async with app.run_test(size=(120, 34)) as pilot:
+            await app.workers.wait_for_complete()
+            await pilot.press("ctrl+k", "1", "l")
+            await app.workers.wait_for_complete()
+            app.screen.query_one("#log-container", Select).value = None
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            rendered = "\n".join(
+                line.text
+                for line in app.screen.query_one("#log-content", RichLog).lines
+            )
+            assert "api │ 2026-08-04T03:50:00Z INFO api ready" in rendered
+            assert "[sidecar unavailable] permission denied" in rendered
+            status = str(app.screen.query_one("#log-status", Static).content)
+            assert "SOURCE ERROR 1" in status
+            assert "Esc 返回并选择新 Pod" in status
+
+            await pilot.press("f")
+            assert "Follow 需要选择单个容器" in str(
+                app.screen.query_one("#log-status", Static).content
+            )
+
+    asyncio.run(exercise())
+
+
+def test_tui_can_follow_and_stop_new_log_records_without_replacing_snapshot() -> None:
+    async def exercise() -> None:
+        monitor = FakeMonitor()
+        app = create_tui(
+            FakeAgent(answer="unused"),
+            monitor=monitor,
+        )
+
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete()
+            await pilot.press("ctrl+k", "1", "l")
+            await app.workers.wait_for_complete()
+            await pilot.press("f")
+            for _ in range(20):
+                await pilot.pause()
+                if monitor.follow_started.is_set():
+                    break
+
+            viewer = app.screen.query_one("#log-content", RichLog)
+            rendered = "\n".join(line.text for line in viewer.lines)
+            assert "INFO server started" in rendered
+            assert "ERROR live failure" in rendered
+            status = str(app.screen.query_one("#log-status", Static).content)
+            assert "4 records" in status
+            assert "ERROR 2" in status
+            assert "FOLLOW" in status
+
+            await pilot.press("f")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            status = str(app.screen.query_one("#log-status", Static).content)
+            assert "SNAPSHOT" in status
+            assert any(call[0] == "stop_follow_logs" for call in monitor.content_calls)
+
+    asyncio.run(exercise())
+
+
+def test_tui_only_suppresses_snapshot_boundary_replay_during_follow() -> None:
+    class RepeatingFollowMonitor(FakeMonitor):
+        def follow_pod_logs(
+            self,
+            resource: KubernetesResourceRef,
+            *,
+            container: str | None,
+            since_time: datetime,
+            stop_event: Event,
+        ):
+            boundary = KubernetesLogRecord(
+                container=container,
+                timestamp=datetime(2026, 8, 4, 3, 52, tzinfo=UTC),
+                message="ERROR " + "database unavailable " * 20,
+                raw=("2026-08-04T03:52:00Z ERROR " + "database unavailable " * 20),
+                level=KubernetesLogLevel.ERROR,
+            )
+            repeated = KubernetesLogRecord(
+                container=container,
+                timestamp=datetime(2026, 8, 4, 3, 53, tzinfo=UTC),
+                message="INFO repeated event",
+                raw="2026-08-04T03:53:00Z INFO repeated event",
+                level=KubernetesLogLevel.INFO,
+            )
+            yield boundary
+            yield repeated
+            yield repeated
+
+    async def exercise() -> None:
+        app = create_tui(
+            FakeAgent(answer="unused"),
+            monitor=RepeatingFollowMonitor(),
+        )
+
+        async with app.run_test(size=(120, 34)) as pilot:
+            await app.workers.wait_for_complete()
+            await pilot.press("ctrl+k", "1", "l")
+            await app.workers.wait_for_complete()
+            await pilot.press("f")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            rendered = "\n".join(
+                line.text
+                for line in app.screen.query_one("#log-content", RichLog).lines
+            )
+            assert rendered.count("03:52:00Z ERROR") == 1
+            assert rendered.count("03:53:00Z INFO repeated event") == 2
+            assert "5 records" in str(
+                app.screen.query_one("#log-status", Static).content
+            )
+
+    asyncio.run(exercise())
+
+
+def test_tui_reports_when_bounded_follow_buffer_omits_older_records() -> None:
+    class BoundedFollowMonitor(FakeMonitor):
+        def follow_pod_logs(
+            self,
+            resource: KubernetesResourceRef,
+            *,
+            container: str | None,
+            since_time: datetime,
+            stop_event: Event,
+        ):
+            for second in (53, 54, 55):
+                yield KubernetesLogRecord(
+                    container=container,
+                    timestamp=datetime(2026, 8, 4, 3, second, tzinfo=UTC),
+                    message=f"INFO followed record {second}",
+                    raw=f"2026-08-04T03:{second}:00Z INFO followed record {second}",
+                    level=KubernetesLogLevel.INFO,
+                )
+
+    async def exercise() -> None:
+        app = create_tui(
+            FakeAgent(answer="unused"),
+            monitor=BoundedFollowMonitor(),
+        )
+
+        async with app.run_test(size=(120, 34)) as pilot:
+            await app.workers.wait_for_complete()
+            await pilot.press("ctrl+k", "1", "l")
+            await app.workers.wait_for_complete()
+            await pilot.press("f")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            status = str(app.screen.query_one("#log-status", Static).content)
+            assert "FOLLOW OMITTED 1" in status
+            rendered = "\n".join(
+                line.text
+                for line in app.screen.query_one("#log-content", RichLog).lines
+            )
+            assert "1 newer Follow records were not added" in rendered
+            assert "followed record 53" in rendered
+            assert "followed record 54" in rendered
+            assert "followed record 55" not in rendered
+            assert "Follow 已停止：达到 2 条安全上限" in status
+
+    with patch.object(log_resources, "_MAX_FOLLOW_RECORDS", 2):
+        asyncio.run(exercise())
+
+
+def test_tui_keeps_snapshot_visible_when_log_follow_is_interrupted() -> None:
+    class InterruptedFollowMonitor(FakeMonitor):
+        def follow_pod_logs(
+            self,
+            resource: KubernetesResourceRef,
+            *,
+            container: str | None,
+            since_time: datetime,
+            stop_event: Event,
+        ):
+            if False:
+                yield
+            raise RuntimeError("upstream connection reset")
+
+    async def exercise() -> None:
+        app = create_tui(
+            FakeAgent(answer="unused"),
+            monitor=InterruptedFollowMonitor(),
+        )
+
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete()
+            await pilot.press("ctrl+k", "1", "l")
+            await app.workers.wait_for_complete()
+            await pilot.press("f")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            rendered = "\n".join(
+                line.text
+                for line in app.screen.query_one("#log-content", RichLog).lines
+            )
+            assert "INFO server started" in rendered
+            status = str(app.screen.query_one("#log-status", Static).content)
+            assert "3 records" in status
+            assert "Follow 中断：upstream connection reset" in status
+            assert "按 f 重连" in status
+            assert "Esc 返回并选择新 Pod" in status
+            assert "SNAPSHOT" in status
 
     asyncio.run(exercise())
 

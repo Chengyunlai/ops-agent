@@ -1,4 +1,4 @@
-from typing import ClassVar, Protocol, cast
+from typing import ClassVar, cast
 
 from ops_agent.monitoring import KubernetesResourceContent
 from textual import on
@@ -8,11 +8,7 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, RichLog, Static
 
-
-class CopyModeController(Protocol):
-    def exit_copy_mode(self) -> bool: ...
-
-    def action_toggle_copy_mode(self) -> None: ...
+from ops_agent_cli.tui.resources.contracts import CopyModeController
 
 
 class ResourceViewer(ModalScreen[None]):

@@ -12,6 +12,11 @@ from ops_agent.monitoring.metrics import (
 from ops_agent.monitoring.models import (
     KubernetesContainerMetrics,
     KubernetesDeploymentTopology,
+    KubernetesLogLevel,
+    KubernetesLogQuery,
+    KubernetesLogRecord,
+    KubernetesLogSnapshot,
+    KubernetesLogSourceSnapshot,
     KubernetesMetricsAvailability,
     KubernetesMetricsStatus,
     KubernetesMonitorSnapshot,
@@ -29,6 +34,11 @@ from ops_agent.monitoring.models import (
 __all__ = [
     "KubernetesContainerMetrics",
     "KubernetesDeploymentTopology",
+    "KubernetesLogLevel",
+    "KubernetesLogQuery",
+    "KubernetesLogRecord",
+    "KubernetesLogSnapshot",
+    "KubernetesLogSourceSnapshot",
     "KubernetesMetricsAvailability",
     "KubernetesMetricsSource",
     "KubernetesMetricsStatus",

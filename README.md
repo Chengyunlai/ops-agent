@@ -57,6 +57,10 @@
 
 ![Ops Agent 项目与界面设置](docs/images/tui-settings.svg)
 
+### Pod 日志工作台
+
+![Ops Agent Pod 日志工作台，包含容器、范围、长行与重要级别](docs/images/tui-logs.svg)
+
 ## 技术栈
 
 - Python 3.12+（仅源码开发需要；GitHub Release 已内置运行时）
@@ -352,7 +356,18 @@ Overview 中可用方向键和 `Enter` 进入任意资源类型。选中资源�
 `Enter` 或 `h` 打开最新确定性 Finding 和 Evidence；Deployment 还会显示
 generation、observedGeneration、revision、Conditions，以及只按 controller
 owner 构建的 Deployment → ReplicaSet → Pod 拓扑。`d` 读取原始对象详情与
-关联 Event；Pod 上按 `l` 读取每个容器最近 200 行日志。实时 CPU/Memory 只由
+关联 Event；Pod 上按 `l` 进入全屏日志工作台。工作台可选择单个或全部容器，
+以及最近 200、500、1000 行或最近 15 分钟、1 小时；全部容器视图会标记来源，
+且单个容器读取失败不会遮蔽其他容器。默认保留完整 Log Snapshot 并对长行自动
+换行，按 `w` 可在换行、按当前视口截断和完整水平查看之间切换。ERROR、WARN、
+完整异常栈和 HTTP 4xx/5xx 使用当前主题的语义色突出显示。
+选择单个容器后，按 `f` 开启或停止只读 Log Follow；新记录追加在原始快照之后，
+只抑制 Follow 开始时 Kubernetes API 重放的快照边界记录，不会合并后续相同事件。
+Follow 最多保留 10,000 条追加记录，达到上限时会停止并明确提示未追加记录；
+流中断会保留已有内容并显示重连或返回选择重建后 Pod 的操作。日志读取和 Follow
+都直接使用 Kubernetes API，不依赖 Pod Shell、不安装采集组件，也不把操作交给
+AI。
+实时 CPU/Memory 只由
 确定性的本地 Monitor 读取，不注册为 Agent Tool，也不会由模型猜测；历史指标
 时间线仍需已有 Prometheus 等外部数据源才可能提供。
 
@@ -829,6 +844,9 @@ make check
 - [x] 最小 Kubernetes 只读诊断计划
 - [x] Kubernetes 原生资源压力证据（requests/limits、OOM、调度不足与驱逐）
 - [x] 可选 Metrics API 实时 Pod CPU/Memory 与独立降级
+- [x] Log Snapshot、范围选择、长行显示和可停止的 Log Follow
+- [ ] Log Focus、手动隐藏规则与日志搜索
+- [ ] 原始 Log Snapshot 与过滤结果安全导出
 - [ ] 发布失败根因闭环
 - [ ] 已有 Prometheus、日志与告警平台的可选只读接入
 - [x] LLM 工具调用与基础 Agent 编排

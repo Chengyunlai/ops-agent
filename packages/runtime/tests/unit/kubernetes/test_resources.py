@@ -1,6 +1,7 @@
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import Event
 from types import SimpleNamespace
 
 from kubernetes.client.exceptions import ApiException
@@ -508,6 +509,142 @@ def test_get_pod_logs_applies_container_tail_and_previous_instance() -> None:
             },
         )
     ]
+
+
+def test_get_pod_logs_can_select_a_bounded_time_range() -> None:
+    reader, core_api, _ = create_reader()
+
+    reader.get_pod_logs(
+        "sample",
+        "sample-api",
+        container="api",
+        tail_lines=None,
+        since_seconds=15 * 60,
+    )
+
+    assert core_api.calls == [
+        (
+            "read_namespaced_pod_log",
+            {
+                "name": "sample-api",
+                "namespace": "sample",
+                "container": "api",
+                "since_seconds": 900,
+                "timestamps": True,
+                "previous": False,
+                "_request_timeout": 7,
+                "_preload_content": False,
+            },
+        )
+    ]
+
+
+def test_follow_pod_logs_streams_complete_lines_and_closes_response() -> None:
+    class LogStreamResponse:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def stream(self, *, amt: int, decode_content: bool):
+            assert amt == 64 * 1024
+            assert decode_content is True
+            yield b"2026-08-04T03:50:00Z INFO first"
+            yield b" record\n2026-08-04T03:50:01Z ERROR failed\npartial"
+            yield b" final\n"
+
+        def close(self) -> None:
+            self.closed = True
+
+    class FollowCoreV1Api(FakeCoreV1Api):
+        def __init__(self) -> None:
+            super().__init__()
+            self.response = LogStreamResponse()
+
+        def read_namespaced_pod_log(self, **kwargs):
+            self.calls.append(("read_namespaced_pod_log", kwargs))
+            return self.response
+
+    core_api = FollowCoreV1Api()
+    reader = KubernetesReader(
+        core_api=core_api,
+        apps_api=FakeAppsV1Api(),
+        request_timeout_seconds=7,
+    )
+    since_time = datetime(2026, 8, 4, 3, 49, 59, tzinfo=UTC)
+
+    lines = list(
+        reader.follow_pod_logs(
+            "sample",
+            "sample-api",
+            container="api",
+            since_time=since_time,
+            stop_event=Event(),
+        )
+    )
+
+    assert lines == [
+        "2026-08-04T03:50:00Z INFO first record",
+        "2026-08-04T03:50:01Z ERROR failed",
+        "partial final",
+    ]
+    assert core_api.calls == [
+        (
+            "read_namespaced_pod_log",
+            {
+                "name": "sample-api",
+                "namespace": "sample",
+                "container": "api",
+                "follow": True,
+                "since_time": since_time,
+                "timestamps": True,
+                "_request_timeout": (7, None),
+                "_preload_content": False,
+            },
+        )
+    ]
+    assert core_api.response.closed is True
+
+
+def test_stop_following_pod_logs_closes_the_active_stream() -> None:
+    class ActiveLogStream:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def stream(self, *, amt: int, decode_content: bool):
+            yield b"2026-08-04T03:50:00Z INFO first record\n"
+            if not self.closed:
+                yield b"2026-08-04T03:50:01Z INFO second record\n"
+
+        def close(self) -> None:
+            self.closed = True
+
+    class FollowCoreV1Api(FakeCoreV1Api):
+        def __init__(self) -> None:
+            super().__init__()
+            self.response = ActiveLogStream()
+
+        def read_namespaced_pod_log(self, **kwargs):
+            self.calls.append(("read_namespaced_pod_log", kwargs))
+            return self.response
+
+    core_api = FollowCoreV1Api()
+    reader = KubernetesReader(
+        core_api=core_api,
+        apps_api=FakeAppsV1Api(),
+        request_timeout_seconds=7,
+    )
+    stream = reader.follow_pod_logs(
+        "sample",
+        "sample-api",
+        container="api",
+        since_time=datetime(2026, 8, 4, 3, 49, 59, tzinfo=UTC),
+        stop_event=Event(),
+    )
+
+    assert next(stream) == "2026-08-04T03:50:00Z INFO first record"
+    reader.stop_following_pod_logs()
+
+    assert core_api.response.closed is True
+    stream.close()
 
 
 def test_list_events_can_filter_by_pod() -> None:

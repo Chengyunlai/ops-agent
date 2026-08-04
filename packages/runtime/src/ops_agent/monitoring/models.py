@@ -73,6 +73,76 @@ class KubernetesResourceContent:
     content: str
 
 
+class KubernetesLogLevel(StrEnum):
+    DEBUG = "debug"
+    INFO = "info"
+    WARNING = "warning"
+    ERROR = "error"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class KubernetesLogQuery:
+    container: str | None = None
+    tail_lines: int | None = 200
+    since_seconds: int | None = None
+
+    def __post_init__(self) -> None:
+        selected_ranges = sum(
+            value is not None for value in (self.tail_lines, self.since_seconds)
+        )
+        if selected_ranges != 1:
+            raise ValueError("日志范围必须且只能设置 tail_lines 或 since_seconds")
+        if self.tail_lines is not None and self.tail_lines <= 0:
+            raise ValueError("tail_lines 必须大于 0")
+        if self.since_seconds is not None and self.since_seconds <= 0:
+            raise ValueError("since_seconds 必须大于 0")
+
+    @property
+    def range_label(self) -> str:
+        if self.tail_lines is not None:
+            return f"last {self.tail_lines} lines"
+        if self.since_seconds is None:
+            raise AssertionError("validated log query has no range")
+        minutes, seconds = divmod(self.since_seconds, 60)
+        if seconds == 0 and minutes < 60:
+            return f"last {minutes}m"
+        hours, remaining_minutes = divmod(minutes, 60)
+        if seconds == 0 and remaining_minutes == 0:
+            return f"last {hours}h"
+        return f"last {self.since_seconds}s"
+
+
+@dataclass(frozen=True)
+class KubernetesLogRecord:
+    container: str | None
+    timestamp: datetime | None
+    message: str
+    raw: str
+    level: KubernetesLogLevel
+
+
+@dataclass(frozen=True)
+class KubernetesLogSourceSnapshot:
+    container: str | None
+    raw_content: str
+    records: tuple[KubernetesLogRecord, ...]
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class KubernetesLogSnapshot:
+    namespace: str
+    pod_name: str
+    observed_at: datetime
+    query: KubernetesLogQuery
+    sources: tuple[KubernetesLogSourceSnapshot, ...]
+
+    @property
+    def records(self) -> tuple[KubernetesLogRecord, ...]:
+        return tuple(record for source in self.sources for record in source.records)
+
+
 class KubernetesMetricsAvailability(StrEnum):
     DISABLED = "disabled"
     AVAILABLE = "available"

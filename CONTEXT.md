@@ -66,6 +66,26 @@ local download root. It may be requested from an Interactive Pod Session, but
 the host performs the transfer outside the remote Shell command stream.
 _Avoid_: Shell download, Agent export, remote copy
 
+**Log Snapshot**:
+A bounded, read-only observation of selected Pod container logs with an explicit
+line or time range, retained unchanged while the operator examines it.
+_Avoid_: Full log history, live log buffer
+
+**Log Follow**:
+An operator-controlled viewing mode that appends new Pod container log records
+as they arrive without changing the read-only access boundary.
+_Avoid_: Log polling, background collection
+
+**Log Focus**:
+An operator-selected view that hides records using explicit filters while
+preserving the complete underlying Log Snapshot.
+_Avoid_: Log cleanup, discarded logs, AI-selected noise
+
+**Log Export**:
+A user-initiated local file generated from either an original Log Snapshot or
+its current Log Focus, distinct from transferring a file stored in a container.
+_Avoid_: Artifact Download, Pod file download
+
 **Pod Transfer Strategy**:
 A validated host policy that probes a selected container and chooses a
 supported read-only transfer adapter. Runtime callers and the Agent do not

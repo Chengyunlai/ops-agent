@@ -9,6 +9,11 @@ from ops_agent.agent import AgentEvent, AgentStage
 from ops_agent.diagnostics import FindingSeverity
 from ops_agent.kubernetes import KubernetesResourceKind
 from ops_agent.monitoring import (
+    KubernetesLogLevel,
+    KubernetesLogQuery,
+    KubernetesLogRecord,
+    KubernetesLogSnapshot,
+    KubernetesLogSourceSnapshot,
     KubernetesMetricsAvailability,
     KubernetesMetricsStatus,
     KubernetesMonitorSnapshot,
@@ -37,12 +42,14 @@ class _CaptureView(Enum):
     OVERVIEW = "overview"
     PODS = "pods"
     SETTINGS = "settings"
+    LOGS = "logs"
 
 
 _SCREENSHOTS = (
     ("tui-overview.svg", _CaptureView.OVERVIEW),
     ("tui-pods.svg", _CaptureView.PODS),
     ("tui-settings.svg", _CaptureView.SETTINGS),
+    ("tui-logs.svg", _CaptureView.LOGS),
 )
 
 
@@ -58,6 +65,71 @@ class _DemoConversation:
 class _DemoMonitor:
     def snapshot(self) -> KubernetesMonitorSnapshot:
         return _demo_snapshot()
+
+    def pod_containers(
+        self,
+        resource: KubernetesResourceRef,
+    ) -> tuple[str, ...]:
+        return ("api", "telemetry")
+
+    def pod_log_snapshot(
+        self,
+        resource: KubernetesResourceRef,
+        *,
+        query: KubernetesLogQuery,
+    ) -> KubernetesLogSnapshot:
+        container = query.container or "api"
+        messages = (
+            ("03:50:35", KubernetesLogLevel.INFO, "INFO server started on :8080"),
+            (
+                "03:50:38",
+                KubernetesLogLevel.INFO,
+                'INFO 10.42.1.17:40384 - "GET /health HTTP/1.1" 200 OK',
+            ),
+            (
+                "03:50:43",
+                KubernetesLogLevel.WARNING,
+                "WARN downstream request exceeded 750ms service=sample-worker",
+            ),
+            (
+                "03:50:46",
+                KubernetesLogLevel.INFO,
+                'INFO 10.42.1.17:40916 - "GET /api/v1/tasks/demo-workflow-1234567890 HTTP/1.1" 200 OK request_id=demo-request-001',
+            ),
+            (
+                "03:50:49",
+                KubernetesLogLevel.ERROR,
+                "ERROR database unavailable retry=3 endpoint=db.sample-app.svc",
+            ),
+            (
+                "03:50:50",
+                KubernetesLogLevel.ERROR,
+                'INFO 10.42.1.17:41374 - "POST /api/v1/jobs HTTP/1.1" 503 Service Unavailable',
+            ),
+        )
+        records = tuple(
+            KubernetesLogRecord(
+                container=container,
+                timestamp=datetime.fromisoformat(f"2026-08-04T{time}+00:00"),
+                message=message,
+                raw=f"2026-08-04T{time}Z {message}",
+                level=level,
+            )
+            for time, level, message in messages
+        )
+        return KubernetesLogSnapshot(
+            namespace="sample-app",
+            pod_name=resource.name,
+            observed_at=datetime(2026, 8, 4, 3, 51, tzinfo=UTC),
+            query=query,
+            sources=(
+                KubernetesLogSourceSnapshot(
+                    container=container,
+                    raw_content="\n".join(record.raw for record in records) + "\n",
+                    records=records,
+                ),
+            ),
+        )
 
 
 def _row(
@@ -315,6 +387,10 @@ async def _capture(
             app.action_show_pods()
         elif view is _CaptureView.SETTINGS:
             app.action_open_settings()
+        elif view is _CaptureView.LOGS:
+            app.action_show_pods()
+            app.action_show_logs()
+            await app.workers.wait_for_complete()
         await pilot.pause()
         screenshot = app.export_screenshot(
             title=f"Ops Agent · {filename.removesuffix('.svg')}",

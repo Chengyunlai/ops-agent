@@ -1,4 +1,5 @@
 import json
+from codecs import getincrementaldecoder
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -66,6 +67,17 @@ class _Watcher(Protocol):
     def stop(self) -> None: ...
 
 
+class _LogResponse(Protocol):
+    def stream(
+        self,
+        *,
+        amt: int,
+        decode_content: bool,
+    ) -> Iterator[bytes | str]: ...
+
+    def close(self) -> None: ...
+
+
 @dataclass
 class _ServiceEndpointCounts:
     ready_addresses: int = 0
@@ -95,6 +107,8 @@ class KubernetesReader:
         self._watch_factory = watch_factory or kubernetes_watch.Watch
         self._watch_lock = Lock()
         self._active_watcher: _Watcher | None = None
+        self._log_follow_lock = Lock()
+        self._active_log_response: _LogResponse | None = None
         self._pod_resource_version: str | None = None
         self._storage = KubernetesStorageReader(
             core_api=core_api,
@@ -209,26 +223,95 @@ class KubernetesReader:
         pod_name: str,
         *,
         container: str | None,
-        tail_lines: int,
+        tail_lines: int | None,
+        since_seconds: int | None = None,
         previous: bool = False,
     ) -> str:
+        range_options: dict[str, object] = {}
+        if tail_lines is not None:
+            range_options["tail_lines"] = tail_lines
+        if since_seconds is not None:
+            range_options["since_seconds"] = since_seconds
         response = self._request(
             f"查询 Pod '{pod_name}' 日志失败",
             lambda: self._core_api.read_namespaced_pod_log(
                 name=pod_name,
                 namespace=namespace,
                 container=container,
-                tail_lines=tail_lines,
                 timestamps=True,
                 previous=previous,
                 _request_timeout=self._request_timeout_seconds,
                 _preload_content=False,
+                **range_options,
             ),
         )
         payload = getattr(response, "data", response)
         if isinstance(payload, bytes | bytearray):
             return bytes(payload).decode("utf-8", errors="replace")
         return str(payload)
+
+    def follow_pod_logs(
+        self,
+        namespace: str,
+        pod_name: str,
+        *,
+        container: str | None,
+        since_time: datetime,
+        stop_event: Event,
+    ) -> Iterator[str]:
+        if stop_event.is_set():
+            return
+        response = self._request(
+            f"实时跟随 Pod '{pod_name}' 日志失败",
+            lambda: self._core_api.read_namespaced_pod_log(
+                name=pod_name,
+                namespace=namespace,
+                container=container,
+                follow=True,
+                since_time=since_time,
+                timestamps=True,
+                _request_timeout=(self._request_timeout_seconds, None),
+                _preload_content=False,
+            ),
+        )
+        log_response = response
+        with self._log_follow_lock:
+            self._active_log_response = log_response
+        decoder = getincrementaldecoder("utf-8")(errors="replace")
+        buffered = ""
+        try:
+            for chunk in log_response.stream(
+                amt=64 * 1024,
+                decode_content=True,
+            ):
+                if stop_event.is_set():
+                    break
+                if isinstance(chunk, str):
+                    decoded = chunk
+                else:
+                    decoded = decoder.decode(bytes(chunk))
+                buffered += decoded
+                *complete, buffered = buffered.split("\n")
+                yield from complete
+            buffered += decoder.decode(b"", final=True)
+            if buffered and not stop_event.is_set():
+                yield buffered
+        except (ApiException, HTTPError) as error:
+            if not stop_event.is_set():
+                raise KubernetesError(
+                    f"实时跟随 Pod '{pod_name}' 日志失败: {error}"
+                ) from error
+        finally:
+            with self._log_follow_lock:
+                if self._active_log_response is log_response:
+                    self._active_log_response = None
+            log_response.close()
+
+    def stop_following_pod_logs(self) -> None:
+        with self._log_follow_lock:
+            response = self._active_log_response
+        if response is not None:
+            response.close()
 
     def list_events(
         self,

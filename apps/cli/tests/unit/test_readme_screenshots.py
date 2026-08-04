@@ -9,6 +9,7 @@ SCREENSHOTS = (
     REPOSITORY_ROOT / "docs/images/tui-overview.svg",
     REPOSITORY_ROOT / "docs/images/tui-pods.svg",
     REPOSITORY_ROOT / "docs/images/tui-settings.svg",
+    REPOSITORY_ROOT / "docs/images/tui-logs.svg",
 )
 
 
