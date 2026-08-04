@@ -1,6 +1,7 @@
 import asyncio
 import warnings
 from collections.abc import Callable, Iterator
+from datetime import datetime
 from enum import StrEnum
 from threading import Event
 from typing import ClassVar, Protocol
@@ -8,6 +9,9 @@ from typing import ClassVar, Protocol
 from ops_agent.agent import AgentEvent, AgentStage, ApplicationError
 from ops_agent.kubernetes import KubernetesWatchOutcome, KubernetesWatchResult
 from ops_agent.monitoring import (
+    KubernetesLogQuery,
+    KubernetesLogRecord,
+    KubernetesLogSnapshot,
     KubernetesMonitorSnapshot,
     KubernetesResourceContent,
     KubernetesResourceKind,
@@ -30,6 +34,7 @@ from ops_agent_cli.manual_access import (
 )
 from ops_agent_cli.tui.chat import ChatTranscript
 from ops_agent_cli.tui.resources import (
+    LogWorkbench,
     MonitorPane,
     PodAccessDialog,
     PodAccessRequest,
@@ -67,17 +72,28 @@ class Monitor(Protocol):
         resource: KubernetesResourceRef,
     ) -> KubernetesResourceContent: ...
 
-    def pod_logs(
-        self,
-        resource: KubernetesResourceRef,
-        *,
-        tail_lines: int = 200,
-    ) -> KubernetesResourceContent: ...
-
     def pod_containers(
         self,
         resource: KubernetesResourceRef,
     ) -> tuple[str, ...]: ...
+
+    def pod_log_snapshot(
+        self,
+        resource: KubernetesResourceRef,
+        *,
+        query: KubernetesLogQuery,
+    ) -> KubernetesLogSnapshot: ...
+
+    def follow_pod_logs(
+        self,
+        resource: KubernetesResourceRef,
+        *,
+        container: str | None,
+        since_time: datetime,
+        stop_event: Event,
+    ) -> Iterator[KubernetesLogRecord]: ...
+
+    def stop_following_pod_logs(self) -> None: ...
 
     def browse_pvc(
         self,
@@ -117,7 +133,6 @@ class PodAccess(Protocol):
 class ResourceOperation(StrEnum):
     DIAGNOSTICS = "diagnostics"
     DESCRIBE = "describe"
-    LOGS = "logs"
 
 
 class QuestionInput(Input):
@@ -785,7 +800,7 @@ class OpsAgentTui(App[None]):
             self._copy_mode,
             "visible",
         )
-        if isinstance(self.screen, ResourceViewer):
+        if isinstance(self.screen, ResourceViewer | LogWorkbench):
             self.screen.set_copy_mode(self._copy_mode)
         self.query_one("#status", Static).update(
             "复制模式 · 现在直接鼠标拖选并复制 · Esc 恢复鼠标控制"
@@ -854,11 +869,7 @@ class OpsAgentTui(App[None]):
                 "Logs 仅适用于 Pod；请切换到 Pods 并选择一行"
             )
             return
-        self._open_resource_viewer(
-            loading_title=f"Logs · Pod/{resource.name}",
-            operation=ResourceOperation.LOGS,
-            resource=resource,
-        )
+        self._prepare_log_workbench(resource)
 
     def action_browse_storage(self) -> None:
         resource = self.query_one(
@@ -948,6 +959,40 @@ class OpsAgentTui(App[None]):
             viewer=viewer,
             operation=operation,
             resource=resource,
+        )
+
+    @work(
+        group="log-workbench",
+        exclusive=True,
+        exit_on_error=False,
+    )
+    async def _prepare_log_workbench(
+        self,
+        resource: KubernetesResourceRef,
+    ) -> None:
+        self.query_one("#status", Static).update(
+            f"正在读取 Pod/{resource.name} 的容器列表…"
+        )
+        try:
+            containers = await asyncio.to_thread(
+                self._monitor.pod_containers,
+                resource,
+            )
+        except Exception as error:  # noqa: BLE001 - 日志入口必须恢复查询异常
+            self.query_one("#status", Static).update(f"容器列表读取失败：{error}")
+            return
+        if not containers:
+            self.query_one("#status", Static).update(
+                f"Pod/{resource.name} 没有可读取日志的容器"
+            )
+            return
+        self.push_screen(
+            LogWorkbench(
+                source=self._monitor,
+                resource=resource,
+                containers=containers,
+                copy_mode=self._copy_mode,
+            )
         )
 
     @work(
@@ -1043,13 +1088,7 @@ class OpsAgentTui(App[None]):
         resource: KubernetesResourceRef,
     ) -> None:
         try:
-            if operation is ResourceOperation.LOGS:
-                content = await asyncio.to_thread(
-                    self._monitor.pod_logs,
-                    resource,
-                    tail_lines=200,
-                )
-            elif operation is ResourceOperation.DIAGNOSTICS:
+            if operation is ResourceOperation.DIAGNOSTICS:
                 content = await asyncio.to_thread(
                     self._monitor.diagnostics,
                     resource,

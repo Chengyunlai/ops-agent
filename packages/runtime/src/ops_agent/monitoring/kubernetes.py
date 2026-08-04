@@ -1,4 +1,4 @@
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from datetime import UTC, datetime
 from threading import Event
 from typing import Protocol, TypeVar
@@ -41,11 +41,19 @@ from ops_agent.monitoring.diagnostics import (
 from ops_agent.monitoring.diagnostics import (
     with_health_reasons as _with_health_reasons,
 )
+from ops_agent.monitoring.logs import (
+    KubernetesLogParser,
+    parse_kubernetes_log_records,
+)
 from ops_agent.monitoring.metrics import (
     KubernetesMetricsSource,
     KubernetesMetricsUnavailable,
 )
 from ops_agent.monitoring.models import (
+    KubernetesLogQuery,
+    KubernetesLogRecord,
+    KubernetesLogSnapshot,
+    KubernetesLogSourceSnapshot,
     KubernetesMetricsAvailability,
     KubernetesMetricsStatus,
     KubernetesMonitorSnapshot,
@@ -130,8 +138,21 @@ class KubernetesMonitoringSource(Protocol):
         pod_name: str,
         *,
         container: str | None,
-        tail_lines: int,
+        tail_lines: int | None,
+        since_seconds: int | None = None,
     ) -> str: ...
+
+    def follow_pod_logs(
+        self,
+        namespace: str,
+        pod_name: str,
+        *,
+        container: str | None,
+        since_time: datetime,
+        stop_event: Event,
+    ) -> Iterator[str]: ...
+
+    def stop_following_pod_logs(self) -> None: ...
 
     def browse_persistent_volume_claim(
         self,
@@ -390,6 +411,62 @@ class KubernetesMonitor:
             content=content,
         )
 
+    def pod_log_snapshot(
+        self,
+        resource: KubernetesResourceRef,
+        *,
+        query: KubernetesLogQuery,
+    ) -> KubernetesLogSnapshot:
+        if resource.kind is not KubernetesResourceKind.POD:
+            raise ValueError("日志仅支持 Pod")
+        if query.container is not None:
+            containers: list[str | None] = [query.container]
+        else:
+            details = self._source.get_pod_details(
+                self._namespace,
+                resource.name,
+            )
+            containers = [container.name for container in details.containers]
+            if not containers:
+                containers = [None]
+        return KubernetesLogSnapshot(
+            namespace=self._namespace,
+            pod_name=resource.name,
+            observed_at=self._clock(),
+            query=query,
+            sources=tuple(
+                self._read_container_log_snapshot(
+                    resource.name,
+                    container=container,
+                    query=query,
+                )
+                for container in containers
+            ),
+        )
+
+    def follow_pod_logs(
+        self,
+        resource: KubernetesResourceRef,
+        *,
+        container: str | None,
+        since_time: datetime,
+        stop_event: Event,
+    ) -> Iterator[KubernetesLogRecord]:
+        if resource.kind is not KubernetesResourceKind.POD:
+            raise ValueError("日志仅支持 Pod")
+        parser = KubernetesLogParser(container=container)
+        for line in self._source.follow_pod_logs(
+            self._namespace,
+            resource.name,
+            container=container,
+            since_time=since_time,
+            stop_event=stop_event,
+        ):
+            yield parser.parse(line)
+
+    def stop_following_pod_logs(self) -> None:
+        self._source.stop_following_pod_logs()
+
     def pod_containers(
         self,
         resource: KubernetesResourceRef,
@@ -455,9 +532,41 @@ class KubernetesMonitor:
                 pod_name,
                 container=container,
                 tail_lines=tail_lines,
+                since_seconds=None,
             )
         except Exception as error:  # noqa: BLE001 - 其他容器日志仍应可读
             return f"[读取失败] {error}"
+
+    def _read_container_log_snapshot(
+        self,
+        pod_name: str,
+        *,
+        container: str | None,
+        query: KubernetesLogQuery,
+    ) -> KubernetesLogSourceSnapshot:
+        try:
+            content = self._source.get_pod_logs(
+                self._namespace,
+                pod_name,
+                container=container,
+                tail_lines=query.tail_lines,
+                since_seconds=query.since_seconds,
+            )
+        except Exception as error:  # noqa: BLE001 - 每个容器独立降级
+            return KubernetesLogSourceSnapshot(
+                container=container,
+                raw_content="",
+                records=(),
+                error=str(error),
+            )
+        return KubernetesLogSourceSnapshot(
+            container=container,
+            raw_content=content,
+            records=parse_kubernetes_log_records(
+                content,
+                container=container,
+            ),
+        )
 
     def _capture(
         self,

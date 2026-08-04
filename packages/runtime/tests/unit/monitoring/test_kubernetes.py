@@ -31,6 +31,9 @@ from ops_agent.kubernetes import (
 )
 from ops_agent.monitoring import (
     KubernetesContainerMetrics,
+    KubernetesLogLevel,
+    KubernetesLogQuery,
+    KubernetesLogRecord,
     KubernetesMetricsAvailability,
     KubernetesMetricsUnavailable,
     KubernetesMonitor,
@@ -214,9 +217,13 @@ class FakeKubernetesSource:
         *,
         container: str | None,
         tail_lines: int,
+        since_seconds: int | None = None,
     ) -> str:
         self.calls.append(
-            ("pod_logs", f"{namespace}/{pod_name}/{container}/{tail_lines}")
+            (
+                "pod_logs",
+                f"{namespace}/{pod_name}/{container}/{tail_lines}/{since_seconds}",
+            )
         )
         if container in self.failing_containers:
             raise RuntimeError(f"{container} logs forbidden")
@@ -547,8 +554,269 @@ def test_monitor_reads_selected_resource_without_exposing_namespace() -> None:
     assert source.calls == [
         ("describe:Pod", "sample/sample-api"),
         ("pod_details", "sample/sample-api"),
-        ("pod_logs", "sample/sample-api/api/200"),
+        ("pod_logs", "sample/sample-api/api/200/None"),
     ]
+
+
+def test_monitor_returns_structured_log_snapshot_without_losing_raw_content() -> None:
+    class StructuredLogSource(FakeKubernetesSource):
+        def get_pod_logs(
+            self,
+            namespace: str,
+            pod_name: str,
+            *,
+            container: str | None,
+            tail_lines: int | None,
+            since_seconds: int | None = None,
+        ) -> str:
+            self.calls.append(
+                (
+                    "pod_logs",
+                    f"{namespace}/{pod_name}/{container}/{tail_lines}/{since_seconds}",
+                )
+            )
+            return (
+                "2026-08-04T03:50:35.380902460Z INFO request completed\n"
+                '2026-08-04T03:50:36Z INFO "GET /health HTTP/1.1" 500 ERROR\n'
+                "continuation without timestamp\n"
+            )
+
+    source = StructuredLogSource()
+    monitor = KubernetesMonitor(
+        source,
+        namespace="sample",
+        clock=lambda: datetime(2026, 8, 4, 4, 0, tzinfo=UTC),
+    )
+    resource = KubernetesResourceRef(
+        kind=KubernetesResourceKind.POD,
+        name="sample-api",
+    )
+
+    snapshot = monitor.pod_log_snapshot(
+        resource,
+        query=KubernetesLogQuery(container="api", tail_lines=200),
+    )
+
+    assert snapshot.namespace == "sample"
+    assert snapshot.pod_name == "sample-api"
+    assert snapshot.observed_at == datetime(2026, 8, 4, 4, 0, tzinfo=UTC)
+    assert snapshot.query == KubernetesLogQuery(container="api", tail_lines=200)
+    assert len(snapshot.sources) == 1
+    assert snapshot.sources[0].container == "api"
+    assert snapshot.sources[0].raw_content.endswith("continuation without timestamp\n")
+    assert snapshot.records == (
+        KubernetesLogRecord(
+            container="api",
+            timestamp=datetime(
+                2026,
+                8,
+                4,
+                3,
+                50,
+                35,
+                380902,
+                tzinfo=UTC,
+            ),
+            message="INFO request completed",
+            raw=("2026-08-04T03:50:35.380902460Z INFO request completed"),
+            level=KubernetesLogLevel.INFO,
+        ),
+        KubernetesLogRecord(
+            container="api",
+            timestamp=datetime(2026, 8, 4, 3, 50, 36, tzinfo=UTC),
+            message='INFO "GET /health HTTP/1.1" 500 ERROR',
+            raw='2026-08-04T03:50:36Z INFO "GET /health HTTP/1.1" 500 ERROR',
+            level=KubernetesLogLevel.ERROR,
+        ),
+        KubernetesLogRecord(
+            container="api",
+            timestamp=None,
+            message="continuation without timestamp",
+            raw="continuation without timestamp",
+            level=KubernetesLogLevel.UNKNOWN,
+        ),
+    )
+    assert source.calls == [
+        ("pod_logs", "sample/sample-api/api/200/None"),
+    ]
+
+
+def test_monitor_emphasizes_complete_exception_stack_without_losing_lines() -> None:
+    class ExceptionLogSource(FakeKubernetesSource):
+        def get_pod_logs(
+            self,
+            namespace: str,
+            pod_name: str,
+            *,
+            container: str | None,
+            tail_lines: int | None,
+            since_seconds: int | None = None,
+        ) -> str:
+            return (
+                "2026-08-04T03:50:35Z INFO request failed\n"
+                "2026-08-04T03:50:35.1Z Traceback (most recent call last):\n"
+                '2026-08-04T03:50:35.2Z   File "app.py", line 7, in handle\n'
+                "2026-08-04T03:50:35.3Z ValueError: invalid demo input\n"
+                "2026-08-04T03:50:36Z INFO request recovered\n"
+                "2026-08-04T03:50:36.1Z ordinary continuation\n"
+            )
+
+    monitor = KubernetesMonitor(ExceptionLogSource(), namespace="sample")
+    snapshot = monitor.pod_log_snapshot(
+        KubernetesResourceRef(
+            kind=KubernetesResourceKind.POD,
+            name="sample-api",
+        ),
+        query=KubernetesLogQuery(container="api", tail_lines=200),
+    )
+
+    assert tuple(record.level for record in snapshot.records) == (
+        KubernetesLogLevel.INFO,
+        KubernetesLogLevel.ERROR,
+        KubernetesLogLevel.ERROR,
+        KubernetesLogLevel.ERROR,
+        KubernetesLogLevel.INFO,
+        KubernetesLogLevel.UNKNOWN,
+    )
+    assert tuple(record.raw for record in snapshot.records)[1:4] == (
+        "2026-08-04T03:50:35.1Z Traceback (most recent call last):",
+        '2026-08-04T03:50:35.2Z   File "app.py", line 7, in handle',
+        "2026-08-04T03:50:35.3Z ValueError: invalid demo input",
+    )
+
+
+def test_monitor_emphasizes_timestamped_java_and_go_exception_stacks() -> None:
+    class CrossLanguageStackSource(FakeKubernetesSource):
+        def get_pod_logs(
+            self,
+            namespace: str,
+            pod_name: str,
+            *,
+            container: str | None,
+            tail_lines: int | None,
+            since_seconds: int | None = None,
+        ) -> str:
+            return (
+                "2026-08-04T03:50:35Z java.lang.NullPointerException: failed\n"
+                "2026-08-04T03:50:35.1Z at demo.Service.run(Service.java:7)\n"
+                "2026-08-04T03:50:36Z INFO java service recovered\n"
+                "2026-08-04T03:50:37Z panic: demo failure\n"
+                "2026-08-04T03:50:37.1Z goroutine 1 [running]:\n"
+                "2026-08-04T03:50:37.2Z main.main()\n"
+                "2026-08-04T03:50:37.3Z   /workspace/main.go:7 +0x20\n"
+                "2026-08-04T03:50:38Z INFO go service recovered\n"
+            )
+
+    snapshot = KubernetesMonitor(
+        CrossLanguageStackSource(),
+        namespace="sample",
+    ).pod_log_snapshot(
+        KubernetesResourceRef(
+            kind=KubernetesResourceKind.POD,
+            name="sample-api",
+        ),
+        query=KubernetesLogQuery(container="api", tail_lines=200),
+    )
+
+    assert tuple(record.level for record in snapshot.records) == (
+        KubernetesLogLevel.ERROR,
+        KubernetesLogLevel.ERROR,
+        KubernetesLogLevel.INFO,
+        KubernetesLogLevel.ERROR,
+        KubernetesLogLevel.ERROR,
+        KubernetesLogLevel.ERROR,
+        KubernetesLogLevel.ERROR,
+        KubernetesLogLevel.INFO,
+    )
+
+
+def test_monitor_parses_followed_log_records_and_preserves_container_source() -> None:
+    class FollowingSource(FakeKubernetesSource):
+        def follow_pod_logs(
+            self,
+            namespace: str,
+            pod_name: str,
+            *,
+            container: str | None,
+            since_time: datetime,
+            stop_event: Event,
+        ):
+            self.calls.append(
+                (
+                    "follow_logs",
+                    f"{namespace}/{pod_name}/{container}/{since_time.isoformat()}",
+                )
+            )
+            yield "2026-08-04T04:00:01Z WARN queue is slow"
+            yield '2026-08-04T04:00:02Z INFO "GET /ready HTTP/1.1" 503'
+
+        def stop_following_pod_logs(self) -> None:
+            self.calls.append(("stop_follow_logs", ""))
+
+    source = FollowingSource()
+    monitor = KubernetesMonitor(source, namespace="sample")
+    resource = KubernetesResourceRef(
+        kind=KubernetesResourceKind.POD,
+        name="sample-api",
+    )
+    since_time = datetime(2026, 8, 4, 4, 0, tzinfo=UTC)
+
+    records = tuple(
+        monitor.follow_pod_logs(
+            resource,
+            container="api",
+            since_time=since_time,
+            stop_event=Event(),
+        )
+    )
+    monitor.stop_following_pod_logs()
+
+    assert records == (
+        KubernetesLogRecord(
+            container="api",
+            timestamp=datetime(2026, 8, 4, 4, 0, 1, tzinfo=UTC),
+            message="WARN queue is slow",
+            raw="2026-08-04T04:00:01Z WARN queue is slow",
+            level=KubernetesLogLevel.WARNING,
+        ),
+        KubernetesLogRecord(
+            container="api",
+            timestamp=datetime(2026, 8, 4, 4, 0, 2, tzinfo=UTC),
+            message='INFO "GET /ready HTTP/1.1" 503',
+            raw='2026-08-04T04:00:02Z INFO "GET /ready HTTP/1.1" 503',
+            level=KubernetesLogLevel.ERROR,
+        ),
+    )
+    assert source.calls == [
+        (
+            "follow_logs",
+            "sample/sample-api/api/2026-08-04T04:00:00+00:00",
+        ),
+        ("stop_follow_logs", ""),
+    ]
+
+
+def test_log_snapshot_keeps_other_container_when_one_source_is_unavailable() -> None:
+    source = FakeKubernetesSource()
+    source.containers = ["api", "sidecar"]
+    source.failing_containers = {"sidecar"}
+    monitor = KubernetesMonitor(source, namespace="sample")
+
+    snapshot = monitor.pod_log_snapshot(
+        KubernetesResourceRef(
+            kind=KubernetesResourceKind.POD,
+            name="sample-api",
+        ),
+        query=KubernetesLogQuery(container=None, tail_lines=200),
+    )
+
+    assert len(snapshot.sources) == 2
+    assert snapshot.sources[0].container == "api"
+    assert snapshot.sources[0].records[0].message == "api server started"
+    assert snapshot.sources[0].error is None
+    assert snapshot.sources[1].container == "sidecar"
+    assert snapshot.sources[1].records == ()
+    assert snapshot.sources[1].error == "sidecar logs forbidden"
 
 
 def test_monitor_keeps_other_resource_types_when_one_query_fails() -> None:
@@ -589,8 +857,8 @@ def test_monitor_combines_logs_from_every_pod_container() -> None:
     )
     assert source.calls == [
         ("pod_details", "sample/sample-api"),
-        ("pod_logs", "sample/sample-api/api/50"),
-        ("pod_logs", "sample/sample-api/sidecar/50"),
+        ("pod_logs", "sample/sample-api/api/50/None"),
+        ("pod_logs", "sample/sample-api/sidecar/50/None"),
     ]
 
 
