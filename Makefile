@@ -1,12 +1,14 @@
 .DEFAULT_GOAL := help
 
 UV ?= uv
+PNPM ?= corepack pnpm
 CONFIG ?= config/local/test.toml
 ARGS ?=
 TARGET ?= local
 RELEASE_DIR ?= release
+WEBSITE_DIR ?= website
 
-.PHONY: help sync policy lint format format-check test test-cli test-runtime test-kubernetes-integration check cli tui bump-version package release
+.PHONY: help sync policy lint format format-check test test-cli test-runtime test-kubernetes-integration check cli tui website-sync website website-check bump-version package release
 
 help: ## 显示可用的开发命令
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z_-]+:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -48,6 +50,15 @@ cli: ## 运行 CLI；使用 ARGS='...' 传递参数
 
 tui: ## 启动交互式终端；使用 CONFIG='...' 指定配置
 	$(UV) run ops-agent --config "$(CONFIG)" tui
+
+website-sync: ## 安装公开文档站的锁定依赖
+	cd $(WEBSITE_DIR) && $(PNPM) install --frozen-lockfile
+
+website: ## 启动 Astro 文档站开发服务器
+	cd $(WEBSITE_DIR) && $(PNPM) dev
+
+website-check: ## 检查并构建公开文档站
+	cd $(WEBSITE_DIR) && $(PNPM) check
 
 bump-version: ## 同步发布版本；使用 VERSION=x.y.z
 	@test -n "$(VERSION)" || (echo "VERSION is required, for example VERSION=0.2.0" >&2; exit 2)

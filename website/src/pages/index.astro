@@ -1,0 +1,192 @@
+---
+import { getRelativeLocaleUrl } from "astro:i18n";
+import Footer from "@/components/Footer.astro";
+import Header from "@/components/Header.astro";
+import Layout from "@/layouts/Layout.astro";
+import { getAssetPath } from "@/utils/withBase";
+import config from "@/config";
+
+const locale = Astro.currentLocale ?? config.site.lang;
+const docs = (path: string) => getRelativeLocaleUrl(locale, `docs/${path}`);
+---
+
+<Layout>
+  <Header />
+  <main id="main-content" class="app-layout" data-pagefind-body>
+    <section
+      class="border-border grid gap-8 border-b py-12 lg:grid-cols-[1.1fr_0.9fr] lg:items-center"
+    >
+      <div>
+        <p
+          class="text-accent mb-3 text-sm font-semibold tracking-widest uppercase"
+        >
+          Local · Evidence-based · Kubernetes
+        </p>
+        <h1 class="text-4xl leading-tight font-bold sm:text-5xl">
+          在一个终端里监盘、排查日志，并获得有证据的诊断结论
+        </h1>
+        <p class="text-muted-foreground mt-5 text-lg leading-8">
+          Ops Agent 是本地运行的 Kubernetes
+          终端工作台。左侧直接浏览资源与执行人工操作，右侧通过受控 Agent
+          解释真实集群证据。
+        </p>
+        <div class="mt-7 flex flex-wrap gap-3">
+          <a
+            class="bg-accent text-accent-foreground rounded px-5 py-3 font-semibold"
+            href={docs("getting-started")}
+          >
+            5 分钟开始使用
+          </a>
+          <a
+            class="border-border hover:border-accent rounded border px-5 py-3 font-semibold"
+            href="https://github.com/Chengyunlai/ops-agent"
+          >
+            查看源码
+          </a>
+        </div>
+      </div>
+      <div class="border-border overflow-hidden rounded-xl border shadow-2xl">
+        <img
+          src={getAssetPath("images/tui-overview.svg")}
+          alt="Ops Agent 左侧 Kubernetes 资源监盘与右侧只读诊断对话"
+          width="1600"
+          height="1000"
+          loading="eager"
+        />
+      </div>
+    </section>
+
+    <section class="border-border border-b py-12">
+      <h2 class="text-3xl font-bold">面向日常排障的工作流</h2>
+      <p class="text-muted-foreground mt-3 max-w-2xl">
+        功能按操作员要完成的任务组织，不要求先理解 Agent、Graph 或 Kubernetes
+        SDK 的实现。
+      </p>
+      <div class="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <article class="border-border rounded-lg border p-5">
+          <h3 class="text-xl font-semibold">实时浏览资源</h3>
+          <p class="text-muted-foreground mt-2">
+            在固定 namespace 查看工作负载、Service、Ingress、PVC、Event 与可选
+            Metrics API 指标。
+          </p>
+        </article>
+        <article class="border-border rounded-lg border p-5">
+          <h3 class="text-xl font-semibold">聚焦关键日志</h3>
+          <p class="text-muted-foreground mt-2">
+            按容器和时间范围读取日志，处理长行、实时跟随、搜索并隐藏操作员明确选择的噪声。
+          </p>
+        </article>
+        <article class="border-border rounded-lg border p-5">
+          <h3 class="text-xl font-semibold">解释确定性证据</h3>
+          <p class="text-muted-foreground mt-2">
+            把 Pod、Deployment 与 Service 关系、Event 和 previous logs 交给受控
+            Agent 解释。
+          </p>
+        </article>
+        <article class="border-border rounded-lg border p-5">
+          <h3 class="text-xl font-semibold">查看与下载文件</h3>
+          <p class="text-muted-foreground mt-2">
+            浏览 PVC 或 Pod 文件，流式下载到受限本地目录，并展示大小与 SHA-256。
+          </p>
+        </article>
+        <article class="border-border rounded-lg border p-5">
+          <h3 class="text-xl font-semibold">进入 Pod Shell</h3>
+          <p class="text-muted-foreground mt-2">
+            人工确认后进入交互式终端；该入口默认关闭，不注册为 AI 工具。
+          </p>
+        </article>
+        <article class="border-border rounded-lg border p-5">
+          <h3 class="text-xl font-semibold">本地配置多个项目</h3>
+          <p class="text-muted-foreground mt-2">
+            通过 TOML
+            固定环境、namespace、kubeconfig、模型、主题与人工操作策略。
+          </p>
+        </article>
+      </div>
+    </section>
+
+    <section class="border-border grid gap-8 border-b py-12 md:grid-cols-2">
+      <div>
+        <h2 class="text-3xl font-bold">安装</h2>
+        <p class="text-muted-foreground mt-3">
+          macOS 与 Linux 优先使用 Homebrew，无需安装 Python 或 uv。
+        </p>
+        <pre
+          class="bg-muted mt-5 overflow-x-auto rounded-lg p-4"><code>brew tap Chengyunlai/tap
+brew install ops-agent</code></pre>
+      </div>
+      <div>
+        <h2 class="text-3xl font-bold">启动</h2>
+        <p class="text-muted-foreground mt-3">
+          初始化配置，运行诊断，然后进入终端工作台。
+        </p>
+        <pre
+          class="bg-muted mt-5 overflow-x-auto rounded-lg p-4"><code>ops-agent init
+ops-agent doctor
+ops-agent tui</code></pre>
+      </div>
+    </section>
+
+    <section class="border-border border-b py-12">
+      <h2 class="text-3xl font-bold">权限边界先于智能</h2>
+      <div class="mt-7 grid gap-4 md:grid-cols-3">
+        <div>
+          <h3 class="font-semibold">AI 始终只读</h3>
+          <p class="text-muted-foreground mt-2">
+            模型只能使用已注册、固定 namespace
+            的只读能力，不能授予自己权限或切换环境。
+          </p>
+        </div>
+        <div>
+          <h3 class="font-semibold">人工操作独立</h3>
+          <p class="text-muted-foreground mt-2">
+            Pod Shell 与文件传输由操作员显式触发，不经过 Agent
+            图，也不会作为模型工具暴露。
+          </p>
+        </div>
+        <div>
+          <h3 class="font-semibold">零集群部署</h3>
+          <p class="text-muted-foreground mt-2">
+            不安装 Operator、CRD、DaemonSet、Exporter、Prometheus 或
+            metrics-server。
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section class="py-12">
+      <h2 class="text-3xl font-bold">继续了解</h2>
+      <div class="mt-6 grid gap-3 sm:grid-cols-2">
+        <a
+          class="border-border hover:border-accent rounded-lg border p-5"
+          href={docs("getting-started")}
+          ><strong>快速开始</strong><br /><span class="text-muted-foreground"
+            >安装、初始化与第一次连接</span
+          ></a
+        >
+        <a
+          class="border-border hover:border-accent rounded-lg border p-5"
+          href={docs("tui")}
+          ><strong>TUI 使用指南</strong><br /><span
+            class="text-muted-foreground">资源、日志、PVC 与 Pod Shell</span
+          ></a
+        >
+        <a
+          class="border-border hover:border-accent rounded-lg border p-5"
+          href={docs("configuration")}
+          ><strong>配置参考</strong><br /><span class="text-muted-foreground"
+            >Project Profile、代理、主题与权限</span
+          ></a
+        >
+        <a
+          class="border-border hover:border-accent rounded-lg border p-5"
+          href={docs("architecture")}
+          ><strong>架构与安全</strong><br /><span class="text-muted-foreground"
+            >受控图、专业 Agent 与手动访问 seam</span
+          ></a
+        >
+      </div>
+    </section>
+  </main>
+  <Footer />
+</Layout>
