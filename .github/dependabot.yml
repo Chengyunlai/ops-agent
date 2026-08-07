@@ -30,3 +30,18 @@ updates:
     labels:
       - dependencies
       - area:ci
+
+  - package-ecosystem: npm
+    directory: /website
+    schedule:
+      interval: weekly
+      day: monday
+      time: "03:00"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: build(deps)
+    reviewers:
+      - Chengyunlai
+    labels:
+      - dependencies
