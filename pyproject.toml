@@ -10,7 +10,7 @@ dependencies = [
 
 [dependency-groups]
 build = [
-    "pyinstaller>=6.16,<7",
+    "pyinstaller>=6.22.0,<7",
 ]
 dev = [
     "pyyaml>=6.0.3,<7",
